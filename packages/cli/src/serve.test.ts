@@ -60,13 +60,13 @@ describe('the command socket', () => {
 		await serve(path);
 		const s = stdio();
 
-		const code = await ask(path, ['memory', 'add', 'family', 'Anna is 7'], s, {
+		const code = await ask(path, ['memory', 'add', 'home', 'Anna is 7'], s, {
 			NOLUNE_PROFILE: 'family'
 		});
 
 		expect(code).toBe(0);
-		expect(s.out()).toBe('Started family.md.\n');
-		expect(readMemoryNote('family', 'family').text).toContain('Anna is 7');
+		expect(s.out()).toBe('Started home.md.\n');
+		expect(readMemoryNote('family', 'home').text).toContain('Anna is 7');
 	});
 
 	it('passes on errors and exit codes', async () => {

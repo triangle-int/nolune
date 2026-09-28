@@ -53,12 +53,21 @@ import {
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
-import type { Block, ImageBlock, TextBlock, ToolResultBlock } from './format.ts';
+import {
+	messageText,
+	type Block,
+	type ImageBlock,
+	type TextBlock,
+	type ToolResultBlock
+} from './format.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
 import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
+import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
+import { memberWords } from './memory-people.ts';
+import { recallFor } from './memory-search.ts';
 import { profileDir } from './paths.ts';
 import { resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
@@ -90,7 +99,9 @@ export type LiveEvent =
 	| { type: 'tool_output'; id: string; chunk: string }
 	| { type: 'title'; title: string }
 	| { type: 'model'; model: ChatModel }
-	| { type: 'background'; background: BackgroundItem[] };
+	| { type: 'background'; background: BackgroundItem[] }
+	/** What the note-taker saved from the chat (memory-changes.ts), all of it. */
+	| { type: 'memory'; memory: DisplayMemoryLook[] };
 
 /** The model and reasoning level a conversation's next model call uses. */
 export interface ChatModel {
@@ -139,6 +150,8 @@ export interface Snapshot {
 	live: (LiveBlock | null)[];
 	toolOutput: { id: string; text: string } | null;
 	background: BackgroundItem[];
+	/** What the note-taker saved from it. */
+	memory: DisplayMemoryLook[];
 }
 
 interface State {
@@ -254,7 +267,8 @@ export function getSnapshot(conversationId: string): Snapshot {
 		queued: queuedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
 		live: st.live,
 		toolOutput: st.toolOutput,
-		background: backgroundItems(conversationId)
+		background: backgroundItems(conversationId),
+		memory: memoryLooks(conversationId)
 	};
 }
 
@@ -291,6 +305,11 @@ function backgroundItems(conversationId: string): BackgroundItem[] {
 		startedAt: s.updatedAt.getTime()
 	}));
 	return [...commands, ...subagents];
+}
+
+/** Tells the conversation's open chats what the note-taker saved from it, after a save or undo. */
+export function refreshMemoryLooks(conversationId: string): void {
+	emit(conversationId, { type: 'memory', memory: memoryLooks(conversationId) });
 }
 
 /** Tells the conversation's open chats that its background work changed. */
@@ -403,7 +422,8 @@ async function queueMessage(
 		senderName: sender.name,
 		text: trimmed,
 		provider: conv.provider,
-		attachments
+		attachments,
+		recall: await recall(conv, trimmed, sender)
 	});
 	// The first message stands in as the title until the model has named the chat. A message
 	// with only files is named after them.
@@ -413,6 +433,30 @@ async function queueMessage(
 	emitQueued(conversationId);
 	kick(conversationId);
 	if (placeholder !== undefined) nameConversation(conv, opening, placeholder);
+}
+
+/**
+ * What memory has on a message, to go along with it (recallFor), leaving out what the chat
+ * already has. Null when nothing matches, and when memory can't be read: that must never stop a
+ * message.
+ */
+async function recall(
+	conv: Conversation,
+	text: string,
+	sender: { id: string; name: string }
+): Promise<string | null> {
+	const slug = profileSlug(conv.profileId);
+	if (!slug || !text) return null;
+	try {
+		const rows = [...committedRows(conv.id), ...queuedRows(conv.id)];
+		const known = [conv.systemPrompt, ...rows.map((row) => messageText(readRow(row).blocks))];
+		// What's about who's asking comes first, by any name their note calls them.
+		const words = memberWords({ id: conv.profileId, slug }, sender.id, sender.name);
+		return await recallFor(slug, text, { sender: words, known: known.join('\n') });
+	} catch (err) {
+		console.error(`[nolune] ${conv.id.slice(0, 8)} could not look in memory:`, err);
+		return null;
+	}
 }
 
 /** Asks the chat's model for a title in the background; the placeholder stays if that fails. */

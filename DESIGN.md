@@ -6,50 +6,53 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 ## Decisions
 
-| Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execution          | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. nolune keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to; the plans have none, so pictures go inline, and PDFs too on the Claude plan and as their path on the ChatGPT plan. Every other file goes as its path.                                                                                                                                                                                                                                                                      |
-| Providers          | Anthropic, OpenAI and OpenRouter (API keys), and two plans, someone's own subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan signed in to Claude Code on this computer, and `chatgpt-plan`, a ChatGPT plan signed in to OpenAI's Codex there, each of which nolune runs. Keys and model presets are global and managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model, and an optional window override. One preset is the default (the oldest until an admin picks one): new chats start with it, and automations without a preset use it. See [Model providers](#model-providers). |
-| Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `nolune agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                              |
-| Memory             | Short Markdown notes per profile, one per topic, that the agent reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name, so the agent reads the ones it needs. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                                                                                                                                                                                |
-| Soul               | Who nolune is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `nolune soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                           |
-| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `nolune view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                                                                                                                                |
-| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution          | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. nolune keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to; the plans have none, so pictures go inline, and PDFs too on the Claude plan and as their path on the ChatGPT plan. Every other file goes as its path.                                                                                                                                                                                                                                                                   |
+| Providers          | Anthropic, OpenAI and OpenRouter (API keys), custom providers (your own model servers), and two plans, someone's subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan in Claude Code, and `chatgpt-plan`, a ChatGPT plan in OpenAI's Codex, which nolune runs on this computer. Keys, custom providers and presets are all global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model and an optional window override. One preset is the default (the oldest until an admin picks one): new chats and automations without one use it. See [Model providers](#model-providers). |
+| Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `nolune agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                           |
+| Memory             | Short Markdown notes per profile, in fixed categories (a note each, or one per person or project), that the agent searches, reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                       |
+| Soul               | Who nolune is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `nolune soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                        |
+| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `nolune view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                                                                                                                             |
+| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ## Files on disk
 
 ```
-~/.nolune/                    (override with NOLUNE_HOME)
-  config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, image model,
+~/.nolune/                 (override with NOLUNE_HOME)
+  config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, custom providers
+                              (name, API, address, key), image model,
                               extra env vars for commands, where Claude Code and Codex are if set
                               (mode 600)
   codex/                      Codex's home for the ChatGPT plan: its sign-in (which nolune never
                               reads), and the chats' threads under sessions/
-  nolune.db                   SQLite: users, sessions, profiles, presets, folders, conversations,
+  nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
                               notifications, subagents, running background commands
   media/<sha256>              copies of the pictures and files shown in chats, and of attached
                               files not sent yet
   image-templates/<id>/       Images page templates for every profile (TEMPLATE.md, cover.webp)
-  bin/nolune                  shim so the agent can run `nolune` from any command
+  bin/nolune                     shim so the agent can run `nolune` from any command
   profiles/<slug>/            default working folder for commands in this profile
     soul.md                   who nolune is for this profile; opens every chat's prompt
-    memories/<topic>.md       long-term memory: one note per topic
+    memories/<category>.md    long-term memory: a note per category (home.md, plans.md, …)
+    memories/people/<name>.md   a note per person, in the family or not; projects/ likewise
     memories/core.md          the pinned note, copied into every new chat's prompt
     memories/.facts.json      when each fact in memory was first seen
+    memories/.embeddings.json   each fact's embedding, for search by meaning, and their model
     memories/.suggestions.json  each member's new-chat chips, and the memory they were made from
     skills/<name>/SKILL.md
     attachments/              files people attached to messages
@@ -100,6 +103,8 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   when someone switches it (see [Switching models](#switching-models)). Thinking uses
   `adaptive` with `display: "summarized"`, the same for every conversation. The only per-conversation
   knob is `effort`.
+- Facts recalled from memory go into the message they came with, not the system prompt (see
+  [Memory](#memory)).
 - Steering messages, stop results and restart-recovery results are **appended** as new rows. Nothing
   is ever edited or deleted. Opus 5.5 and Fable 5.1 require this anyway for "preserved thinking":
   replaying a thinking block after its prefix changed returns a 400 on newer accounts.
@@ -133,7 +138,8 @@ same provider behind OpenRouter, whose cache holds its earlier calls. Usage repo
 
 A conversation runs on its preset's provider until someone switches it to another preset (see
 [Switching models](#switching-models)). `models.ts` is what the rest of nolune calls: it picks the
-provider's module (`anthropic.ts`, `openai-chat.ts`, `openrouter.ts`) for the model call, the
+provider's module (`anthropic.ts`, `openai-chat.ts`, `openrouter.ts`, `custom-providers.ts`) for
+the model call, the
 chat's title, PDF token counts, model checks and what the model can be sent, and gets back the
 same shape from each (the reply's content, its stop reason in Anthropic's words, usage, tool calls
 and texts). Each API provider brings a `FileStore` for pictures and PDFs (see
@@ -212,6 +218,46 @@ turns (`runPlanTurn`; see [Plans](#plans)).
   provider's as the window. A variant (`:nitro`, `:online`) is looked up as its model unless it's
   listed itself. The list is kept for an hour for what the model can be sent (see
   [Attachments](#attachments)). Titles are asked for at `low` effort with 2,048 tokens.
+- **Custom providers** (`custom-providers.ts`): the family's own servers (Ollama, LM Studio, oMLX,
+  vLLM, llama.cpp's server, LiteLLM), each added by the admin as a provider of its own, among the
+  API keys: a name (`Ollama`, `GPU box`), the API it speaks, an address and an optional key, kept
+  in `config.json` (`customProviders`) and never sent to the page. Each shows by its name as a
+  provider chip in Add a model. Chats on one run on OpenAI's code (`openai-chat.ts`, the Responses
+  API: Ollama 0.13.3 and later, LM Studio 0.3.29 and later, vLLM, LiteLLM; not llama.cpp's server
+  yet) or Anthropic's (`anthropic.ts`, the Messages API: Ollama 0.14 and later, LM Studio 0.4.1
+  and later, llama.cpp's server, oMLX), as the `custom-openai` or `custom-anthropic` provider. A
+  server that speaks both is added once for each; the API stays as it was added, since its
+  presets' chats are in it, while its name, address and key can change. Each module takes a target
+  (`ResponsesApi`, `MessagesApi`) whose client is the SDK pointed at the server: OpenAI's at its
+  `/v1` (added when the address is only a host), Anthropic's at the address without it (the SDK
+  adds `/v1/messages`). Everything an SDK would read from the environment is given (a key, or `none`,
+  and no organization or project), so `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN` and Anthropic's saved credentials never reach a server; a server's key
+  goes both ways servers take it (`x-api-key`, and a bearer token for Ollama's). A custom
+  preset's model is `<id>/<model>` (`gpu-box/qwen3:32b`), the id made from the name when it was
+  added and never changed after, so the name can: ids have no slash, so the first one ends it, and
+  a chat copies it from its preset like any model id, so it stays on the custom provider it
+  started on; the server gets the model's own id. Adding one asks its server for its models
+  (`GET /v1/models`): one that turns the key down isn't saved, one that doesn't answer is, with a
+  warning, since it may not run yet.
+  - **What differs from OpenAI's and Anthropic's own.** Requests leave out what only they have:
+    OpenAI's encrypted reasoning and prompt cache key, and levels above `high` (sent as `high`);
+    Anthropic's cache marks, adaptive thinking and effort, and a server's `max_tokens` is 32,000
+    rather than 64,000, its window usually being smaller. A model a custom provider refuses
+    reasoning settings for (a 400 about reasoning or thinking) gets none from then on, learned
+    like OpenAI's refused summaries. A server's reasoning shows in the chat (a Responses API
+    server's `reasoning_text`, a Messages API server's `thinking`), and never goes back: it has
+    nothing encrypted, and no signature to check thinking by. A short reply (a title, the
+    note-taker's) drops the `<think>…</think>` a server without a reasoning parser leaves in the
+    text.
+  - **Pictures, models, errors.** Nothing says which of a server's models see pictures or read
+    PDFs, and there's no Files API, so those go as their paths (`modelInputs` is false for both),
+    and a chat that switched to one gets notes for those it holds. Adding a preset checks that
+    the server lists the model, when it lists any, and takes its window when the list says one
+    (`max_model_len`, as vLLM does; `context_length`); otherwise it's unknown until the admin sets
+    it. Whether the model calls tools shows at its first reply. A server's errors are OpenAI's or
+    Anthropic's SDK's classes, and their code's, so `custom-providers.ts` tags them with the custom
+    provider and `models.ts` asks it first; they name it ("Couldn't reach GPU box at …").
 - **Another provider** (Gemini) would be one more module next to these, with a
   function turning nolune's format into its request (Gemini's thought signatures would ride in
   `native` like OpenAI's encrypted reasoning), a branch in each of `models.ts`'s functions, a
@@ -460,8 +506,9 @@ has the chat open gets the change as a live `model` event (also in the snapshot)
     provider's `file_id` (an `uploaded` source), become a note: this model can't open that copy,
     and the line before it (the attachment's label, or `Image: <path>` in a command result) says
     where the file is, so `nolune view` shows it again. The switch dialog mentions them when the chat
-    has any (`heldFileProviders`). A model on OpenRouter that can't see pictures or read PDFs gets
-    the same kind of note for those it can't take (`readableMessages`).
+    has any (`heldFileProviders`). A model on OpenRouter that can't see pictures or read PDFs, and
+    any model of a custom provider, gets the same kind of note for those it can't take
+    (`readableMessages`).
 - **The plans.** A plan's agent keeps its own copy of the chat, so a chat that comes back to a plan
   after another model answered starts a new session (on the Claude plan, a random id: the chat's
   own is taken) with the chat so far as a transcript, as a notification's chat does. So does one
@@ -635,32 +682,160 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
   paid OCR service at every request, each one carrying the whole history. Otherwise the file goes
   as its path with the reason (`… can't see pictures`), and `nolune view` says the same in the
   command's result. When the list can't be read, the file goes as its path too.
+- **Custom providers** have no Files API, and nothing says which of a server's models take
+  pictures or PDFs, so every one goes as its path, with that reason; the agent can still open the
+  file with its commands.
 
 ## Memory
 
 Each profile's memory is a folder of short Markdown notes, `~/.nolune/profiles/<slug>/memories`,
-one per topic (`family.md`, `people/anna.md`). There is no memory tool: like automations and
+in fixed categories (`plans.md`, `people/anna.md`). There is no memory tool: like automations and
 `nolune view`, it is files plus a CLI command, so it works the same with any model provider.
 
-- **In the prompt:** a short Memory section that names the notes as they were when the
-  conversation started (`Notes when this conversation started: family, food, people/anna.`), says
-  how to read and save them, and what is worth saving. Only names, never facts, so the prompt
-  changes when a note is added or removed and not with every fact, and nothing is read until the
-  agent needs it: before answering, it reads the notes that could matter
-  (`nolune memory show family food`).
+- **Categories** (`packages/core/src/memory-categories.ts`), like Claude's memory has, so every
+  fact has one obvious place and the Memory page reads the same in every family: `core` (pinned),
+  `people/<name>` (a note per person, in the family or not: grandparents, the nanny, the dentist),
+  `home`, `health`, `plans`, `routines`, `pets`, `places`, `projects` and `projects/<name>`, and
+  `other`. Before, the agent named topics itself and memory drifted: `family`, `kids` and
+  `people/mia` all held facts about Mia. The agent's prompt and the note-taker's list them with
+  what goes in each. `nolune memory add` (and the note-taker, and imports) refuse any other note,
+  saying where things go; `write` refuses to start one, and `mv` to rename into one. A note from
+  before the categories stays readable and editable, listed as Unsorted, until someone moves it
+  into one; the agent is told to sort one when it works with it.
+- **People.** A person's note is titled with their name and, when it's known, says who they are
+  to the family and what else they are called: `- Who: Anna's grandmother`,
+  `- Also called: grandma, бабушка` (`Зовут:`, `auch genannt:` and the other languages' labels
+  are read too). Search counts the title and those names as the note's own words, so "бабушка"
+  finds what `people/olga` says. An "Also called" that names no one new (the note's own title,
+  as a model wrote for a new member) is taken as a fact the note has already.
+- **Members' notes** (`packages/core/src/memory-people.ts`, `profile_member.person_note`). Each
+  member of the profile has their note, so nolune knows who "I" is in a message, what to look up for
+  them, and where what they say about themselves goes. The agent's prompt and the note-taker's
+  input list the members with their notes (`- Anna Smith: people/anna`). When someone is added
+  and memory may know them already (a note whose name, title or other names match theirs, in any
+  alphabet: Ольга is Olga, and a letter apart when long enough: Yulia, Yulya), whoever adds them
+  is asked which note is theirs, with what each says and a warning that the new member will read
+  it, since it was written without them; it is never linked without asking. With nothing
+  matching, the note their facts will start (`people/<first name>.md`, or longer if that's taken)
+  is kept for them, and members from before get theirs the same way, or are asked in the
+  profile's settings, where anyone can also change it. Recall lifts facts about the sender by any
+  name their note calls them.
+- **Merging** (`nolune memory merge <from> <into>`, or Move on the Memory page onto a note that's
+  there already): what one note says goes into the other, under the same headings, without what
+  it says already, with the dates its facts were learned; into a person's note, the other note's
+  title and names join its "Also called". Two members' notes are never merged. Moving or merging
+  a note takes along its member and the note-taker's changes in it (Undo still works); a note
+  moved into `people/` from elsewhere is titled with the person's name.
+- **In the prompt:** a short Memory section with the categories, the members and their notes,
+  and the names of the notes as they were when the conversation started
+  (`Other notes when this conversation started: home, plans, people/anna.`); it says how to look
+  things up and save them, and what is worth saving. Only names, never facts, so the
+  prompt changes when a note is added or removed and not with every fact, and nothing is read
+  until the agent needs it: whenever a request could depend on something the family said before,
+  also later in a chat when the subject changes, it searches (`nolune memory search dentist`) or
+  reads whole notes (`nolune memory show people/anna plans`). Guessing from note names alone missed facts
+  kept under a name that didn't suggest them, like the wifi password in `home`.
 - **Pinned core note.** `core.md` is the exception: a copy of it, as it is when the conversation
   starts (or its prompt is built again), goes whole into the Memory section. It is for what matters
   in almost every chat (who is in the family, languages, allergies, standing preferences, whatever
   someone asks nolune to always keep in mind), and holds at most 4,000 characters: `nolune memory` and
   the page refuse more, and one made longer in an editor is cut at a line in the prompt, with a
   note telling the agent to read the rest and move it out. The list of other notes leaves it out.
+- **Recall** (`recallFor` in `packages/core/src/memory-search.ts`): when a person's message is
+  queued, or an automation's run starts, memory is searched for its words, and up to 8 facts
+  (2,000 characters) that match go along with it in a `<memory>` block after the message, for the
+  model only (the chat shows what was written). It sits in the new message, never in the system
+  prompt, so the cached prefix doesn't change. Facts the conversation already has, in its system
+  prompt (core) or in any message or command output (a note the agent printed, an earlier
+  recall), are left out, so each comes once per chat. The sender's name (and their note's name,
+  title and other names) only lifts facts that match anyway (Anna's "what do I like?" puts "Anna likes tea" above "Ben likes coffee"), so it
+  doesn't bring up everything about them with every message. Anything going wrong costs the
+  recall, never the message.
+- **Search** (`rankFacts`): no index and no model, so the notes stay the only copy and it works the
+  same with every provider and offline. Every fact of every note is scored against the words of
+  the query: lower case and without accents, words of 3 letters only whole, longer ones by their
+  start (the first three quarters, at least 4 letters: "allergic" finds "allergies", "вайфая"
+  finds "вайфай"), and starts of 6 letters or more anywhere in a word, for compounds
+  ("Zahnarzt" finds "Kinderzahnarzt"). Short lists of words that say nothing, in the interface's
+  five languages, are left out. A word counts by how rare it is in memory (like BM25's IDF), and
+  one in more than 40% of a memory of 10 facts or more doesn't count at all. A word only in the
+  fact's note name or heading (or a person's note's title and other names) counts half, so "Anna"
+  finds what `people/anna` says. Recall keeps
+  facts scoring at least 30% of the best one.
+- **Search by meaning** (`packages/core/src/memory-embeddings.ts`): words miss questions that
+  share none with the fact that answers them ("where's the other key for the car?") and ones in
+  another language than the notes. So search and recall also compare embeddings, from any
+  OpenAI-compatible embeddings API (the OpenAI SDK, loaded on first use). nolune sets it up itself:
+  with an OpenAI key, OpenAI's `text-embedding-3-small`; else with an OpenRouter key, the same
+  model through OpenRouter; else none, and words do it all. `nolune config set embeddings`, or
+  Memory search under Models & keys, picks another model (`openai/…`, `openrouter/…`), turns it
+  `off` (every fact goes to that provider to be embedded, whatever model the chats run on), or
+  takes a model of a custom provider that speaks OpenAI's API (`custom-openai/<id>/<model>`),
+  like Ollama, LM Studio or oMLX on this computer, for anyone who wants it local. Each fact is
+  embedded with its note and heading (`people/anna › Allergies: peanuts`) and kept in a hidden
+  `.embeddings.json` with the model's name, so only new or changed facts are embedded again,
+  and a new model starts over. The gateway embeds in the background: every profile's facts when
+  it starts, what the note-taker added, and whatever a search finds missing (a fact is found by
+  words until then); a `nolune` command in a terminal never waits for that. A message waits only
+  for its own embedding, at most 3 seconds (10 for `nolune memory search`), and anything going wrong
+  leaves words to do it alone, logged once in 10 minutes. Automation runs recall by words only,
+  since they start at once.
+- **What counts as a match by meaning:** models differ in how similar anything looks, so there is
+  no fixed cutoff. A fact counts when its similarity stands out from the rest of memory: its
+  distance from the median over the median absolute deviation (×1.4826), at least 4.5 for recall
+  and 3.5 for search, which the agent reads with judgement. Measured on 40 facts with
+  EmbeddingGemma through a plain server: what a question was about stood out by 5.0 to 10.0
+  (also two facts at once, which a mean and standard deviation hide from each other), messages
+  about none of them ("thanks!", "convert this PDF") by 3.2 at most. It needs at least 10 facts
+  with embeddings. The two lists, words and meaning, are merged by reciprocal rank fusion
+  (constant 10). Still missed: what only follows from a fact, like "what should we cook?" and "Anna
+  is vegetarian" (3.2).
+- **Learning from chats** (`packages/core/src/memory-learning.ts`): the agent saves what it learns
+  when it thinks of it, and facts said in passing got lost. So once a chat's loop has ended and
+  nothing ran in it for 2 minutes (the gateway's scheduler starts the timers, and after a restart
+  gives chats active in the last day theirs), the chat's own model (`quickReply`, so plans work
+  too) looks over what was said since last time (`conversation.learned_seq`): people's messages,
+  with the names of attached files, and the text of nolune's replies, never commands, their output
+  or an automation's message, so a web page, an email or a webhook can't write to memory. It gets
+  the two messages before, for context, today's date, the members with their notes, and the
+  notes: core, then the ones with
+  facts matching the conversation, then the most recently changed, whole up to 20,000 characters
+  and the rest by name. It answers with a JSON array of at most 10 changes, usually `[]`:
+  `add` (with `under`, the heading the fact belongs under, started at the end of the note when
+  it has none, since appending to the end put a lake house under "Car") and `replace` (with
+  text, never empty). It can't remove anything: in a live test, a model deleted the old wifi
+  password without saving the new one, so a fact that stopped being true is replaced with what
+  is true now, and removing stays with people and the agent. The changes go through the same
+  functions as `nolune memory`, so they are dated and refused alike (a full core note, text that
+  isn't there). An `add` of several lines is a fact a line, each with its own Undo: a model sent
+  a new person's Who, Also called and favorite games as one, which was joined into one bullet.
+  `nolune memory add` splits a quoted list the same way. One look at a time per
+  profile, so two chats ending together don't save the same fact. A stretch is read once: a
+  failed model call leaves it for next time, a reply without usable JSON doesn't. Hidden chats
+  (background runs nobody continued, subagents) are skipped, and so is a stretch without a
+  person's message. Each profile can turn it off on its Memory page or with
+  `nolune memory learning off` (`profile.learn_from_chats`, on by default). It costs one short call
+  to the chat's model per quiet spell, on a plan the plan's usage.
+  - **What it saved shows** (`packages/core/src/memory-changes.ts`), since people should see what
+    goes into memory without their asking. Each change is a `memory_change` row: the chat, the
+    last message it read, the note, and the whole lines the change left there (and, for a
+    replace, the lines before). The chat shows them after that message as a folded "Saved 3
+    memories" row, live (a `memory` event, and in the snapshot), each fact with its note and
+    Undo; the Memory page lists the last two weeks' at the top, with the chat each came from.
+    Undo puts back exactly those lines: an added fact goes (with the note it started, once
+    nothing is left in it), a replaced one reads as before and keeps its old date (the fact index
+    remembers facts that just left). When those lines aren't in the note once any more, someone
+    changed them since, and it says so instead. None of it goes to the model: the chat's
+    transcript, and its prompt cache, stay as they were.
 - **`nolune memory`** (`packages/cli/src/memory.ts`, on top of `packages/core/src/memory.ts`): `list`,
+  `search <words>...` (every note's facts that match, best first, as `path:line  fact  (heading)`),
   `show <topic>...`, `add <topic> <fact>` (one bullet; creates the note, skips a fact it already
   has), `replace <topic> <old> <new>` (text that appears exactly once), `forget <topic> <text>` (the
-  one line containing it), `write <topic>` (the whole note, from stdin), `rm` and `mv`. Topics are
-  paths inside the folder; `..`, names starting with a dot and symbolic links are refused. Notes are
-  written atomically and hold at most 50,000 characters. The agent can also edit the files
-  directly; `nolune memory` is preferred because it dates each fact.
+  one line containing it), `write <topic>` (the whole note, from stdin), `rm`, `mv`, `merge` and
+  `learning [on|off]`. `list` also says whose note each member's is. Topics are paths inside the folder; `..`, names starting with a dot and
+  symbolic links are refused. Notes are written atomically and hold at most 50,000 characters.
+  The agent can also edit the files directly; `nolune memory` is preferred because it dates each
+  fact.
 - **What goes in:** one fact per bullet, updated rather than repeated. Secrets such as passwords
   and door codes are allowed when someone asks: a profile is only shared by people who trust each
   other, and models tend to refuse them in memory unless told so. The exception is something one
@@ -676,12 +851,17 @@ one per topic (`family.md`, `people/anna.md`). There is no memory tool: like aut
   back, keeps its date. Names starting with a dot are reserved, so `nolune memory` can't touch it.
 - **Imported** from another assistant on a new profile's welcome, dated as that assistant
   remembered them: see [Welcome](#welcome).
-- **Memory page** (`/p/<slug>/memory`): a grid of dots, one row per note and one dot per fact,
-  oldest on the left. A dot's shade is its age: black today (with a halo), fading to light grey
-  over about three months, and lightest when undated. Rows are ordered by the latest change, notes
-  in a folder are grouped under its name, and past 12 rows the rest fold away. Pointing at (or
-  tapping) a dot shows the fact and when it was learned. Below the grid, every note is rendered as
-  Markdown and can be edited or forgotten. The core note comes first, marked as pinned, even before
+- **Memory page** (`/p/<slug>/memory`): the switch for learning from chats, then a grid of dots,
+  one row per note and one dot per fact, oldest on the left. A dot's shade is its age: black today
+  (with a halo), fading to light grey over about three months, and lightest when undated. Rows
+  follow the categories, each in the family's language; notes in a folder are grouped under its
+  name, members' first (with their avatar), then by the latest change; notes from before the
+  categories come last, as Unsorted. Past 12 rows the rest fold away. Pointing at (or
+  tapping) a dot shows the fact and when it was learned. Below the grid, **Saved from chats** lists
+  what the note-taker saved in the last two weeks (four, then Show all), each with its note (which
+  scrolls to its card), the chat it came from, when, and Undo. Then every note is rendered as
+  Markdown and can be edited, moved (into a category, onto a person's or project's note, or a new
+  one; onto one that's there already, it's a merge) or forgotten. The core note comes first, marked as pinned, even before
   it exists, so people can start it there; its editor counts characters against the limit. An edit
   is refused if the agent changed the note after it was opened; saving again then replaces the
   agent's version.
@@ -1107,13 +1287,20 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 /key` instead. Removing a saved key falls back to the environment's. Replacing a key warns to keep
   the same workspace (Anthropic, OpenRouter) or project (OpenAI): pictures and PDFs already sent
   live in it. `nolune key set` does the same check, but saves anyway when the provider can't be
-  reached. Under the keys, **Plans** lists both plans alike (what each is, who it's signed in as,
+  reached. Custom providers are rows in the same list, after the keys, each with its API, its
+  address and whether it has a key (never the key): Change opens its name, address and an
+  optional key (left empty, the key saved for the same address stays), and Remove says which
+  presets run on it first. **Add custom provider**, under the list, takes a name, the API (OpenAI
+  or Anthropic), an address and a key. Saving asks the server for its models and says how many it
+  serves, or what went wrong; `nolune provider add <name> <url> [--api A] [--key K]` does the same,
+  asking for a key at a terminal when the server wants one. Under the keys, **Plans** lists both plans alike (what each is, who it's signed in as,
   what to do next): the Claude plan's row shows where Claude Code is and checks its sign-in; the
   ChatGPT plan's shows where Codex is and who it's signed in as, signs it in with ChatGPT, showing
   the link and the one-time code, updates by itself once the code is entered, and then offers Sign
   in again and Sign out. Without the agent, a row shows how to install it. Under the presets, **Add
   a model** opens the form (open from the start while there are none), in the order the choices are
-  made: the provider, saying which key or plan it runs on; the model, picked from the provider's
+  made: the provider, each custom provider a chip of its own by its name, saying which key, plan or
+  server it runs on; the model, picked from the provider's
   list or typed (any id works, a dated snapshot say); an optional name, whose placeholder is the
   default it gets; and the context window, folded away under what it will be ("Auto · 1M"). The list
   comes from `/api/models` when the form needs it: Anthropic's models API, with names and windows;
@@ -1121,7 +1308,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   be typed), without audio, realtime, pictures or search, nor dated snapshots of models also listed
   without a date, the newest first, with the flagships' known window; OpenRouter's, the models that
   can call tools (without `:batch` variants, which are for its batch API), the newest first, with
-  its names and the window a preset gets; Claude Code's own list for the Claude plan, by full id
+  its names and the window a preset gets; a custom provider's, as it lists them (`<id>/<model>`);
+  Claude Code's own list for the Claude plan, by full id
   (`claude-opus-5-5`, not `opus`, which would move a chat to a newer model when Claude Code
   updates); and what Codex's own picker offers for the ChatGPT plan. It's asked for again when the
   provider's key changes. The context window is a row of chips: Auto (what the provider reports, if
@@ -1132,6 +1320,14 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   setting the window needs no key; a name left as the default follows the model. New chats,
   automations that use the preset and chats switched to it from then on get the change; chats
   already on it keep the copy they took (see [Switching models](#switching-models)).
+  Last, **Memory search** says what search by meaning uses (see [Memory](#memory)), or why it goes
+  by words only (no key or custom provider, or off), and Change opens a form: Auto, OpenAI,
+  OpenRouter, each custom provider that speaks OpenAI's API by its name, or Off, and a model for a
+  provider (its placeholder is the default; a custom provider's has to be named, like
+  `nomic-embed-text`). Saving asks the
+  source once
+  (`embeddingProblem`) and says if it didn't answer, and a source that works starts embedding every
+  profile's facts in the background.
 
 ## Languages
 
@@ -1266,7 +1462,8 @@ nothing, and opening the page again runs it again.
 - **Where they go** (`importMemoryExport`, `memory-import.ts`). A profile is shared, so rules are
   pinned in `core.md` with the person's first name ("Jamie: keep answers short"), and what
   doesn't fit its 4,000 characters goes to their own note. Identity, career, preferences and
-  anything under another heading go to `people/<name>.md`, a heading each; each project to
+  anything under another heading go to their note (the member's, else `people/<name>.md`), a
+  heading each; each project to
   `projects/<name>.md`, named by the entry's first words ("Tidepool: …"), or to `projects.md`.
   `addMemoryFacts` adds them under the heading, skips facts memory already has, and dates each
   one as the export did in `.facts.json`; `[unknown]` ones get 0, like facts from before dates
@@ -1342,10 +1539,12 @@ to (issue #42).
 
 ```
 packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_command, background
-                commands, memory notes (and memory-export.ts, memory-import.ts: memories brought
-                over from another assistant), new-chat suggestions, nolune view images, attachments, model
-                calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with its
-                Files API and the function that turns nolune's format, format.ts, into its request),
+                commands, memory notes (search and recall, learning from chats, and
+                memory-export.ts, memory-import.ts: memories brought over from another
+                assistant), new-chat suggestions, nolune view images, attachments, model
+                calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with
+                its Files API and the function that turns nolune's format, format.ts, into its
+                request, and custom-providers.ts, your own servers in either API),
                 plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts, the
                 ChatGPT plan's through Codex's app server in chatgpt-plan.ts and
                 codex-app-server.ts), provider

@@ -1,0 +1,1 @@
+ALTER TABLE `profile_member` ADD `person_note` text;

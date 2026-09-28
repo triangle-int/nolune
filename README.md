@@ -14,7 +14,8 @@ Needs macOS (Linux works without the background service), Node 22.18+ and an
 [Anthropic API key](https://console.anthropic.com/), an
 [OpenAI API key](https://platform.openai.com/api-keys), an
 [OpenRouter API key](https://openrouter.ai/settings/keys) (chats run on Claude, on OpenAI's GPT
-models, or on any model OpenRouter serves that can call tools; you can have all three), a Claude
+models, or on any model OpenRouter serves that can call tools; you can have all three), a model
+server of your own (Ollama, LM Studio, oMLX, vLLM...) with a model that can call tools, a Claude
 Pro or Max plan signed in to [Claude Code](https://claude.com/claude-code) on the same computer, or
 a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
 [Codex](https://developers.openai.com/codex/cli) there (see below).
@@ -36,6 +37,16 @@ ChatGPT, and add models on the web, under Models & keys in your account menu.
 `nolune preset add deepseek/deepseek-v4.1-flash --provider openrouter`. OpenRouter's ids name the
 model's maker. Pictures and PDFs go only to models that take them; for the others, they're saved
 for the agent and named in the message, like any other file.
+
+**On your own servers.** Chats can run on model servers of your own, like
+[Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) on this computer, or vLLM on a
+machine with GPUs. Add each one as a custom provider, with the name you want to see, under Models &
+keys (Add custom provider, under the API keys) or with
+`nolune provider add Ollama http://localhost:11434` (`--key` if it wants one). It speaks OpenAI's API
+unless you pass `--api anthropic` (Ollama, LM Studio and oMLX have both; llama.cpp's server only
+Anthropic's). Then it's a provider like the others: `nolune preset add qwen3:8b --provider Ollama`,
+or its chip in Add a model. nolune asks it for its models to check it. The model must be able to call
+tools; pictures and PDFs reach it as their paths.
 
 **On your own plan instead of an API key.** Chats can run on a subscription someone in the family
 already has. Pick one in a new profile's welcome, or with `nolune <plan> setup` and a preset on
@@ -122,10 +133,24 @@ Access). `nolune setup` prints the exact path.
   back). On a fresh install without a model, an admin picks one there too. Its sounds can be
   turned off in Settings.
 - **Memory.** nolune keeps what it learns about the family (preferences, who's who, where things are)
-  in small notes per topic, and reads the ones it needs when a chat starts. The pinned `core` note
-  (who's who, languages, allergies, anything you want it to always keep in mind) is in every chat
-  from the start, so keep it short: at most 4,000 characters. The profile's Memory
-  page shows every fact as a dot, darker the newer it is, and lets you fix or delete a note. Files:
+  in small notes, in the same categories in every profile: core, people (a note per person, in
+  the family or not), home, health, plans, routines, pets, places, projects and other. Each member
+  has their note under people, so nolune knows who "I" is; when you add someone memory may know
+  already (grandma, before she got an account), you're asked which note is theirs. Each message comes with the facts from memory that match it, and nolune
+  searches for more when a request needs them (`nolune memory search wifi`). With an OpenAI or
+  OpenRouter key, it also finds facts by meaning ("where's the other key for the car?" finds the
+  spare key, a question in Russian finds notes in English): each fact is embedded once with that
+  provider's `text-embedding-3-small`. An admin can turn that off, or use a model of one of your
+  servers instead (Ollama, LM Studio, oMLX on your computer), under Memory search in Models &
+  keys or with `nolune config set embeddings custom-openai/local/nomic-embed-text`. The pinned
+  `core` note (who's who, languages, allergies, anything you want it to always keep in mind) is in
+  every chat from the start, so keep it short: at most 4,000 characters. Besides what nolune saves
+  as it goes, it looks over each chat once it has been quiet for a couple of minutes and saves
+  what it missed, with one short request to the chat's model; turn that off on the Memory page
+  (**Learn from chats**) or with `nolune memory learning off`. What it saves shows in the chat
+  ("Saved 3 memories") and at the top of the Memory page, each with Undo. The Memory page shows
+  every fact as a dot, darker the newer it is, and lets you fix, move, merge or delete a note
+  (`nolune memory merge people/grandma people/olga` when two are about one person). Files:
   `~/.nolune/profiles/<profile>/memories`.
 - **Languages.** The web interface comes in English, Russian, German, Spanish and French. It
   follows the browser's language, or pick one in Settings (per device). Only menus, buttons and
@@ -156,7 +181,7 @@ is needed for the CLI while developing.
 
 ```sh
 pnpm install
-pnpm nolune setup       # same CLI, from source
+pnpm nolune setup          # same CLI, from source
 cp .env.example .env    # ORIGIN=http://localhost:5173
 pnpm dev
 ```

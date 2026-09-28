@@ -43,6 +43,7 @@
 	import MoveToFolderMenu from './folders/MoveToFolderMenu.svelte';
 	import NewFolderDialog from './folders/NewFolderDialog.svelte';
 	import Markdown from './chat/Markdown.svelte';
+	import MemoryLook from './chat/MemoryLook.svelte';
 	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
 	import MessageAttachments from './chat/MessageAttachments.svelte';
 	import ModelMenu, { shortModelName } from './chat/ModelMenu.svelte';
@@ -153,7 +154,9 @@
 		invalidate('nolune:conversations');
 	});
 
-	const entries = $derived(buildTranscript(chat.messages, chat.live, chat.running));
+	const entries = $derived(buildTranscript(chat.messages, chat.live, chat.running, chat.memory));
+	/** The newest entry, past what the note-taker saved after it. */
+	const newest = $derived(entries.findLast((entry) => entry.type !== 'memory'));
 
 	/** Usage of the last reply, and summed over the whole conversation. */
 	const usage = $derived.by(() => {
@@ -228,10 +231,7 @@
 	);
 
 	/** The newest entry when it's a reply: its avatar shows what nolune is doing. Older ones hold still. */
-	const liveReply = $derived.by(() => {
-		const last = entries.at(-1);
-		return last?.type === 'reply' ? last : null;
-	});
+	const liveReply = $derived(newest?.type === 'reply' ? newest : null);
 
 	/** The step nolune is on while it runs, in the words its group of steps uses. */
 	const step = $derived.by(() => {
@@ -685,7 +685,7 @@
 				<p class="py-16 text-center text-muted-foreground">{m.chat.empty}</p>
 			{/if}
 
-			{#each entries as entry, index (entry.key)}
+			{#each entries as entry (entry.key)}
 				{#if entry.type === 'human'}
 					{@render humanBubble(
 						entry.message.senderName,
@@ -733,8 +733,10 @@
 									.message.output}</pre>
 						</Collapsible.Content>
 					</Collapsible.Root>
+				{:else if entry.type === 'memory'}
+					<MemoryLook look={entry.look} slug={page.params.slug ?? ''} />
 				{:else}
-					{@render reply(entry, index === entries.length - 1)}
+					{@render reply(entry, entry === newest)}
 				{/if}
 			{/each}
 

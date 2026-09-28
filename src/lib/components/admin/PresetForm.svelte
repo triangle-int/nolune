@@ -16,6 +16,11 @@
 		providers: { id: string; label: string }[];
 		/** Whether each API key provider has a key, and its last four characters. */
 		keys: { provider: string; source: string | null; hint: string | null }[];
+		/**
+		 * Custom providers, each a chip of its own after `providers`: its presets are
+		 * `custom-<api>`, their model `<id>/<model>`.
+		 */
+		customProviders: { id: string; name: string; api: 'openai' | 'anthropic'; url: string }[];
 		claudeInstalled: boolean;
 		codexInstalled: boolean;
 		/** The preset being changed, with its own context window if it has one; a new one without. */
@@ -30,6 +35,7 @@
 	let {
 		providers,
 		keys,
+		customProviders,
 		claudeInstalled,
 		codexInstalled,
 		preset,
@@ -46,45 +52,84 @@
 	const CONTEXT_WINDOWS = [128_000, 200_000, 1_000_000];
 	/** What the form starts with: the preset's, or nothing yet. */
 	const start = untrack(() => preset);
-	const defaultName = (model: string, provider: string) => `${model} (${provider})`;
+	/** A custom provider's presets are `custom-<api>`, their model `<id>/<model>`. */
+	const isCustom = (provider: string) => provider.startsWith('custom-');
+	const idOf = (model: string) => model.slice(0, Math.max(0, model.indexOf('/')));
+	/** A custom provider's chip. */
+	const CUSTOM = 'custom:';
+	/** As presets.ts names it: a custom provider's model by its name. */
+	function defaultName(model: string, provider: string): string {
+		const on = isCustom(provider) ? customProviders.find((c) => c.id === idOf(model)) : undefined;
+		return on ? `${model.slice(on.id.length + 1)} (${on.name})` : `${model} (${provider})`;
+	}
 
 	let saving = $state(false);
 	/** The last save's problem is this form's only once it has been sent. */
 	let sent = $state(false);
 
-	let provider = $state(start?.provider ?? 'anthropic');
+	/** The chip: a provider, or `custom:<id>`. */
+	let choice = $state(
+		start && isCustom(start.provider)
+			? `${CUSTOM}${idOf(start.model)}`
+			: (start?.provider ?? 'anthropic')
+	);
+	/** The custom provider picked; undefined when it was removed. */
+	const custom = $derived(
+		choice.startsWith(CUSTOM)
+			? customProviders.find((c) => `${CUSTOM}${c.id}` === choice)
+			: undefined
+	);
+	/** The provider as the preset keeps it. */
+	const provider = $derived(
+		!choice.startsWith(CUSTOM)
+			? choice
+			: custom
+				? `custom-${custom.api}`
+				: (start?.provider ?? 'custom-openai')
+	);
 	let model = $state(start?.model ?? '');
+	/** The model as the preset keeps it: a custom provider's with its id before it. */
+	const fullModel = $derived(
+		custom && model && !model.startsWith(`${custom.id}/`) ? `${custom.id}/${model}` : model
+	);
 	/** Empty while it's the default, so the default goes on following the model. */
 	let name = $state(
-		start && start.name !== defaultName(start.model, start.provider) ? start.name : ''
+		start && start.name !== untrack(() => defaultName(start.model, start.provider))
+			? start.name
+			: ''
 	);
 	const label = $derived(providers.find((p) => p.id === provider)?.label ?? provider);
 	const key = $derived(keys.find((k) => k.provider === provider));
-	/** Whether the provider can be used: a key, or the plan's agent (Claude Code, Codex). */
+	/** Whether it can be used: a key, the plan's agent (Claude Code, Codex), or a custom provider. */
 	const ready = $derived(
 		provider === 'claude-plan'
 			? claudeInstalled
 			: provider === 'chatgpt-plan'
 				? codexInstalled
-				: !!key?.source
+				: isCustom(provider)
+					? !!custom
+					: !!key?.source
 	);
 	/** A new provider or model is checked with the provider when it's saved. */
-	const checks = $derived(!start || provider !== start.provider || model !== start.model);
+	const checks = $derived(!start || provider !== start.provider || fullModel !== start.model);
 
 	type ModelList = { models: ModelChoice[]; problem: string | null };
 	/** Each provider's models (null while they're asked for), asked for again when its key changes. */
 	let lists = $state<Record<string, ModelList | null>>({});
-	const listKey = $derived(`${provider}:${key?.hint ?? ''}:${ready}`);
+	const listKey = $derived(
+		`${provider}:${custom ? `${custom.id} ${custom.url}` : (key?.hint ?? '')}:${ready}`
+	);
 	const list = $derived<ModelList | null>(
 		ready ? (lists[listKey] ?? null) : { models: [], problem: null }
 	);
-	const picked = $derived(list?.models.find((m) => m.id === model));
+	const picked = $derived(list?.models.find((m) => m.id === fullModel));
 
 	$effect(() => {
 		if (!ready || listKey in lists) return;
 		const at = listKey;
 		lists[at] = null;
-		fetch(`/api/models?provider=${encodeURIComponent(provider)}`)
+		const on = custom ? `&custom=${encodeURIComponent(custom.id)}` : '';
+		fetch(`/api/models?provider=${encodeURIComponent(provider)}${on}`)
 			.then(async (res): Promise<ModelList> =>
 				res.ok ? await res.json() : { models: [], problem: t.couldNotList(res.status) }
 			)
@@ -103,6 +148,14 @@
 				? { text: t.onChatGptPlan, warn: false }
 				: { text: t.noCodex, warn: true };
 		}
+		if (isCustom(provider)) {
+			return custom
+				? {
+						text: t.onCustom(messages.admin.customProviders.apis[custom.api], custom.url),
+						warn: false
+					}
+				: { text: t.customGone, warn: true };
+		}
 		return ready ? { text: t.onKey(label), warn: false } : { text: t.noKey(label), warn: true };
 	});
 
@@ -119,7 +172,7 @@
 			? 'Claude Code'
 			: provider === 'chatgpt-plan'
 				? 'Codex'
-				: label;
+				: (custom?.name ?? label);
 	}
 
 	/** What Auto (no override) gets with each provider. */
@@ -197,17 +250,21 @@
 			type="single"
 			variant="outline"
 			size="sm"
-			value={provider}
+			value={choice}
 			onValueChange={(value) => {
-				if (!value || value === provider) return;
-				provider = value;
+				if (!value || value === choice) return;
+				choice = value;
 				// Another provider's ids mean nothing here.
 				model = '';
 			}}
 			aria-labelledby="{uid}-provider"
+			class="flex-wrap"
 		>
 			{#each providers as p (p.id)}
 				<ToggleGroup.Item value={p.id}>{p.label}</ToggleGroup.Item>
+			{/each}
+			{#each customProviders as c (c.id)}
+				<ToggleGroup.Item value="{CUSTOM}{c.id}">{c.name}</ToggleGroup.Item>
 			{/each}
 		</ToggleGroup.Root>
 		<p class={providerNote.warn ? 'text-warning' : 'text-muted-foreground'}>
@@ -230,7 +287,7 @@
 				{modelNote.text}
 			</p>
 		{/if}
-		<input type="hidden" name="model" value={model} />
+		<input type="hidden" name="model" value={fullModel} />
 	</div>
 
 	<div class="space-y-2">
@@ -241,7 +298,7 @@
 			id="{uid}-name"
 			name="name"
 			bind:value={name}
-			placeholder={model ? defaultName(model, provider) : t.namePlaceholder}
+			placeholder={model ? defaultName(fullModel, provider) : t.namePlaceholder}
 			class="h-10 rounded-full px-4"
 		/>
 	</div>

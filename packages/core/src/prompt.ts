@@ -7,6 +7,8 @@ import {
 	listMemoryNotes,
 	readPinnedNote
 } from './memory.ts';
+import { PERSON_NOTE_GUIDE, categoryGuide } from './memory-categories.ts';
+import { peopleGuide } from './memory-people.ts';
 import { profileDir, profileMemoryDir, profileSkillsDir } from './paths.ts';
 import type { Profile } from './profiles.ts';
 import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
@@ -15,15 +17,17 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
 
 /**
  * Built once per conversation and stored with it. Everything here must be stable for the life of
- * the conversation: no dates, no user names, nothing that varies per request. Memory is listed by
- * note name, and the agent reads the notes it needs; only the small pinned core note is copied
- * whole. So the prompt changes when a note is added or removed or core changes, not with every
- * fact. `folderSection`: the chat's folder (renderFolderSection), last, so chats outside folders
- * share everything before it. `soul`: the profile's (readSoul), first, since it says who nolune is;
- * the chat keeps its text to tell when the prompt is out of date.
+ * the conversation: no dates, not who sent a message, nothing that varies per request (the
+ * members and their notes are the profile's, like the memory notes). Memory is listed by
+ * note name, and the agent searches and reads what it needs (facts that match a message go along
+ * with the message: recallFor); only the small pinned core note is copied whole. So the prompt
+ * changes when a note is added or removed or core changes, not with every fact. `folderSection`:
+ * the chat's folder (renderFolderSection), last, so chats outside folders share everything
+ * before it. `soul`: the profile's (readSoul), first, since it says who nolune is; the chat keeps
+ * its text to tell when the prompt is out of date.
  */
 export function buildSystemPrompt(
-	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
+	profile: Pick<Profile, 'id' | 'slug' | 'disabledSkills'>,
 	folderSection = '',
 	soul = readSoul(profile.slug)
 ): string {
@@ -44,6 +48,7 @@ ${soul.text}
 ${core.text}
 </note>${core.cut ? `\n\nIt is longer than ${MAX_PINNED_CHARS} characters, so the rest was cut off here. Read the whole note with \`nolune memory show core\` and move what doesn't need to be in every chat to other notes.` : ''}`
 		: 'It is empty so far.';
+	const people = peopleGuide(profile);
 	const skills = listProfileSkills(
 		profileSkillsDir(profile.slug),
 		profile.disabledSkills
@@ -80,15 +85,20 @@ Before your first command in a turn, say in one short sentence what you are abou
 To show a picture in the chat, put it in your reply as a Markdown image: \`![what it shows](path)\`. To give someone a file (a PDF, a spreadsheet, a video), link it and it becomes a download: \`[Filled-in tax form](path)\`. A path can be absolute, start with \`~/\`, or be relative to the profile folder, and a picture can also be an https URL you found in a message or in a command's output (to show one from anywhere else, download it and link the file). Wrap paths that contain spaces in angle brackets: \`![Beach](</Users/anna/Pictures/Summer 2025/IMG_0142.HEIC>)\`. Only link files you have checked exist. They are copied when you send the reply, in full size and up to ${MAX_MEDIA_BYTES / (1024 * 1024)} MB each, so temporary files are fine and later changes to a file don't change what was sent.${process.platform === 'darwin' ? ' HEIC photos are converted so every browser can show them.' : ''}
 
 # Memory
-This profile's long-term memory is a set of short Markdown notes, one per topic, shared by all of its conversations and members and kept in \`${profileMemoryDir(profile.slug)}\`.
+This profile's long-term memory is a set of short Markdown notes shared by all of its conversations and members and kept in \`${profileMemoryDir(profile.slug)}\`. Every fact goes in one of these categories: a note each, or for people and projects a note per person or project, like people/anna:
+${categoryGuide()}
 
-The note core is pinned: every new conversation starts with a copy of it, so it holds only what matters in almost every one. ${coreSection}
+${PERSON_NOTE_GUIDE}
+${people ? `\nThe members of this profile and their notes, when this conversation started. What someone says about themselves ("I", "my") goes in their note:\n${people}\n` : ''}
+The note core is pinned: every new conversation starts with a copy of it. ${coreSection}
 
 ${notes.length ? `Other notes when this conversation started: ${notes.map((path) => path.replace(/\.md$/, '')).join(', ')}.` : 'There are no other notes yet.'}
-- Before you answer, read the other notes that could matter for the request, like \`nolune memory show family food\`. Once per conversation is enough. \`nolune memory\` lists the notes as they are now, in case another conversation added some.
-- When you learn something that will matter in later conversations (preferences, facts about the family, where things are kept, how things are set up), save it right away: \`nolune memory add <topic> "<one fact>"\`. The note is created if needed. Keep topics broad, with short names like family, home, school or people/anna.
-- Save to core (\`nolune memory add core "<one fact>"\`) only what you should have in mind in nearly every conversation: who is in the family and how to address them, the languages they use, allergies and health matters, standing preferences. Also anything someone asks you to always keep in mind. It holds at most ${MAX_PINNED_CHARS} characters; everything else goes into topic notes.
-- Keep notes true and short. \`nolune memory replace <topic> "<old text>" "<new text>"\` corrects a fact, \`nolune memory forget <topic> "<text>"\` removes one, and \`nolune memory write <topic>\` with the whole note on stdin reorganizes it. Update rather than repeat.
+- A message can end with a <memory> block: facts from the notes that match it, looked up when it was sent. They are a head start, not all that memory holds.
+- Whenever a request could depend on something the family told you before (people, preferences, plans and dates, where things are, how things are set up), look in memory before you answer, also later in a conversation when the subject changes: \`nolune memory search <words>\` finds facts in every note (if nothing comes up, try other words, or the language the notes are in), and \`nolune memory show <topic>...\` prints whole notes, like \`nolune memory show people/anna plans\`. \`nolune memory\` lists the notes as they are now, in case another conversation added some.
+- When you learn something that will matter in later conversations, save it right away, in the category it belongs to: \`nolune memory add <topic> "<one fact>"\`, like \`nolune memory add plans "Dentist for Mia on March 3, 2027 at 10:00"\`. The note is created if needed. What's about a person goes in their note, even when you learn it from someone else.
+- Save to core only what you should have in mind in nearly every conversation, and anything someone asks you to always keep in mind. It holds at most ${MAX_PINNED_CHARS} characters; everything else goes into the other categories.
+- Keep notes true and short. \`nolune memory replace <topic> "<old text>" "<new text>"\` corrects a fact, \`nolune memory forget <topic> "<text>"\` removes one, and \`nolune memory write <topic>\` with the whole note on stdin reorganizes it. Update rather than repeat. When two notes turn out to be about the same person or thing, \`nolune memory merge <from> <into>\` puts the first into the second.
+- A note outside the categories is from before them: it can be read and rewritten, but not added to. When you work with one, sort it: \`nolune memory mv <old> <topic>\` when it's all about one thing, \`nolune memory merge\` when that note is there already, or else add its facts where they belong and \`nolune memory rm\` it.
 - Use \`nolune memory\` rather than editing the files yourself: it records when each fact was learned, which the family sees on the Memory page.
 - Everyone in this profile can read the memory. A profile is only shared by people who trust each other, so private things are fine to save when someone asks: passwords, door codes, account numbers. The one exception is something a person wants kept from the others here, like a surprise.
 - Don't record ordinary one-off requests.

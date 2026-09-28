@@ -543,7 +543,7 @@ export const ru: Messages = {
 	memory: {
 		title: 'Память',
 		intro: (profile: string) =>
-			`Что nolune помнит для профиля ${profile}. Это видят все его участники. Каждый чат начинается с закреплённой заметки Core; остальные nolune читает, когда они нужны в чате, и по ходу дела записывает то, что узнаёт. Чтобы добавить что-то, просто скажите ему в чате, например: «Запомни, что у Анны аллергия на орехи».`,
+			`Что nolune помнит для профиля ${profile}. Это видят все его участники. Каждый чат начинается с закреплённой заметки «Главное»; остальные nolune читает, когда они нужны в чате, и по ходу дела записывает то, что узнаёт. Чтобы добавить что-то, просто скажите ему в чате, например: «Запомни, что у Анны аллергия на орехи».`,
 		total: (memories: number, topics: number) =>
 			`${p(memories, { one: 'факт', few: 'факта', many: 'фактов', other: 'факта' })} ${p(topics, { one: `в ${topics} теме`, other: `в ${topics} темах` })}`,
 		newThisWeek: (n: number) =>
@@ -567,6 +567,9 @@ export const ru: Messages = {
 			`${problem} Сохраните ещё раз, чтобы оставить свою версию, или отмените, чтобы увидеть версию nolune.`,
 		saved: 'Сохранено. Новые чаты увидят изменения.',
 		forgot: (path: string) => `nolune забыл всё из ${path}.`,
+		learn: 'Запоминать из чатов',
+		learnHint:
+			'Когда в чате пару минут тихо, nolune перечитывает его и сохраняет то, что стоит запомнить. Каждый раз это один короткий дополнительный запрос к модели чата. Если выключить, nolune сохраняет только то, о чём вспомнит во время разговора.',
 		learned: (ago: string) => `узнал ${ago}`,
 		learnedAWhileAgo: 'узнал давно',
 		topicLabel: (topic: string, n: number) => `${topic}: ${facts(n)}. Показать заметку.`,
@@ -576,7 +579,62 @@ export const ru: Messages = {
 		older: 'Старые',
 		newer: 'Новые',
 		nothingYet:
-			'nolune пока ничего не запомнил. Каждый факт, который он узнаёт, становится здесь точкой.'
+			'nolune пока ничего не запомнил. Каждый факт, который он узнаёт, становится здесь точкой.',
+		categories: {
+			core: 'Главное',
+			people: 'Люди',
+			home: 'Дом',
+			health: 'Здоровье',
+			plans: 'Планы',
+			routines: 'Распорядок',
+			pets: 'Питомцы',
+			places: 'Места',
+			projects: 'Проекты',
+			other: 'Другое',
+			unsorted: 'Без категории'
+		},
+		unsortedHint:
+			'Эта заметка появилась, когда у памяти ещё не было категорий: nolune её читает, но ничего в неё не дописывает. Перенесите её в категорию, чтобы она пополнялась.',
+		memberNote: (name: string) => `участник: ${name}`,
+		move: {
+			button: (topic: string) => `Перенести: ${topic}`,
+			title: (topic: string) => `Перенести «${topic}»`,
+			body: 'Выберите, куда она относится. Если такая заметка уже есть, они станут одной.',
+			to: 'Куда перенести',
+			choose: 'Выберите куда',
+			categories: 'Категории',
+			newPerson: 'Новый человек…',
+			newProject: 'Новый проект…',
+			personName: 'Имя',
+			projectName: 'Название проекта',
+			moveHint: (target: string) => `Заметка станет ${target}.`,
+			mergeHint: (from: string, into: string) =>
+				`Всё из «${from}» добавится в «${into}» без повторов, а «${from}» исчезнет. Так объединяют две заметки об одном человеке.`,
+			move: 'Перенести',
+			merge: 'Объединить',
+			moved: (from: string, to: string) => `${from} перенесена в ${to}.`,
+			merged: (from: string, into: string) => `${from} объединена с ${into}.`
+		},
+		/** What nolune saved from a chat by itself: in that chat, and at the top of this page. */
+		changes: {
+			saved: (n: number) => `Запомнил ${facts(n)}`,
+			added: 'Новое',
+			changed: 'Изменено',
+			before: (text: string) => `было: ${text}`,
+			openNote: (topic: string) => `Открыть «${topic}» в Памяти`,
+			undo: 'Отменить',
+			undone: 'Отменено',
+			undoneBy: (name: string) => `Отменено (${name})`,
+			changedSince:
+				'С тех пор это изменили, поэтому здесь не отменить. Поправьте заметку на странице «Память».',
+			alreadyUndone: 'Это уже отменили.',
+			recent: 'Запомнено из чатов',
+			recentHint: 'Что nolune записал сам, когда чаты затихали, за последние две недели.',
+			fromChat: 'из чата {chat}',
+			deletedChat: 'из удалённого чата',
+			showAll: (n: number) => `Показать все (${n})`,
+			untitled: 'без названия'
+		}
 	},
 
 	automations: {
@@ -698,7 +756,29 @@ export const ru: Messages = {
 		soulSaved: 'Душа сохранена.',
 		soulRemoved: 'Душа удалена.',
 		added: (name: string) => `Добавили: ${name}.`,
-		removed: 'Удалено из профиля.'
+		removed: 'Удалено из профиля.',
+		memberNote: (note: string) => `Заметка: ${note}`,
+		noteStarts: (note: string) => `Заметка: ${note}, появится, когда будет что записать`,
+		mayHaveNote: 'Возможно, у nolune уже есть заметка об этом человеке',
+		chooseNote: 'Выбрать заметку',
+		changeNote: 'Сменить заметку',
+		linked: (name: string, note: string) => `Готово: ${name} → ${note}.`,
+		chooser: {
+			addTitle: (name: string) => `nolune уже знает человека по имени ${name}?`,
+			linkTitle: (name: string) => `Какая заметка о человеке по имени ${name}?`,
+			body: (name: string) =>
+				`В памяти есть заметки, которые могут быть о человеке по имени ${name}. Выберите нужную: тогда nolune будет знать, что написанное там — про этого участника, и будет дописывать туда то, что участник расскажет о себе.`,
+			linkBody: (name: string) =>
+				`Выберите заметку о человеке по имени ${name}: nolune будет дописывать туда то, что участник расскажет о себе.`,
+			current: 'сейчас',
+			alsoCalled: (names: string) => `Зовут также: ${names}`,
+			more: (n: number) => `и ещё ${n}`,
+			newNote: 'Это другой человек: начать новую заметку',
+			privacy: (name: string) =>
+				`${name} сможет читать всю память профиля, и эту заметку тоже. Проверьте, что в ней нет ничего, что стоит держать в секрете от этого человека, например сюрприза.`,
+			add: (name: string) => `Добавить: ${name}`,
+			link: 'Привязать'
+		}
 	},
 
 	avatars: {
@@ -840,7 +920,7 @@ export const ru: Messages = {
 		title: 'Модели и ключи',
 		keys: 'API-ключи',
 		keysHint:
-			'Общие для всех профилей, хранятся в файле настроек nolune на этом компьютере. Новый ключ проверяется у провайдера перед сохранением и сразу начинает работать.',
+			'Общие для всех профилей, хранятся в файле настроек nolune на этом компьютере. Новый ключ проверяется у провайдера перед сохранением и сразу начинает работать. Для своего сервера моделей, например Ollama или LM Studio, добавьте свой провайдер.',
 		purposes: {
 			anthropic: 'Для чатов и автоматизаций на моделях Claude.',
 			openai:
@@ -932,6 +1012,10 @@ export const ru: Messages = {
 					'OpenAI его не сообщает: «Авто» знает только окна флагманов (1,05M начиная с GPT-5.4).',
 				openrouter:
 					'В режиме «Авто» берётся окно, которое OpenRouter указывает для модели и её основного провайдера.',
+				'custom-openai':
+					'В режиме «Авто» берётся окно, которое сервер указывает для модели, если указывает (vLLM указывает); иначе оно остаётся неизвестным.',
+				'custom-anthropic':
+					'В режиме «Авто» берётся окно, которое сервер указывает для модели, если указывает (vLLM указывает); иначе оно остаётся неизвестным.',
 				'claude-plan': 'Claude Code его не сообщает: «Авто» знает только модели с контекстом 1M.',
 				'chatgpt-plan': 'Codex его не сообщает, поэтому «Авто» оставляет его неизвестным.'
 			},
@@ -942,6 +1026,9 @@ export const ru: Messages = {
 			onKey: (provider: string) => `Работает по API-ключу ${provider}.`,
 			noKey: (provider: string) =>
 				`API-ключа ${provider} пока нет: добавьте его в разделе «API-ключи» выше.`,
+			onCustom: (api: string, url: string) =>
+				`Работает на ${url} через API в формате ${api}. Модель должна уметь вызывать инструменты; картинки и PDF она получает как пути к файлам.`,
+			customGone: 'Этот свой провайдер удалён: выберите другой.',
 			asking: (source: string) => `Спрашиваем у ${source} список моделей…`,
 			listProblem: (problem: string) => `${problem} ID модели всё равно можно ввести вручную.`,
 			couldNotList: (status: number) => `nolune не удалось получить список моделей (${status}).`,
@@ -963,6 +1050,75 @@ export const ru: Messages = {
 		claudeNoAnswer: 'Claude Code не ответил.',
 		removed: 'Удалено.',
 		newDefault: (name: string) => `Теперь новые чаты начинаются с ${name}.`,
-		presetRemoved: 'Удалено. Существующие чаты продолжат работать.'
+		presetRemoved: 'Удалено. Существующие чаты продолжат работать.',
+		/** Custom providers: model servers of the family's own, listed with the API keys. */
+		customProviders: {
+			add: 'Добавить свой провайдер',
+			addTitle: 'Добавить свой провайдер',
+			addHint:
+				'Собственный сервер моделей: Ollama, LM Studio или oMLX на этом компьютере, или vLLM на машине с GPU. В «Добавить модель» он появится под своим именем.',
+			about: (api: string) => `Ваш сервер моделей, через его API в формате ${api}.`,
+			apis: { openai: 'OpenAI', anthropic: 'Anthropic' },
+			change: 'Изменить',
+			name: 'Имя',
+			namePlaceholder: 'Ollama',
+			api: 'API',
+			apiHints: {
+				openai:
+					'Responses API от OpenAI: Ollama, LM Studio, vLLM, LiteLLM. Поиск по памяти может брать у него эмбеддинги.',
+				anthropic: 'Messages API от Anthropic: Ollama, LM Studio, сервер llama.cpp, oMLX.'
+			},
+			address: 'Адрес',
+			addressHint:
+				'Ollama слушает на http://localhost:11434, LM Studio — на http://localhost:1234. nolune проверяет его, запрашивая список моделей.',
+			key: 'Ключ',
+			keyOptional: '(если он нужен)',
+			keyKept: 'Сохранён. Оставьте пустым, чтобы не менять.',
+			withKey: (hint: string | null) => (hint ? `ключ заканчивается на ${hint}` : 'с ключом'),
+			noKey: 'без ключа',
+			checking: 'Проверяем…',
+			works: (n: number) =>
+				`Сохранено. На сервере ${n} ${p(n, { one: 'модель', few: 'модели', many: 'моделей', other: 'модели' })}.`,
+			unchecked: (problem: string) => `Сохранено без проверки: ${problem}`,
+			needName: 'Дайте ему имя, например Ollama или GPU box.',
+			needAddress: 'Укажите его адрес, начиная с http:// или https://.',
+			removeTitle: (name: string) => `Удалить ${name}?`,
+			removeBody:
+				'Чаты и автоматизации на его моделях перестанут работать, пока их не переведут на другую модель.',
+			usedBy: (names: string) => `На нём работают пресеты: ${names}.`
+		},
+		/** Memory search by meaning: where its embeddings come from. */
+		embeddings: {
+			title: 'Поиск по памяти',
+			hint: 'nolune находит факты в памяти и по смыслу, а не только по словам, и на любом языке. Для этого каждый факт один раз отправляется туда, где считаются эмбеддинги, а каждое сообщение — при отправке; сервер на этом компьютере оставляет их здесь. Общая настройка для всех профилей.',
+			name: 'Поиск по смыслу',
+			using: (source: string) => `Использует ${source}.`,
+			off: 'Выключен: память ищется только по словам.',
+			noKeys: 'Пока нет ключа OpenAI или OpenRouter, поэтому память ищется только по словам.',
+			noKey: (provider: string) =>
+				`Пока нет ключа ${provider}, поэтому память ищется только по словам. Добавьте его в API-ключах выше.`,
+			customGone: 'Этот свой провайдер удалён, поэтому память ищется только по словам.',
+			change: 'Изменить',
+			source: 'Откуда эмбеддинги',
+			modes: {
+				auto: 'Авто',
+				openai: 'OpenAI',
+				openrouter: 'OpenRouter',
+				off: 'Выключен'
+			},
+			autoNote:
+				'text-embedding-3-small от OpenAI по ключу OpenAI, а без него — та же модель через OpenRouter.',
+			withKey: (provider: string) => `По API-ключу ${provider}.`,
+			customNote: (url: string) =>
+				`Модель, которую он отдаёт по адресу ${url}, через API в формате OpenAI.`,
+			offNote: 'Память ищется только по словам, и никакие факты никуда не отправляются.',
+			model: 'Модель',
+			customModel: 'Как она там называется, например nomic-embed-text',
+			checking: 'Проверяем…',
+			works: 'Сохранено. Работает; факты обрабатываются в фоне.',
+			wordsOnly: 'Сохранено. Память ищется только по словам.',
+			noAnswer: (problem: string) => `Сохранено, но ответа нет: ${problem}`,
+			needModel: 'Укажите, какую модель использовать.'
+		}
 	}
 };

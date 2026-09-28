@@ -418,6 +418,9 @@ export const en = {
 			`${problem} Save again to keep your version, or cancel to see nolune's.`,
 		saved: 'Saved. New chats will see the change.',
 		forgot: (path: string) => `nolune forgot everything in ${path}.`,
+		learn: 'Learn from chats',
+		learnHint:
+			"When a chat has been quiet for a couple of minutes, nolune reads it over and saves what's worth remembering. That's one short extra request to the chat's model each time. When this is off, nolune saves only what it thinks of while chatting.",
 		// The grid of dots
 		learned: (ago: string) => `learned ${ago}`,
 		learnedAWhileAgo: 'learned a while ago',
@@ -428,7 +431,65 @@ export const en = {
 		showAllTopics: (n: number) => `Show all ${n} topics`,
 		older: 'Older',
 		newer: 'Newer',
-		nothingYet: 'Nothing remembered yet. Each thing nolune learns becomes a dot here.'
+		nothingYet: 'Nothing remembered yet. Each thing nolune learns becomes a dot here.',
+		/** Where memory keeps things: the same in every profile. */
+		categories: {
+			core: 'Core',
+			people: 'People',
+			home: 'Home',
+			health: 'Health',
+			plans: 'Plans',
+			routines: 'Routines',
+			pets: 'Pets',
+			places: 'Places',
+			projects: 'Projects',
+			other: 'Other',
+			/** Notes from before there were categories. */
+			unsorted: 'Unsorted'
+		},
+		unsortedHint:
+			'From before memory had categories: nolune reads it, but adds nothing to it. Move it into a category to keep it growing.',
+		/** On a person's note that is about a member of the profile. */
+		memberNote: (name: string) => `member: ${name}`,
+		move: {
+			button: (topic: string) => `Move ${topic}`,
+			title: (topic: string) => `Move "${topic}"`,
+			body: 'Choose where it belongs. If that note is there already, the two become one.',
+			to: 'Move to',
+			choose: 'Choose where',
+			categories: 'Categories',
+			newPerson: 'Someone new…',
+			newProject: 'A new project…',
+			personName: 'Their name',
+			projectName: 'Project name',
+			moveHint: (target: string) => `It becomes ${target}.`,
+			mergeHint: (from: string, into: string) =>
+				`What ${from} says is added to ${into}, without repeats, and ${from} is gone. Use this for two notes about the same person.`,
+			move: 'Move',
+			merge: 'Merge',
+			moved: (from: string, to: string) => `Moved ${from} to ${to}.`,
+			merged: (from: string, into: string) => `Merged ${from} into ${into}.`
+		},
+		/** What nolune saved from a chat by itself: in that chat, and at the top of this page. */
+		changes: {
+			saved: (n: number) => `Saved ${p(n, { one: `${n} memory`, other: `${n} memories` })}`,
+			added: 'Added',
+			changed: 'Changed',
+			before: (text: string) => `was: ${text}`,
+			openNote: (topic: string) => `Open ${topic} in Memory`,
+			undo: 'Undo',
+			undone: 'Undone',
+			undoneBy: (name: string) => `Undone by ${name}`,
+			changedSince:
+				"It changed since, so it can't be undone here. Edit the note on the Memory page.",
+			alreadyUndone: 'It was already undone.',
+			recent: 'Saved from chats',
+			recentHint: 'What nolune noted by itself after chats went quiet, in the last two weeks.',
+			fromChat: 'from {chat}',
+			deletedChat: 'from a deleted chat',
+			showAll: (n: number) => `Show all ${n}`,
+			untitled: 'a chat'
+		}
 	},
 
 	automations: {
@@ -552,7 +613,31 @@ export const en = {
 		soulSaved: 'Saved the soul.',
 		soulRemoved: 'Removed the soul.',
 		added: (name: string) => `Added ${name}.`,
-		removed: 'Removed.'
+		removed: 'Removed.',
+		/** Under a member: their note in memory. */
+		memberNote: (note: string) => `Note: ${note}`,
+		noteStarts: (note: string) => `Note: ${note}, started when there's something to write`,
+		mayHaveNote: 'nolune may have a note about them already',
+		chooseNote: 'Choose note',
+		changeNote: 'Change note',
+		linked: (name: string, note: string) => `${name}'s note is ${note} now.`,
+		/** Which note in memory is about a member. */
+		chooser: {
+			addTitle: (name: string) => `Does nolune know ${name} already?`,
+			linkTitle: (name: string) => `Which note is about ${name}?`,
+			body: (name: string) =>
+				`Memory has notes that may be about ${name}. Choose theirs, so nolune knows what it says is about them and adds what they tell it about themselves.`,
+			linkBody: (name: string) =>
+				`Choose the note about ${name}: nolune adds to it what they tell it about themselves.`,
+			current: 'now',
+			alsoCalled: (names: string) => `Also called: ${names}`,
+			more: (n: number) => `and ${n} more`,
+			newNote: 'Someone else: start a new note',
+			privacy: (name: string) =>
+				`${name} will be able to read everything in this profile's memory, this note too. Check that it holds nothing meant to be kept from them, like a surprise.`,
+			add: (name: string) => `Add ${name}`,
+			link: 'Link'
+		}
 	},
 
 	/** The assistant avatars' names, as the profile page shows them. */
@@ -682,7 +767,7 @@ export const en = {
 		title: 'Models & keys',
 		keys: 'API keys',
 		keysHint:
-			"Shared by every profile and kept in nolune's config file on this computer. A new key is checked with its provider before it's saved, and used right away.",
+			"Shared by every profile and kept in nolune's config file on this computer. A new key is checked with its provider before it's saved, and used right away. Add a custom provider for a model server of your own, like Ollama or LM Studio.",
 		purposes: {
 			anthropic: 'Runs chats and automations on Claude models.',
 			openai:
@@ -770,6 +855,10 @@ export const en = {
 				anthropic: 'Auto uses the window Anthropic reports for the model.',
 				openai: "OpenAI doesn't report it: Auto knows only its flagships' (1.05M since GPT-5.4).",
 				openrouter: 'Auto uses the window OpenRouter lists for the model and its main provider.',
+				'custom-openai':
+					'Auto uses the window the server lists for the model, if it lists one (vLLM does); otherwise it stays unknown.',
+				'custom-anthropic':
+					'Auto uses the window the server lists for the model, if it lists one (vLLM does); otherwise it stays unknown.',
 				'claude-plan': "Claude Code doesn't report it: Auto knows only its 1M-context models'.",
 				'chatgpt-plan': "Codex doesn't report it, so Auto leaves it unknown."
 			},
@@ -779,6 +868,9 @@ export const en = {
 			noCodex: "Codex isn't installed yet: see ChatGPT plan, above.",
 			onKey: (provider: string) => `Runs on the ${provider} API key.`,
 			noKey: (provider: string) => `No ${provider} API key yet: add one under API keys, above.`,
+			onCustom: (api: string, url: string) =>
+				`Runs on ${url}, through its ${api} API. The model must be able to call tools; pictures and PDFs reach it as their paths.`,
+			customGone: 'Its custom provider was removed: pick another provider.',
 			asking: (source: string) => `Asking ${source} for its models…`,
 			listProblem: (problem: string) => `${problem} You can still type an id.`,
 			couldNotList: (status: number) => `nolune couldn't get the models (${status}).`,
@@ -800,7 +892,74 @@ export const en = {
 		claudeNoAnswer: "Claude Code didn't answer.",
 		removed: 'Removed.',
 		newDefault: (name: string) => `New chats now start with ${name}.`,
-		presetRemoved: 'Removed. Existing conversations keep working.'
+		presetRemoved: 'Removed. Existing conversations keep working.',
+		/** Custom providers: model servers of the family's own, listed with the API keys. */
+		customProviders: {
+			add: 'Add custom provider',
+			addTitle: 'Add a custom provider',
+			addHint:
+				'A model server of your own, like Ollama, LM Studio or oMLX on this computer, or vLLM on a machine with GPUs. It shows up in Add a model under its name.',
+			about: (api: string) => `Your own model server, through its ${api} API.`,
+			apis: { openai: 'OpenAI', anthropic: 'Anthropic' },
+			change: 'Change',
+			name: 'Name',
+			namePlaceholder: 'Ollama',
+			api: 'API',
+			apiHints: {
+				openai:
+					"OpenAI's Responses API: Ollama, LM Studio, vLLM, LiteLLM. Memory search can use its embeddings.",
+				anthropic: "Anthropic's Messages API: Ollama, LM Studio, llama.cpp's server, oMLX."
+			},
+			address: 'Address',
+			addressHint:
+				'Ollama listens at http://localhost:11434 and LM Studio at http://localhost:1234. nolune asks it for its models to check it.',
+			key: 'Key',
+			keyOptional: '(if it needs one)',
+			keyKept: 'Saved. Leave empty to keep it.',
+			withKey: (hint: string | null) => (hint ? `key ending in ${hint}` : 'with a key'),
+			noKey: 'no key',
+			checking: 'Checking…',
+			works: (n: number) => `Saved. It serves ${n} ${p(n, { one: 'model', other: 'models' })}.`,
+			unchecked: (problem: string) => `Saved without checking it: ${problem}`,
+			needName: 'Give it a name, like Ollama or GPU box.',
+			needAddress: 'Give its address, starting with http:// or https://.',
+			removeTitle: (name: string) => `Remove ${name}?`,
+			removeBody:
+				"Chats and automations on its models stop working until they're moved to another model.",
+			usedBy: (names: string) => `These presets run on it: ${names}.`
+		},
+		/** Memory search by meaning: where its embeddings come from. */
+		embeddings: {
+			title: 'Memory search',
+			hint: "nolune also finds memory facts by what they mean, not only by their words, and across languages. For that, every fact is sent once to where the embeddings are made, and each message as it's sent; a server on this computer keeps them here. Shared by every profile.",
+			name: 'Search by meaning',
+			using: (source: string) => `Uses ${source}.`,
+			off: 'Off: memory is searched by words only.',
+			noKeys: 'No OpenAI or OpenRouter key yet, so memory is searched by words only.',
+			noKey: (provider: string) =>
+				`No ${provider} key yet, so memory is searched by words only. Add one under API keys, above.`,
+			customGone: 'Its custom provider was removed, so memory is searched by words only.',
+			change: 'Change',
+			source: 'Embeddings from',
+			modes: {
+				auto: 'Auto',
+				openai: 'OpenAI',
+				openrouter: 'OpenRouter',
+				off: 'Off'
+			},
+			autoNote:
+				"OpenAI's text-embedding-3-small with the OpenAI key, else the same model through OpenRouter.",
+			withKey: (provider: string) => `With the ${provider} API key.`,
+			customNote: (url: string) => `A model it serves at ${url}, through its OpenAI API.`,
+			offNote: 'Memory is searched by words only, and no fact is sent anywhere to be embedded.',
+			model: 'Model',
+			customModel: 'Its name there, like nomic-embed-text',
+			checking: 'Checking…',
+			works: 'Saved. It works; facts are embedded in the background.',
+			wordsOnly: 'Saved. Memory is searched by words only.',
+			noAnswer: (problem: string) => `Saved, but it didn't answer: ${problem}`,
+			needModel: 'Give the model it should use.'
+		}
 	}
 };
 

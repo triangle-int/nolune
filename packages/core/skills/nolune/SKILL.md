@@ -1,6 +1,6 @@
 ---
 name: nolune
-description: Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.
+description: Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.
 ---
 
 # Configuring nolune
@@ -34,8 +34,9 @@ Other parts of the CLI have their own instructions: automations (`nolune trigger
 ## Models
 
 Chats run on model presets, on Claude (Anthropic), on OpenAI's models or on the models
-OpenRouter serves with an API key, or on a plan: someone's own Claude or ChatGPT subscription
-(`claude-plan`, `chatgpt-plan`, below). People
+OpenRouter serves with an API key, on the models of custom providers, the family's own servers
+(Ollama, LM Studio, oMLX, vLLM..., below) through their OpenAI API or their Anthropic API, or on a
+plan: someone's own Claude or ChatGPT subscription (`claude-plan`, `chatgpt-plan`, below). People
 pick one when they start a chat, and new chats start with the default. They can switch a chat to
 another one from its composer; its next reply then reads the whole chat again without the cache.
 
@@ -44,6 +45,7 @@ nolune preset list                                 # name, provider/model, conte
 nolune preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
 nolune preset add gpt-6-astra --provider openai --name "GPT"
 nolune preset add deepseek/deepseek-v4.1-flash --provider openrouter --name "DeepSeek"
+nolune preset add qwen3:32b --provider "GPU box"   # a model of the custom provider "GPU box"
 nolune preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
 nolune preset add gpt-6-astra --provider chatgpt-plan --name "GPT (plan)"
 nolune preset default Sonnet                       # new chats start with it
@@ -54,8 +56,12 @@ nolune knows the context window of OpenAI's flagship models (1,050,000 tokens si
 its other models (mini, nano), give `--context-window` when you know it. OpenRouter's ids name
 the model's maker (`anthropic/claude-sonnet-5`, `google/gemini-3.8-flash`; see
 https://openrouter.ai/models), its models list their window, and nolune only takes one that can call
-tools, since that's how you run commands. Models that can't see pictures or read PDFs get them as
-their paths. A preset needs its provider's key, or its plan's sign-in. If `nolune preset add` can't
+tools, since that's how you run commands. A custom provider is named by its name or id
+(`--provider "GPU box"`, or `gpu-box`); its model is checked against the models it lists,
+whether it calls tools shows at its first reply, and its window is unknown unless it says it, so
+give `--context-window` when you know it. Models that can't see pictures or read PDFs, and every
+model of a custom provider, get them as their paths. A preset needs its provider's key, its custom
+provider, or its plan's sign-in. If `nolune preset add` can't
 check the model, an admin can add it under Models & keys in the account menu.
 
 ### Plans
@@ -95,6 +101,19 @@ new key from the next message.
 nolune key set openai 'sk-...'
 ```
 
+Custom providers are the family's own model servers, listed with the API keys: each has a name,
+the API it speaks (OpenAI's unless `--api anthropic`; llama.cpp's server has only Anthropic's),
+an address, and a key if it wants one. nolune asks it for its models before it saves it. Ollama
+listens at `http://localhost:11434` and LM Studio at `http://localhost:1234`; a server that speaks
+both APIs can be added once for each.
+
+```sh
+nolune provider add Ollama http://localhost:11434
+nolune provider add "GPU box" http://gpu-box:8000 --api anthropic --key '...'   # the same name again changes it
+nolune provider list                                    # name, id, API, address, key
+nolune provider rm "GPU box"                            # presets on it stop working
+```
+
 A key typed into a chat stays in the chat's history. When someone wants to add or replace a key
 and hasn't pasted it yet, suggest Models & keys in the account menu instead, which keeps it out of
 the chat. Don't remove the key of a provider that presets use (`nolune preset list` shows each
@@ -127,6 +146,40 @@ nolune skill new <name> --global --description "..."   # for every profile, in ~
   profile doesn't use rather than deleting them.
 - Built-in skills (`builtin` in the list) are replaced when nolune updates. To change one for this
   profile, copy its folder into `$NOLUNE_PROFILE_DIR/skills/` and edit the copy; it takes precedence.
+
+## Learning from chats
+
+Besides what you save with `nolune memory`, nolune looks over each chat once it has been quiet for a
+couple of minutes and saves what's worth remembering to this profile's memory, with the chat's
+model (one short model call per quiet spell). It's on unless a profile turned it off.
+
+```sh
+nolune memory learning        # on or off for this profile
+nolune memory learning off    # save only what you save yourself
+nolune memory learning on
+```
+
+Any member can change it, here or with the switch on the profile's Memory page. What's already in
+memory stays either way.
+
+## Memory search by meaning
+
+Memory search and the facts that come with each message also match by meaning, with embeddings of
+each fact: on its own, nolune uses OpenAI's `text-embedding-3-small` with the OpenAI key, else the
+same model through OpenRouter's key. `nolune config` shows what it uses (`embeddings`). It's shared by
+every profile, so it's an admin's to change, here or under Memory search in Models & keys:
+
+```sh
+nolune config set embeddings off                                    # words only; facts stay here
+nolune config set embeddings auto                                   # back to nolune's own choice
+nolune config set embeddings openrouter/qwen/qwen3-embedding-8b     # another model, with its key
+nolune config set embeddings custom-openai/ollama/nomic-embed-text  # a model of the custom provider "ollama"
+```
+
+The last form takes a model a custom provider that speaks OpenAI's API serves, by its id
+(`nolune provider list`, above), which keeps every fact on this computer when the server runs here. It asks the source once and
+says if it didn't answer. Every fact is embedded again with a new model, in the
+background; until then, and whenever it can't reach the server, search goes by words.
 
 ## The avatar
 

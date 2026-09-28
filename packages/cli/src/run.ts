@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import {
 	API_KEYS,
 	ApiKeyError,
+	CustomProviderError,
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
 	MAX_MEDIA_BYTES,
@@ -12,9 +13,11 @@ import {
 	editPreset,
 	apiKeyStatuses,
 	checkApiKey,
+	checkCustomProvider,
 	claudeExecutable,
 	codexExecutable,
 	configExists,
+	findCustomProvider,
 	createSkill,
 	createUser,
 	deleteUser,
@@ -23,12 +26,20 @@ import {
 	getDb,
 	getDefaultPreset,
 	getProfileBySlug,
+	embeddingProblem,
+	embeddingStatus,
 	imageGenerationStatus,
+	parseEmbeddingSetting,
+	saveEmbeddingSetting,
 	initConfig,
 	installCliShim,
 	isApiKeyProvider,
+	isCustomProvider,
+	isProvider,
+	providerFor,
 	listPresets,
 	listProfileSkills,
+	listCustomProviders,
 	listUsers,
 	normalizeApiKey,
 	parseImageModel,
@@ -36,17 +47,21 @@ import {
 	profileSkillsDir,
 	readConfig,
 	removeApiKey,
+	removeCustomProvider,
 	removePreset,
 	saveApiKey,
+	saveCustomProvider,
 	scanSkills,
 	setAdmin,
 	setDefaultPreset,
 	setPassword,
 	setSkillsEnabled,
+	splitModel,
 	updateConfig,
 	viewImage,
 	ViewLimitError,
-	type ApiKeyProvider
+	type ApiKeyProvider,
+	type CustomApi
 } from '@nolune/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
 import { generateCommand, generateHelp } from './generate.ts';
@@ -78,34 +93,49 @@ Getting started
                                              run it in the background at login (macOS)
 
 Settings (${paths.home})
-  nolune config                              show address, port and what's configured
+  nolune config                                 show address, port and what's configured
   nolune config set <host|port|origin> <value>  origin = the public URL people open
   nolune config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
-  nolune config set claude-path <path>       the Claude Code that claude-plan chats run, and the
-  nolune config set codex-path <path>        Codex that chatgpt-plan chats run (found on the PATH
+  nolune config set embeddings <auto|off|provider/model>
+                                             what memory search finds meaning with: auto uses the
+                                             OpenAI key, else OpenRouter's; the provider is openai,
+                                             openrouter or custom-openai (a custom provider's model,
+                                             like custom-openai/ollama/nomic-embed-text)
+  nolune config set claude-path <path>          the Claude Code that claude-plan chats run, and the
+  nolune config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
   nolune key set <anthropic|openai|openrouter> [key]
                                              store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
                                              can also do this on the web, under Models & keys
-  nolune key rm <anthropic|openai|openrouter>
-                                             remove a stored key (the environment's is used, if set)
-  nolune env set <NAME> <value>              extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
+  nolune key rm <anthropic|openai|openrouter>   remove a stored key (the environment's is used, if set)
+  nolune env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
   nolune env rm <NAME> | nolune env list
+
+Custom providers (model servers of your own: Ollama, LM Studio, oMLX, vLLM, llama.cpp...)
+  nolune provider add <name> <url> [--api openai|anthropic] [--key K]
+                                             add one, through its OpenAI API (the default) or its
+                                             Anthropic API, or change the address and key of the
+                                             one of that name; nolune asks it for its models first,
+                                             and for its key at a terminal when it wants one. The
+                                             address is the server's, like http://localhost:11434.
+                                             A server that speaks both can be added once for each
+  nolune provider rm <name|id>                  presets on it stop working until they're moved
+  nolune provider list
 
 Plans (chats on your own subscription instead of an API key)
   claude-plan: a Claude Pro or Max plan, through Claude Code on this computer, signed in to your
   Claude account. chatgpt-plan: a ChatGPT Plus, Pro or Business plan, through OpenAI's Codex on
   this computer, signed in with ChatGPT. nolune never sees either sign-in: the agent keeps it.
   Plan limits assume one person's ordinary use: keep busy automations and subagents on an API key.
-  nolune <plan> status                       which Claude Code or Codex nolune runs, and who it's
+  nolune <plan> status                          which Claude Code or Codex nolune runs, and who it's
                                              signed in as
-  nolune <plan> setup                        install it and sign in, where needed. Installing asks
+  nolune <plan> setup                           install it and sign in, where needed. Installing asks
                                              first, in a terminal; claude-plan signs in there too,
                                              chatgpt-plan with a link and a code for any device
-  nolune chatgpt-plan logout                 sign Codex out; chats on chatgpt-plan presets stop
+  nolune chatgpt-plan logout                    sign Codex out; chats on chatgpt-plan presets stop
                                              until someone signs in again
-  nolune chatgpt-plan models                 the models the plan offers, for \`nolune preset add\`
+  nolune chatgpt-plan models                    the models the plan offers, for \`nolune preset add\`
 
 Users (web sign-up is disabled; this is the only way to add people)
   nolune user create <name> <email> [--password P] [--admin]
@@ -115,20 +145,24 @@ Users (web sign-up is disabled; this is the only way to add people)
   nolune user list
 
 Model presets (shared by all profiles)
-  nolune preset add <model> [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan]
-                    [--name N] [--context-window TOKENS]
+  nolune preset add <model> [--provider anthropic|openai|openrouter|claude-plan|chatgpt-plan|<custom>]
+                 [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
                                              flagships need --context-window. OpenRouter's ids
                                              name their maker (anthropic/claude-sonnet-5), and the
-                                             model must be able to call tools. The plans check
+                                             model must be able to call tools. A custom provider
+                                             (by its name) lists its models; its model must call
+                                             tools too, which shows at its first reply, and
+                                             pictures and PDFs reach it as paths. The plans check
                                              their agent's sign-in instead, and chatgpt-plan the
                                              models Codex offers
-  nolune preset edit <name|id> [--provider P] [--model M] [--name N] [--context-window TOKENS|auto]
+  nolune preset edit <name|id> [--provider P] [--model M] [--name N]
+                 [--context-window TOKENS|auto]
                                              change what's given; a new model is checked like
                                              add's. Chats already on the preset keep what they had
   nolune preset rm <name|id>
-  nolune preset default <name|id>            the model new chats start with
+  nolune preset default <name|id>               the model new chats start with
   nolune preset list
 
 ${PROFILE_HELP}
@@ -146,7 +180,7 @@ ${SOUL_HELP}
 ${generateHelp()}
 
 Inside agent commands (NOLUNE_PROFILE is set, so --profile can be left out)
-  nolune view <image>...                     show images to the agent: they're attached to the
+  nolune view <image>...                        show images to the agent: they're attached to the
                                              command's result (HEIC and big photos are converted)
 
 ${AGENT_HELP}`;
@@ -178,6 +212,99 @@ async function storeApiKey(io: Io, provider: ApiKeyProvider, pasted: string): Pr
 		saveApiKey(provider, key);
 		io.log(`Saved the ${label} API key without checking it. ${err.message}`);
 	}
+}
+
+/**
+ * Checks a custom provider's server by asking it for its models, and saves it (adds it, or changes
+ * the one of that name): its id and the models it serves. One that wants a key gets asked for it
+ * at a terminal; one that can't be reached is saved with a warning, so setup works before the
+ * server runs.
+ */
+async function storeCustomProvider(
+	io: Io,
+	name: string,
+	url: string,
+	api: CustomApi | undefined,
+	given: string | null
+): Promise<{ id: string; models: string[] }> {
+	let key = given?.trim() || null;
+	const known = findCustomProvider(name);
+	if (known && api && api !== known.api) {
+		fail(
+			`${known.name} speaks ${known.api === 'openai' ? "OpenAI's" : "Anthropic's"} API. Add the other one under another name.`
+		);
+	}
+	let found: Awaited<ReturnType<typeof checkCustomProvider>>;
+	try {
+		try {
+			found = await checkCustomProvider(url, key);
+		} catch (err) {
+			if (!(err instanceof CustomProviderError) || err.reason !== 'key' || key || !io.stdinIsTTY) {
+				throw err;
+			}
+			key = (await askHidden(io, `Its API key`)) || null;
+			if (!key) throw err;
+			found = await checkCustomProvider(url, key);
+		}
+	} catch (err) {
+		if (!(err instanceof CustomProviderError) || err.reason !== 'unreachable') {
+			fail((err as Error).message);
+		}
+		const id = saveOrFail(known, name, url, api, key);
+		io.log(`Saved ${findCustomProvider(id)?.name} without checking it. ${err.message}`);
+		return { id, models: [] };
+	}
+	const id = saveOrFail(known, name, url, api, key);
+	const saved = findCustomProvider(id)!;
+	const some = found.models.slice(0, 8).join(', ');
+	const serves = found.models.length
+		? ` It serves ${some}${found.models.length > 8 ? ` and ${found.models.length - 8} more` : ''}.`
+		: '';
+	io.log(
+		`${known ? 'Changed' : 'Added'} ${saved.name} at ${saved.url}, through its ${saved.api === 'openai' ? 'OpenAI' : 'Anthropic'} API.${serves}${found.warning ? ` ${found.warning}` : ''}`
+	);
+	return { id, models: found.models };
+}
+
+function saveOrFail(
+	known: { id: string; name: string } | undefined,
+	name: string,
+	url: string,
+	api: CustomApi | undefined,
+	key: string | null
+): string {
+	try {
+		return saveCustomProvider({ id: known?.id, name: known?.name ?? name, api, url, key });
+	} catch (err) {
+		fail((err as Error).message);
+	}
+}
+
+/**
+ * A preset's provider and model as typed: a custom provider by its name or id, its model kept as
+ * `<id>/<model>`. nolune's own providers as they are.
+ */
+function presetTarget(
+	provider: string | undefined,
+	model: string
+): { provider: string | undefined; model: string } {
+	if (!provider || isProvider(provider)) return { provider, model };
+	const custom = findCustomProvider(provider);
+	if (!custom) {
+		const names = listCustomProviders().map((c) => c.name);
+		fail(
+			`no provider "${provider}". It's anthropic, openai, openrouter, claude-plan, chatgpt-plan${names.length ? `, or a custom provider: ${names.join(', ')}` : ', or a custom provider added with `nolune provider add <name> <url>`'}.`
+		);
+	}
+	const bare = model.startsWith(`${custom.id}/`) ? model.slice(custom.id.length + 1) : model;
+	return { provider: providerFor(custom.api), model: `${custom.id}/${bare}` };
+}
+
+/** A preset's model for people: a custom provider's by its name. */
+function presetSource(provider: string, model: string): string {
+	const on = isCustomProvider(provider) ? splitModel(model) : null;
+	const custom = on?.provider ? findCustomProvider(on.provider) : undefined;
+	return custom && on ? `${custom.name}/${on.model}` : `${provider}/${model}`;
 }
 
 function requireInit(): void {
@@ -221,7 +348,9 @@ async function setup(io: Io, args: string[]): Promise<void> {
 			email: { type: 'string' },
 			password: { type: 'string' },
 			origin: { type: 'string' },
-			port: { type: 'string' }
+			port: { type: 'string' },
+			url: { type: 'string' },
+			api: { type: 'string' }
 		}
 	});
 
@@ -257,7 +386,7 @@ async function setup(io: Io, args: string[]): Promise<void> {
 
 	io.log(`
 Done. Next:
-  nolune service install     run the gateway in the background (or \`nolune start\` to try it)
+  nolune service install        run the gateway in the background (or \`nolune start\` to try it)
   nolune user create Anna anna@example.com    add family members
   open ${origin}
 
@@ -394,36 +523,71 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			if (action === undefined) {
 				const config = readConfig();
 				const { host, port, origin } = listenAddress();
-				io.log(`home       ${paths.home}`);
-				io.log(`listen     http://${host}:${port}`);
-				io.log(`origin     ${origin}`);
+				const row = (name: string, value: string) => io.log(`${name.padEnd(13)} ${value}`);
+				row('home', paths.home);
+				row('listen', `http://${host}:${port}`);
+				row('origin', origin);
 				for (const key of apiKeyStatuses()) {
 					const where =
 						key.source === 'config' ? 'key set' : key.source === 'env' ? `key from ${key.env}` : '';
 					const shown = where
 						? `${where}${key.hint ? ` (…${key.hint})` : ''}`
 						: `no key (nolune key set ${key.provider})`;
-					io.log(`${key.provider.padEnd(10)} ${shown}`);
+					row(key.provider, shown);
 				}
+				const customs = listCustomProviders();
+				row(
+					'custom',
+					customs.length
+						? customs
+								.map((c) => `${c.name} ${c.url} (${c.api}${c.hasKey ? ', with a key' : ''})`)
+								.join(', ')
+						: 'none (nolune provider add <name> <url>)'
+				);
 				const claude = claudeExecutable();
-				io.log(
-					`claude     ${claude ? `Claude Code at ${claude} (nolune claude-plan status checks its sign-in)` : 'no Claude Code found (nolune claude-plan setup installs it)'}`
+				row(
+					'claude',
+					claude
+						? `Claude Code at ${claude} (nolune claude-plan status checks its sign-in)`
+						: 'no Claude Code found (nolune claude-plan setup installs it)'
 				);
 				const codex = codexExecutable();
-				io.log(
-					`codex      ${codex ? `Codex at ${codex} (nolune chatgpt-plan status checks its sign-in)` : 'no Codex found (nolune chatgpt-plan setup installs it)'}`
+				row(
+					'codex',
+					codex
+						? `Codex at ${codex} (nolune chatgpt-plan status checks its sign-in)`
+						: 'no Codex found (nolune chatgpt-plan setup installs it)'
 				);
 				const images = imageGenerationStatus();
-				io.log(`images     ${images.model}${images.problem ? ` (${images.problem})` : ''}`);
-				io.log(`env        ${Object.keys(config.commandEnv ?? {}).join(', ') || '-'}`);
+				row('images', `${images.model}${images.problem ? ` (${images.problem})` : ''}`);
+				row('embeddings', embeddingStatus());
+				row('env', Object.keys(config.commandEnv ?? {}).join(', ') || '-');
 				return;
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: nolune config [set <host|port|origin|image-model|claude-path|codex-path> <value>]'
+					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|codex-path> <value>]'
 				);
 			}
-			const key = positional(rest, 0, 'host|port|origin|image-model|claude-path|codex-path');
+			const key = positional(
+				rest,
+				0,
+				'host|port|origin|image-model|embeddings|claude-path|codex-path'
+			);
+			if (key === 'embeddings') {
+				let setting: ReturnType<typeof parseEmbeddingSetting>;
+				try {
+					setting = parseEmbeddingSetting(positional(rest, 1, 'auto|off|provider/model'));
+				} catch (err) {
+					fail((err as Error).message);
+				}
+				saveEmbeddingSetting(setting);
+				const problem = await embeddingProblem();
+				io.log(
+					`Memory search by meaning: ${embeddingStatus()}.${problem ? ` It didn't answer: ${problem}` : ''}`
+				);
+				return;
+			}
 			const value = positional(rest, 1, 'value');
 			updateConfig((c) => {
 				if (key === 'port') {
@@ -438,7 +602,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					c.imageModel = `${provider}/${model}`;
 				} else if (key === 'claude-path') c.claudePath = value;
 				else if (key === 'codex-path') c.codexPath = value;
-				else fail('you can set host, port, origin, image-model, claude-path or codex-path');
+				else
+					fail(
+						'you can set host, port, origin, image-model, embeddings, claude-path or codex-path'
+					);
 			});
 			if (key === 'claude-path') {
 				await requireClaudePlan(io);
@@ -462,7 +629,9 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			const provider = rest[0] ?? '';
 			const names = Object.keys(API_KEYS).join('|');
 			if ((action !== 'set' && action !== 'rm') || !isApiKeyProvider(provider)) {
-				fail(`usage: nolune key set <${names}> [key] | nolune key rm <${names}>`);
+				fail(
+					`usage: nolune key set <${names}> [key] | nolune key rm <${names}> (your own servers: nolune provider add)`
+				);
 			}
 			const { label, env } = API_KEYS[provider];
 			if (action === 'rm') {
@@ -474,6 +643,44 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			const key = rest[1] || (await askHidden(io, `${label} API key`));
 			if (!key) fail('no key given');
 			await storeApiKey(io, provider, key);
+			return;
+		}
+
+		case 'provider': {
+			requireInit();
+			const { values, positionals } = parseArgs({
+				args: rest,
+				allowPositionals: true,
+				options: { key: { type: 'string' }, api: { type: 'string' } }
+			});
+			if (action === 'add') {
+				const name = positional(positionals, 0, 'name');
+				const url = positional(positionals, 1, 'url');
+				const api = values.api;
+				if (api !== undefined && api !== 'openai' && api !== 'anthropic') {
+					fail('--api is openai or anthropic');
+				}
+				await storeCustomProvider(io, name, url, api, values.key ?? null);
+			} else if (action === 'rm') {
+				const which = positional(positionals, 0, 'name|id');
+				const custom = findCustomProvider(which);
+				if (!custom) fail(`no custom provider "${which}". See \`nolune provider list\`.`);
+				const on = listPresets().filter(
+					(p) => isCustomProvider(p.provider) && splitModel(p.model).provider === custom.id
+				);
+				removeCustomProvider(custom.id);
+				io.log(
+					`Removed ${custom.name}.${on.length ? ` Chats on ${on.map((p) => `"${p.name}"`).join(', ')} stop working until they're moved to another model.` : ''}`
+				);
+			} else if (action === 'list') {
+				for (const c of listCustomProviders()) {
+					const key = c.hasKey ? `key${c.hint ? ` …${c.hint}` : ''}` : 'no key';
+					io.log(`${c.name}\t${c.id}\t${c.api}\t${c.url}\t${key}`);
+				}
+			} else
+				fail(
+					'usage: nolune provider add <name> <url> [--api openai|anthropic] [--key K] | nolune provider rm <name|id> | nolune provider list'
+				);
 			return;
 		}
 
@@ -556,10 +763,13 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				}
 			});
 			if (action === 'add') {
-				const model = positional(positionals, 0, 'model');
+				const { provider, model } = presetTarget(
+					values.provider,
+					positional(positionals, 0, 'model')
+				);
 				const cw = values['context-window'];
 				const preset = await addPreset({
-					provider: values.provider,
+					provider,
 					model,
 					name: values.name,
 					contextWindow: cw ? Number(cw) : null
@@ -567,14 +777,23 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Added "${preset.name}" (context ${formatTokens(effectiveContextWindow(preset))}).`);
 			} else if (action === 'edit') {
 				const cw = values['context-window'];
-				const preset = await editPreset(positional(positionals, 0, 'name|id'), {
-					provider: values.provider,
-					model: values.model,
+				const which = positional(positionals, 0, 'name|id');
+				let { provider, model } = { provider: values.provider, model: values.model };
+				if (provider && !isProvider(provider)) {
+					// A custom provider keeps the model's id there, unless another is given.
+					const old = listPresets().find((p) => p.id === which || p.name === which);
+					const id =
+						old && isCustomProvider(old.provider) ? splitModel(old.model).model : old?.model;
+					({ provider, model } = presetTarget(provider, model ?? id ?? ''));
+				}
+				const preset = await editPreset(which, {
+					provider,
+					model,
 					name: values.name,
 					contextWindow: cw === undefined ? undefined : cw === 'auto' ? null : Number(cw)
 				});
 				io.log(
-					`Saved "${preset.name}" (${preset.provider}/${preset.model}, context ${formatTokens(effectiveContextWindow(preset))}). Chats already on it keep what they had.`
+					`Saved "${preset.name}" (${presetSource(preset.provider, preset.model)}, context ${formatTokens(effectiveContextWindow(preset))}). Chats already on it keep what they had.`
 				);
 			} else if (action === 'rm') {
 				removePreset(positional(positionals, 0, 'name|id'));
@@ -588,7 +807,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					const override = p.contextWindow ? ' (override)' : '';
 					const isDefault = p.id === defaultId ? '\tdefault' : '';
 					io.log(
-						`${p.name}\t${p.provider}/${p.model}\tcontext ${formatTokens(effectiveContextWindow(p))}${override}\t${p.id}${isDefault}`
+						`${p.name}\t${presetSource(p.provider, p.model)}\tcontext ${formatTokens(effectiveContextWindow(p))}${override}\t${p.id}${isDefault}`
 					);
 				}
 			} else fail('usage: nolune preset add|edit|rm|default|list');

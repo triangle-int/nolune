@@ -484,7 +484,7 @@ export const es: Messages = {
 	memory: {
 		title: 'Memoria',
 		intro: (profile: string) =>
-			`Lo que nolune recuerda para ${profile}, compartido por todos en él. Cada chat empieza con la nota fijada Core; nolune lee las demás cuando un chat las necesita y guarda lo que aprende por el camino. Para añadir algo, díselo en un chat, por ejemplo: «Recuerda que Anna es alérgica a los frutos secos».`,
+			`Lo que nolune recuerda para ${profile}, compartido por todos en él. Cada chat empieza con la nota fijada Lo esencial; nolune lee las demás cuando un chat las necesita y guarda lo que aprende por el camino. Para añadir algo, díselo en un chat, por ejemplo: «Recuerda que Anna es alérgica a los frutos secos».`,
 		total: (count: number, topics: number) =>
 			`${count === 1 ? 'recuerdo' : 'recuerdos'} en ${p(topics, { one: `${topics} tema`, other: `${topics} temas` })}`,
 		newThisWeek: (n: number) =>
@@ -508,6 +508,9 @@ export const es: Messages = {
 			`${problem} Guarda de nuevo para conservar tu versión, o cancela para ver la de nolune.`,
 		saved: 'Guardado. Los chats nuevos verán el cambio.',
 		forgot: (path: string) => `nolune olvidó todo lo que había en ${path}.`,
+		learn: 'Aprender de los chats',
+		learnHint:
+			'Cuando un chat lleva un par de minutos en silencio, nolune lo repasa y guarda lo que vale la pena recordar. Cada vez es una breve petición extra al modelo del chat. Si lo desactivas, nolune solo guarda lo que se le ocurra durante la conversación.',
 		learned: (ago: string) => `aprendido ${ago}`,
 		learnedAWhileAgo: 'aprendido hace tiempo',
 		topicLabel: (topic: string, n: number) => `${topic}: ${memories(n)}. Mostrar la nota.`,
@@ -517,7 +520,63 @@ export const es: Messages = {
 		older: 'Más antiguo',
 		newer: 'Más reciente',
 		nothingYet:
-			'Todavía no recuerda nada. Cada cosa que nolune aprende se convierte aquí en un punto.'
+			'Todavía no recuerda nada. Cada cosa que nolune aprende se convierte aquí en un punto.',
+		categories: {
+			core: 'Lo esencial',
+			people: 'Personas',
+			home: 'Casa',
+			health: 'Salud',
+			plans: 'Planes',
+			routines: 'Rutinas',
+			pets: 'Mascotas',
+			places: 'Lugares',
+			projects: 'Proyectos',
+			other: 'Otros',
+			unsorted: 'Sin categoría'
+		},
+		unsortedHint:
+			'De antes de que la memoria tuviera categorías: nolune la lee, pero no le añade nada. Muévela a una categoría para que siga creciendo.',
+		memberNote: (name: string) => `miembro: ${name}`,
+		move: {
+			button: (topic: string) => `Mover ${topic}`,
+			title: (topic: string) => `Mover «${topic}»`,
+			body: 'Elige dónde va. Si esa nota ya existe, las dos se convierten en una.',
+			to: 'Mover a',
+			choose: 'Elige dónde',
+			categories: 'Categorías',
+			newPerson: 'Alguien nuevo…',
+			newProject: 'Un proyecto nuevo…',
+			personName: 'Su nombre',
+			projectName: 'Nombre del proyecto',
+			moveHint: (target: string) => `Pasará a ser ${target}.`,
+			mergeHint: (from: string, into: string) =>
+				`Lo que dice «${from}» se añade a «${into}», sin repeticiones, y «${from}» desaparece. Sirve para dos notas sobre la misma persona.`,
+			move: 'Mover',
+			merge: 'Unir',
+			moved: (from: string, to: string) => `${from} movida a ${to}.`,
+			merged: (from: string, into: string) => `${from} unida a ${into}.`
+		},
+		/** What nolune saved from a chat by itself: in that chat, and at the top of this page. */
+		changes: {
+			saved: (n: number) => `Guardó ${memories(n)}`,
+			added: 'Nuevo',
+			changed: 'Cambiado',
+			before: (text: string) => `antes: ${text}`,
+			openNote: (topic: string) => `Abrir ${topic} en Memoria`,
+			undo: 'Deshacer',
+			undone: 'Deshecho',
+			undoneBy: (name: string) => `Deshecho por ${name}`,
+			changedSince:
+				'Cambió desde entonces, así que no se puede deshacer aquí. Edita la nota en la página Memoria.',
+			alreadyUndone: 'Ya se deshizo.',
+			recent: 'Guardado de los chats',
+			recentHint:
+				'Lo que nolune anotó por su cuenta cuando los chats quedaron en silencio, en las últimas dos semanas.',
+			fromChat: 'de {chat}',
+			deletedChat: 'de un chat eliminado',
+			showAll: (n: number) => `Mostrar los ${n}`,
+			untitled: 'un chat'
+		}
 	},
 
 	automations: {
@@ -639,7 +698,29 @@ export const es: Messages = {
 		soulSaved: 'Alma guardada.',
 		soulRemoved: 'Alma eliminada.',
 		added: (name: string) => `${name} añadido.`,
-		removed: 'Quitado.'
+		removed: 'Quitado.',
+		memberNote: (note: string) => `Nota: ${note}`,
+		noteStarts: (note: string) => `Nota: ${note}, se crea cuando haya algo que apuntar`,
+		mayHaveNote: 'Puede que nolune ya tenga una nota sobre esta persona',
+		chooseNote: 'Elegir nota',
+		changeNote: 'Cambiar nota',
+		linked: (name: string, note: string) => `La nota de ${name} ahora es ${note}.`,
+		chooser: {
+			addTitle: (name: string) => `¿nolune ya conoce a ${name}?`,
+			linkTitle: (name: string) => `¿Qué nota es sobre ${name}?`,
+			body: (name: string) =>
+				`La memoria tiene notas que podrían ser sobre ${name}. Elige la suya, para que nolune sepa que lo que dice es sobre esta persona y añada ahí lo que cuente de sí misma.`,
+			linkBody: (name: string) =>
+				`Elige la nota sobre ${name}: nolune añadirá ahí lo que esta persona cuente de sí misma.`,
+			current: 'ahora',
+			alsoCalled: (names: string) => `Otros nombres: ${names}`,
+			more: (n: number) => `y ${n} más`,
+			newNote: 'Es otra persona: empezar una nota nueva',
+			privacy: (name: string) =>
+				`${name} podrá leer toda la memoria de este perfil, también esta nota. Comprueba que no tenga nada que deba quedar en secreto para esta persona, como una sorpresa.`,
+			add: (name: string) => `Añadir a ${name}`,
+			link: 'Vincular'
+		}
 	},
 
 	avatars: {
@@ -769,7 +850,7 @@ export const es: Messages = {
 		title: 'Modelos y claves',
 		keys: 'Claves de API',
 		keysHint:
-			'Compartidas por todos los perfiles y guardadas en el archivo de configuración de nolune en este ordenador. Una clave nueva se comprueba con su proveedor antes de guardarla, y se usa enseguida.',
+			'Compartidas por todos los perfiles y guardadas en el archivo de configuración de nolune en este ordenador. Una clave nueva se comprueba con su proveedor antes de guardarla, y se usa enseguida. Para un servidor de modelos propio, como Ollama o LM Studio, añade un proveedor propio.',
 		purposes: {
 			anthropic: 'Hace funcionar los chats y las automatizaciones con modelos de Claude.',
 			openai:
@@ -861,6 +942,10 @@ export const es: Messages = {
 					'OpenAI no la indica: Auto solo conoce la de sus modelos insignia (1,05M desde GPT-5.4).',
 				openrouter:
 					'Auto usa la ventana que OpenRouter indica para el modelo y su proveedor principal.',
+				'custom-openai':
+					'Auto usa la ventana que el servidor indica para el modelo, si la indica (vLLM lo hace); si no, queda como desconocida.',
+				'custom-anthropic':
+					'Auto usa la ventana que el servidor indica para el modelo, si la indica (vLLM lo hace); si no, queda como desconocida.',
 				'claude-plan': 'Claude Code no la indica: Auto solo conoce sus modelos de 1M de contexto.',
 				'chatgpt-plan': 'Codex no la indica, así que Auto la deja como desconocida.'
 			},
@@ -871,6 +956,9 @@ export const es: Messages = {
 			onKey: (provider: string) => `Funciona con la clave de API de ${provider}.`,
 			noKey: (provider: string) =>
 				`Todavía no hay clave de API de ${provider}: añade una en «Claves de API», arriba.`,
+			onCustom: (api: string, url: string) =>
+				`Funciona en ${url}, a través de su API de ${api}. El modelo debe poder llamar herramientas; las imágenes y los PDF le llegan como rutas.`,
+			customGone: 'Este proveedor propio se quitó: elige otro.',
 			asking: (source: string) => `Preguntando a ${source} por sus modelos…`,
 			listProblem: (problem: string) => `${problem} Aun así puedes escribir un ID.`,
 			couldNotList: (status: number) => `nolune no pudo obtener los modelos (${status}).`,
@@ -892,6 +980,75 @@ export const es: Messages = {
 		claudeNoAnswer: 'Claude Code no respondió.',
 		removed: 'Quitada.',
 		newDefault: (name: string) => `Los chats nuevos empiezan ahora con ${name}.`,
-		presetRemoved: 'Quitado. Las conversaciones existentes siguen funcionando.'
+		presetRemoved: 'Quitado. Las conversaciones existentes siguen funcionando.',
+		/** Custom providers: model servers of the family's own, listed with the API keys. */
+		customProviders: {
+			add: 'Añadir un proveedor propio',
+			addTitle: 'Añadir un proveedor propio',
+			addHint:
+				'Un servidor de modelos propio, como Ollama, LM Studio u oMLX en este ordenador, o vLLM en una máquina con GPU. Aparece con su nombre en Añadir un modelo.',
+			about: (api: string) => `Tu propio servidor de modelos, a través de su API de ${api}.`,
+			apis: { openai: 'OpenAI', anthropic: 'Anthropic' },
+			change: 'Cambiar',
+			name: 'Nombre',
+			namePlaceholder: 'Ollama',
+			api: 'API',
+			apiHints: {
+				openai:
+					'La Responses API de OpenAI: Ollama, LM Studio, vLLM, LiteLLM. La búsqueda en la memoria puede usar sus embeddings.',
+				anthropic:
+					'La Messages API de Anthropic: Ollama, LM Studio, el servidor de llama.cpp, oMLX.'
+			},
+			address: 'Dirección',
+			addressHint:
+				'Ollama escucha en http://localhost:11434 y LM Studio en http://localhost:1234. nolune le pide sus modelos para comprobarlo.',
+			key: 'Clave',
+			keyOptional: '(si la necesita)',
+			keyKept: 'Guardada. Déjala vacía para conservarla.',
+			withKey: (hint: string | null) => (hint ? `clave termina en ${hint}` : 'con clave'),
+			noKey: 'sin clave',
+			checking: 'Comprobando…',
+			works: (n: number) => `Guardado. Ofrece ${n} ${p(n, { one: 'modelo', other: 'modelos' })}.`,
+			unchecked: (problem: string) => `Guardado sin comprobarlo: ${problem}`,
+			needName: 'Ponle un nombre, como Ollama o GPU box.',
+			needAddress: 'Indica su dirección, empezando por http:// o https://.',
+			removeTitle: (name: string) => `¿Quitar ${name}?`,
+			removeBody:
+				'Los chats y automatizaciones con sus modelos dejan de funcionar hasta que se pasen a otro modelo.',
+			usedBy: (names: string) => `Estos preajustes funcionan en él: ${names}.`
+		},
+		/** Memory search by meaning: where its embeddings come from. */
+		embeddings: {
+			title: 'Búsqueda en la memoria',
+			hint: 'nolune también encuentra datos de la memoria por lo que significan, no solo por sus palabras, y entre idiomas. Para ello, cada dato se envía una vez adonde se calculan los embeddings, y cada mensaje al enviarse; un servidor en este ordenador los mantiene aquí. Compartido por todos los perfiles.',
+			name: 'Búsqueda por significado',
+			using: (source: string) => `Usa ${source}.`,
+			off: 'Desactivada: la memoria se busca solo por palabras.',
+			noKeys:
+				'Aún no hay clave de OpenAI ni de OpenRouter, así que la memoria se busca solo por palabras.',
+			noKey: (provider: string) =>
+				`Aún no hay clave de ${provider}, así que la memoria se busca solo por palabras. Añade una en Claves de API, arriba.`,
+			customGone: 'Este proveedor propio se quitó, así que la memoria se busca solo por palabras.',
+			change: 'Cambiar',
+			source: 'Embeddings de',
+			modes: {
+				auto: 'Auto',
+				openai: 'OpenAI',
+				openrouter: 'OpenRouter',
+				off: 'Desactivada'
+			},
+			autoNote:
+				'text-embedding-3-small de OpenAI con la clave de OpenAI; si no, el mismo modelo a través de OpenRouter.',
+			withKey: (provider: string) => `Con la clave de API de ${provider}.`,
+			customNote: (url: string) => `Un modelo que ofrece en ${url}, a través de su API de OpenAI.`,
+			offNote: 'La memoria se busca solo por palabras, y ningún dato se envía a ninguna parte.',
+			model: 'Modelo',
+			customModel: 'Su nombre allí, como nomic-embed-text',
+			checking: 'Comprobando…',
+			works: 'Guardado. Funciona; los datos se procesan en segundo plano.',
+			wordsOnly: 'Guardado. La memoria se busca solo por palabras.',
+			noAnswer: (problem: string) => `Guardado, pero no hubo respuesta: ${problem}`,
+			needModel: 'Indica el modelo que debe usar.'
+		}
 	}
 };

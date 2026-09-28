@@ -13,6 +13,9 @@
 	import Rich from '$lib/components/Rich.svelte';
 	import TopBar from '$lib/components/TopBar.svelte';
 	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
+	import AddCustomProvider from '$lib/components/admin/AddCustomProvider.svelte';
+	import CustomProviderRow from '$lib/components/admin/CustomProviderRow.svelte';
+	import MemorySearch from '$lib/components/admin/MemorySearch.svelte';
 	import PresetForm from '$lib/components/admin/PresetForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
@@ -192,7 +195,11 @@
 							{/if}
 						</li>
 					{/each}
+					{#each data.customProviders as provider (provider.id)}
+						<CustomProviderRow {provider} presets={data.presets} result={form} />
+					{/each}
 				</ul>
+				<AddCustomProvider result={form} />
 			</section>
 
 			<section class="space-y-3" aria-labelledby="plans-heading">
@@ -442,8 +449,8 @@
 									</div>
 									<div class="truncate text-muted-foreground">
 										{m.admin.presetDetails(
-											preset.provider,
-											preset.model,
+											preset.shownProvider,
+											preset.shownModel,
 											formatTokens(preset.contextWindow),
 											preset.override != null
 										)}
@@ -488,6 +495,7 @@
 								<PresetForm
 									providers={data.providers}
 									keys={data.keys}
+									customProviders={data.customProviders}
 									claudeInstalled={data.claude.installed}
 									codexInstalled={data.chatgpt.installed}
 									{preset}
@@ -505,12 +513,21 @@
 				<AddModelForm
 					providers={data.providers}
 					keys={data.keys}
+					customProviders={data.customProviders}
 					claudeInstalled={data.claude.installed}
 					codexInstalled={data.chatgpt.installed}
 					problem={form?.addError}
 					startOpen={data.presets.length === 0}
 				/>
 			</section>
+
+			<MemorySearch
+				setting={data.embeddings}
+				defaults={data.embeddingDefaults}
+				keys={data.keys}
+				customProviders={data.customProviders}
+				result={form}
+			/>
 		</div>
 	</main>
 </div>

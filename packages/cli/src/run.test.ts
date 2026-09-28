@@ -1,4 +1,6 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -48,13 +50,13 @@ describe('runCli', () => {
 		createProfile('Work', makeUser('Max').id);
 		vi.stubEnv('NOLUNE_PROFILE', 'work');
 
-		const added = await run(['memory', 'add', 'family', 'Anna is 7'], {
+		const added = await run(['memory', 'add', 'home', 'Anna is 7'], {
 			env: { NOLUNE_PROFILE: 'family' }
 		});
 
-		expect(added).toEqual({ code: 0, out: 'Started family.md.\n', err: '' });
-		expect(readMemoryNote('family', 'family').text).toContain('Anna is 7');
-		expect(() => readMemoryNote('work', 'family')).toThrow();
+		expect(added).toEqual({ code: 0, out: 'Started home.md.\n', err: '' });
+		expect(readMemoryNote('family', 'home').text).toContain('Anna is 7');
+		expect(() => readMemoryNote('work', 'home')).toThrow();
 		vi.unstubAllEnvs();
 	});
 
@@ -76,6 +78,56 @@ describe('runCli', () => {
 			out: '',
 			err: 'nolune: give the note as text, or pipe it in: nolune memory write <topic> < note.md\n'
 		});
+	});
+
+	it('searches memory, with where each fact is', async () => {
+		createProfile('Family', makeUser('Anna').id);
+		const env = { NOLUNE_PROFILE: 'family' };
+		await run(['memory', 'write', 'home'], {
+			env,
+			stdin: '# Home\n\n## Internet\n\n- Wifi password: mango42\n- Router in the hall\n'
+		});
+
+		expect(await run(['memory', 'search', 'wifi', 'passwords'], { env })).toEqual({
+			code: 0,
+			out: 'home.md:5  Wifi password: mango42  (Internet)\n',
+			err: ''
+		});
+		expect((await run(['memory', 'search', 'dentist'], { env })).out).toContain(
+			'Nothing in Family\'s memory matches "dentist"'
+		);
+	});
+
+	it('lists whose notes are whose, and merges two about one person', async () => {
+		createProfile('Family', makeUser('Anna').id);
+		const env = { NOLUNE_PROFILE: 'family' };
+		await run(['memory', 'add', 'people/grandma', 'Loves roses'], { env });
+		await run(['memory', 'add', 'people/olga', 'Lives in Tver'], { env });
+		expect(await run(['memory', 'add', 'family', 'Olga is 70'], { env })).toMatchObject({
+			code: 1,
+			err: expect.stringContaining('"family" isn\'t one of memory\'s categories')
+		});
+
+		const list = (await run(['memory'], { env })).out;
+		expect(list).toContain(
+			"Anna's note people/anna.md is started when there is something to write."
+		);
+		expect(list).toMatch(/people\/olga\.md +1 fact/);
+
+		expect(
+			await run(['memory', 'add', 'people/olga', "Who: Tester's grandmother\n- Lives in Tver"], {
+				env
+			})
+		).toMatchObject({ out: 'Saved to people/olga.md: 1 fact, and 1 it already had.\n' });
+
+		expect(await run(['memory', 'merge', 'people/grandma', 'people/olga'], { env })).toEqual({
+			code: 0,
+			out: "Merged people/grandma.md into people/olga.md: 1 part it didn't have.\n",
+			err: ''
+		});
+		expect(readMemoryNote('family', 'people/olga').text).toBe(
+			"# Olga\n\n- Lives in Tver\n- Who: Tester's grandmother\n- Loves roses\n- Also called: Grandma\n"
+		);
 	});
 
 	it('resolves relative paths from its folder', async () => {
@@ -145,6 +197,78 @@ describe('nolune preset edit', () => {
 		const missing = await run(['preset', 'edit', 'Opus', '--name', 'Smart']);
 		expect(missing.code).not.toBe(0);
 		expect(missing.err).toContain('No preset "Opus"');
+	});
+});
+
+describe('nolune provider', () => {
+	it('checks a custom provider for its models, and presets and memory search can use it', async () => {
+		// A server that wants a key, like a vLLM started with --api-key.
+		const server = createServer((req, res) => {
+			res.setHeader('content-type', 'application/json');
+			if (req.headers.authorization !== 'Bearer sk-local') {
+				res.writeHead(401).end(JSON.stringify({ error: { message: 'Invalid API key' } }));
+			} else if (req.url === '/v1/models') {
+				res.end(JSON.stringify({ object: 'list', data: [{ id: 'qwen3:8b' }, { id: 'nomic' }] }));
+			} else {
+				res.end(JSON.stringify({ data: [{ index: 0, embedding: [0.6, 0.8] }] }));
+			}
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+		try {
+			const refused = await run(['provider', 'add', 'GPU box', url], { stdin: '' });
+			expect(refused.code).not.toBe(0);
+			expect(refused.err).toContain('The server wants a key.');
+
+			const args = ['provider', 'add', 'GPU box', `${url}/`, '--api', 'anthropic'];
+			expect(await run([...args, '--key', 'sk-local'])).toEqual({
+				code: 0,
+				out: `Added GPU box at ${url}, through its Anthropic API. It serves qwen3:8b, nomic.\n`,
+				err: ''
+			});
+			// The same server through its OpenAI API, for memory search.
+			await run(['provider', 'add', 'Embeddings', url, '--key', 'sk-local']);
+			expect((await run(['provider', 'list'])).out).toBe(
+				`GPU box\tgpu-box\tanthropic\t${url}\tkey\nEmbeddings\tembeddings\topenai\t${url}\tkey\n`
+			);
+			expect((await run(['config'])).out).toContain(
+				`\ncustom        GPU box ${url} (anthropic, with a key), Embeddings ${url} (openai, with a key)\n`
+			);
+			const other = await run(['provider', 'add', 'gpu box', url, '--api', 'openai']);
+			expect(other.err).toContain("GPU box speaks Anthropic's API.");
+
+			// Picked by its name; the preset is named by it.
+			const added = await run(['preset', 'add', 'qwen3:8b', '--provider', 'GPU box']);
+			expect(added.out).toBe('Added "qwen3:8b (GPU box)" (context ?).\n');
+			expect((await run(['preset', 'list'])).out).toContain('GPU box/qwen3:8b');
+			const unknown = await run(['preset', 'add', 'qwen3:8b', '--provider', 'ollama']);
+			expect(unknown.err).toContain('no provider "ollama"');
+
+			const meaning = await run(['config', 'set', 'embeddings', 'custom-openai/embeddings/nomic']);
+			expect(meaning.out).toBe('Memory search by meaning: Embeddings/nomic.\n');
+			const address = await run(['config', 'set', 'embeddings', url]);
+			expect(address.err).toContain('nolune provider add <name> <url>');
+
+			expect((await run(['provider', 'rm', 'gpu-box'])).out).toBe(
+				'Removed GPU box. Chats on "qwen3:8b (GPU box)" stop working until they\'re moved to another model.\n'
+			);
+			await run(['provider', 'rm', 'Embeddings']);
+			expect((await run(['config'])).out).toContain(
+				'embeddings    custom-openai/embeddings/nomic, but there is no custom provider "embeddings"'
+			);
+		} finally {
+			server.close();
+		}
+	});
+
+	it("saves one that doesn't answer yet, with a warning", async () => {
+		const saved = await run(['provider', 'add', 'Later', 'http://127.0.0.1:1']);
+		expect(saved.code).toBe(0);
+		expect(saved.out).toMatch(
+			/^Saved Later without checking it\. Couldn't reach http:\/\/127\.0\.0\.1:1 \(.+\)\.\n$/
+		);
+		const reserved = await run(['provider', 'add', 'OpenAI', 'http://127.0.0.1:1']);
+		expect(reserved.err).toContain("There's already a provider called OpenAI.");
 	});
 });
 

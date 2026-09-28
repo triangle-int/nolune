@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { eq, or } from 'drizzle-orm';
+import { findCustomProvider, isCustomProvider, splitModel } from './custom-providers.ts';
 import { getDb } from './db/index.ts';
 import { modelPreset } from './db/schema.ts';
 import { describeApiError, fetchContextWindow, isProvider, type Provider } from './models.ts';
@@ -45,8 +46,13 @@ export function effectiveContextWindow(preset: Preset): number | null {
 	return preset.contextWindow ?? preset.modelContextWindow;
 }
 
-/** What a preset is called when it isn't given a name. */
+/** What a preset is called when it isn't given a name: a custom provider's model by its name. */
 function defaultName(model: string, provider: string): string {
+	if (isCustomProvider(provider)) {
+		const on = splitModel(model);
+		const custom = on.provider ? findCustomProvider(on.provider) : undefined;
+		if (custom) return `${on.model} (${custom.name})`;
+	}
 	return `${model} (${provider})`;
 }
 

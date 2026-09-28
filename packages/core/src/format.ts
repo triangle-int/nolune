@@ -267,8 +267,11 @@ export function replyBlocks(content: unknown): ReplyBlock[] {
 				}
 				break;
 			case 'reasoning': {
+				// OpenAI's summary, or a Custom OpenAI server's reasoning in full.
 				const summary = (Array.isArray(block.summary) ? block.summary : []) as Stored[];
-				const text = summary.map((s) => str(s?.text)).join('\n\n');
+				const full = (Array.isArray(block.content) ? block.content : []) as Stored[];
+				const parts = summary.length ? summary : full.filter((p) => p?.type === 'reasoning_text');
+				const text = parts.map((s) => str(s?.text)).join('\n\n');
 				blocks.push({ type: 'reasoning', text });
 				break;
 			}
@@ -340,6 +343,52 @@ export function heldElsewhereNote(block: ImageBlock | PdfBlock): TextBlock {
 		type: 'text',
 		text: `[${what} not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is${block.type === 'image' ? '; `nolune view` shows it again' : ''}.]`
 	};
+}
+
+/** What a model reads instead of a picture or PDF it can't take. */
+function unreadableNote(block: ImageBlock | PdfBlock, model: string): TextBlock {
+	const what =
+		block.type === 'image'
+			? `Picture not shown: ${model} can't see pictures`
+			: `PDF not shown: ${model} doesn't read PDFs itself`;
+	return { type: 'text', text: `[${what}. The line before this says where its file is.]` };
+}
+
+/**
+ * The messages with each picture and PDF `model` can't take (`inputsOf`, asked only when there
+ * are any) as a note: a chat that switched to such a model may hold them, and a request carrying
+ * one would fail. Messages without any are returned as they are.
+ */
+export async function withoutUnreadable(
+	messages: Message[],
+	model: string,
+	inputsOf: () => Promise<{ pictures: boolean; pdfs: boolean }>
+): Promise<Message[]> {
+	const isFile = (b: Block) => b.type === 'image' || b.type === 'pdf';
+	const holdsFiles = messages.some((m) =>
+		m.blocks.some(
+			(b) =>
+				isFile(b) ||
+				(b.type === 'tool_result' && Array.isArray(b.content) && b.content.some(isFile))
+		)
+	);
+	if (!holdsFiles) return messages;
+	const inputs = await inputsOf();
+	if (inputs.pictures && inputs.pdfs) return messages;
+	return messages.map((m) => {
+		let changed = false;
+		const readable = <B extends Block>(b: B): B | TextBlock => {
+			if ((b.type !== 'image' || inputs.pictures) && (b.type !== 'pdf' || inputs.pdfs)) return b;
+			changed = true;
+			return unreadableNote(b as unknown as ImageBlock | PdfBlock, model);
+		};
+		const blocks = m.blocks.map((b): Block =>
+			b.type === 'tool_result' && Array.isArray(b.content)
+				? { ...b, content: b.content.map(readable) }
+				: readable(b)
+		);
+		return changed ? { ...m, blocks } : m;
+	});
 }
 
 /**

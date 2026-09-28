@@ -1,23 +1,30 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { cubicOut } from 'svelte/easing';
 	import { Tween, prefersReducedMotion } from 'svelte/motion';
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import type { SubmitFunction } from '@sveltejs/kit';
+	import { MEMORY_CATEGORIES, categoryOf } from '@nolune/core/memory-categories';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import EraserIcon from '@lucide/svelte/icons/eraser';
+	import FolderInputIcon from '@lucide/svelte/icons/folder-input';
 	import PinIcon from '@lucide/svelte/icons/pin';
 	import { Button } from '$lib/components/ui/button';
+	import { Switch } from '$lib/components/ui/switch';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Rich from '$lib/components/Rich.svelte';
 	import Markdown from '$lib/components/chat/Markdown.svelte';
 	import DotGrid, { orderTopics, type Topic } from '$lib/components/memory/DotGrid.svelte';
+	import MemoryChangeItem from '$lib/components/memory/MemoryChangeItem.svelte';
+	import MoveNoteDialog from '$lib/components/memory/MoveNoteDialog.svelte';
 	import { formatAgo } from '$lib/format';
 	import { getI18n } from '$lib/i18n';
-	import { memoryAnchor, memoryTopic } from '$lib/memory';
+	import { memoryAnchor, memoryTitle } from '$lib/memory';
 	import { cn } from '$lib/utils';
 
 	let { data, form } = $props();
@@ -26,15 +33,37 @@
 	const { m } = i18n;
 
 	const WEEK = 7 * 24 * 60 * 60 * 1000;
+	/** Of what the note-taker saved lately, how many show before "Show all". */
+	const RECENT_SHOWN = 4;
+	const slug = $derived(page.params.slug ?? '');
+	let allRecent = $state(false);
+	const recent = $derived(allRecent ? data.recent : data.recent.slice(0, RECENT_SHOWN));
 
+	const whose = $derived(new Map(data.members.map((member) => [member.note, member.name])));
+	/**
+	 * By category: a note each, then a folder's notes under its name. Notes from before the
+	 * categories come last, as unsorted.
+	 */
 	const topics: Topic[] = $derived(
-		data.files.map((file) => ({
-			path: file.path,
-			title: memoryTopic(file.path),
-			group: file.path.includes('/') ? memoryTopic(file.path.split('/')[0]) : null,
-			updatedAt: file.updatedAt,
-			facts: file.facts
-		}))
+		data.files.map((file) => {
+			const category = categoryOf(file.path);
+			const folder = !!category && file.path.includes('/');
+			return {
+				path: file.path,
+				title: memoryTitle(m, file.path, file.text),
+				group: !category
+					? m.memory.categories.unsorted
+					: folder
+						? m.memory.categories[category]
+						: null,
+				rank: category
+					? MEMORY_CATEGORIES.indexOf(category) + (folder ? 0.5 : 0)
+					: MEMORY_CATEGORIES.length,
+				member: whose.get(file.path) ?? null,
+				updatedAt: file.updatedAt,
+				facts: file.facts
+			};
+		})
 	);
 	/**
 	 * The notes below follow the grid's order, after the pinned core note. Core is there even
@@ -49,8 +78,10 @@
 				? {
 						topic: {
 							path: data.core.path,
-							title: memoryTopic(data.core.path),
+							title: memoryTitle(m, data.core.path),
 							group: null,
+							rank: 0,
+							member: null,
 							updatedAt: 0,
 							facts: []
 						},
@@ -80,6 +111,8 @@
 	let draft = $state('');
 	let saving = $state(false);
 	let forgetting = $state<string | null>(null);
+	let moving = $state<string | null>(null);
+	const titles = $derived(topics.map(({ path, title }) => ({ path, title })));
 
 	function pick(path: string) {
 		document.getElementById(memoryAnchor(path))?.scrollIntoView({
@@ -101,6 +134,15 @@
 		const file = data.files.find((f) => `#${memoryAnchor(f.path)}` === location.hash);
 		if (file) pick(file.path);
 	});
+
+	let learnForm: HTMLFormElement | undefined = $state();
+	let learnOn = $state(true);
+
+	async function setLearning(on: boolean) {
+		learnOn = on;
+		await tick();
+		learnForm?.requestSubmit();
+	}
 
 	const save: SubmitFunction = () => {
 		saving = true;
@@ -124,6 +166,22 @@
 			{m.memory.intro(data.profile.name)}
 		</p>
 
+		<form method="POST" action="?/learn" use:enhance bind:this={learnForm}>
+			<input type="hidden" name="on" value={learnOn ? 'on' : 'off'} />
+			<label class="flex cursor-pointer items-start gap-4 rounded-2xl border px-4 py-3">
+				<span class="min-w-0 flex-1 space-y-0.5">
+					<span class="block font-medium">{m.memory.learn}</span>
+					<span class="block text-sm text-muted-foreground">{m.memory.learnHint}</span>
+				</span>
+				<Switch
+					class="mt-0.5"
+					checked={data.learnFromChats}
+					onCheckedChange={setLearning}
+					aria-label={m.memory.learn}
+				/>
+			</label>
+		</form>
+
 		<div class="space-y-3">
 			<div class="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 px-1">
 				<p class="flex items-baseline gap-2">
@@ -141,6 +199,55 @@
 			</div>
 			<DotGrid {topics} bind:focus onpick={pick} />
 		</div>
+
+		{#if data.recent.length}
+			<section class="space-y-3" aria-labelledby="recent-heading">
+				<div class="space-y-0.5 px-1">
+					<h2 id="recent-heading" class="font-medium">{m.memory.changes.recent}</h2>
+					<p class="text-sm text-muted-foreground">{m.memory.changes.recentHint}</p>
+				</div>
+				<ul class="space-y-3 rounded-3xl border p-4 text-sm sm:p-5">
+					{#each recent as change (change.id)}
+						<MemoryChangeItem {change} {slug} onundone={invalidateAll}>
+							{#snippet note(topic)}
+								<button
+									type="button"
+									class="underline-offset-2 hover:text-foreground hover:underline"
+									onclick={() => pick(change.note)}>{topic}</button
+								>
+							{/snippet}
+							{#snippet after()}
+								<span>
+									{#if change.conversation}
+										<Rich text={m.memory.changes.fromChat}>
+											{#snippet chat()}<a
+													href={resolve('/p/[slug]/c/[id]', { slug, id: change.conversation!.id })}
+													class="underline-offset-2 hover:text-foreground hover:underline"
+													>{change.conversation!.title || m.memory.changes.untitled}</a
+												>{/snippet}
+										</Rich>
+									{:else}
+										{m.memory.changes.deletedChat}
+									{/if}
+								</span>
+								<span aria-hidden="true">·</span>
+								<span>{formatAgo(change.createdAt, i18n)}</span>
+							{/snippet}
+						</MemoryChangeItem>
+					{/each}
+				</ul>
+				{#if data.recent.length > RECENT_SHOWN}
+					<Button
+						variant="ghost"
+						size="sm"
+						class="text-muted-foreground"
+						onclick={() => (allRecent = !allRecent)}
+					>
+						{allRecent ? m.memory.showFewer : m.memory.changes.showAll(data.recent.length)}
+					</Button>
+				{/if}
+			</section>
+		{/if}
 
 		{#if form?.message && !form.path}
 			<p class="rounded-2xl bg-muted px-4 py-3 text-sm">{form.message}</p>
@@ -169,6 +276,7 @@
 						<p class="truncate text-xs text-muted-foreground">
 							{[
 								file.path,
+								topic.member && m.memory.memberNote(topic.member),
 								pinned && m.memory.pinned,
 								!missing && m.memory.memories(topic.facts.length),
 								!missing && m.memory.updated(formatAgo(file.updatedAt, i18n))
@@ -176,6 +284,9 @@
 								.filter(Boolean)
 								.join(' · ')}
 						</p>
+						{#if !categoryOf(file.path)}
+							<p class="mt-1 text-xs text-warning">{m.memory.unsortedHint}</p>
+						{/if}
 					</div>
 					{#if editing !== file.path}
 						<Button
@@ -190,6 +301,18 @@
 						>
 							<PencilIcon />
 						</Button>
+						{#if !pinned}
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								class="-mt-1 text-muted-foreground"
+								aria-label={m.memory.move.button(topic.title)}
+								title={m.memory.move.button(topic.title)}
+								onclick={() => (moving = file.path)}
+							>
+								<FolderInputIcon />
+							</Button>
+						{/if}
 						{#if !missing}
 							<Button
 								variant="ghost"
@@ -260,11 +383,15 @@
 	</div>
 </div>
 
+<MoveNoteDialog bind:path={moving} notes={titles} />
+
 <AlertDialog.Root open={forgetting !== null} onOpenChange={(open) => !open && (forgetting = null)}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title
-				>{m.memory.forgetTitle(forgetting ? memoryTopic(forgetting) : '')}</AlertDialog.Title
+				>{m.memory.forgetTitle(
+					titles.find((note) => note.path === forgetting)?.title ?? forgetting ?? ''
+				)}</AlertDialog.Title
 			>
 			<AlertDialog.Description>
 				<Rich text={m.memory.forgetBody} profile={data.profile.name}>

@@ -11,6 +11,7 @@ import {
 	insertQueued
 } from './conversations.ts';
 import { getDb } from './db/index.ts';
+import { addMemoryFact } from './memory.ts';
 import { conversation } from './db/schema.ts';
 import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
 import {
@@ -22,6 +23,7 @@ import {
 	onRunningChange,
 	recoverAfterRestart,
 	runningConversationIds,
+	sendMessage,
 	subscribe,
 	type LiveEvent
 } from './runner.ts';
@@ -176,6 +178,40 @@ describe('tools and cache', () => {
 		getDb().update(conversation).set({ tools: null }).where(eq(conversation.id, chat.id)).run();
 		await run(chat.id);
 		expect(vi.mocked(streamTurn).mock.calls[0][0].tools).toBe(LEGACY_TOOLS);
+	});
+});
+
+describe('memory', () => {
+	it('goes along with a message for the model only, once per chat', async () => {
+		const { user, profile } = makeFamily();
+		addMemoryFact(profile.slug, 'home', 'Wifi password: mango42');
+		const chat = createConversation({
+			profile,
+			presetId: makePreset().id,
+			userId: user.id,
+			title: 'Wifi'
+		});
+		vi.mocked(streamTurn).mockResolvedValue(
+			modelReply([{ type: 'text', text: 'mango42' }], 'end_turn')
+		);
+		for (const text of ["What's the wifi password?", 'Is the wifi password still the same?']) {
+			const ended = loopEnd(chat.id);
+			await sendMessage(chat.id, user, text);
+			await ended;
+		}
+
+		const [first, second] = committedRows(chat.id).filter((row) => row.kind === 'human');
+		expect(JSON.parse(first.content)).toEqual([
+			{ type: 'text', text: "Anna: What's the wifi password?" },
+			{ type: 'text', text: expect.stringContaining('- [home] Wifi password: mango42') }
+		]);
+		expect(JSON.parse(second.content)).toEqual([
+			{ type: 'text', text: 'Anna: Is the wifi password still the same?' }
+		]);
+		expect(getSnapshot(chat.id).messages[0]).toMatchObject({
+			kind: 'human',
+			text: "What's the wifi password?"
+		});
 	});
 });
 

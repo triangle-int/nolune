@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
-import { and, desc, eq, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
 import { parseAttachments, type MessageAttachment } from './attachments.ts';
 import { getDb } from './db/index.ts';
 import {
@@ -177,6 +177,7 @@ export function createConversation(
 		providerSession: null,
 		cacheTtl: input.cacheTtl ?? '1h',
 		hidden: input.hidden ?? false,
+		learnedSeq: null,
 		createdBy: input.userId,
 		createdAt: now,
 		updatedAt: now
@@ -216,6 +217,16 @@ export function isSubagentConversation(id: string): boolean {
 		.from(subagent)
 		.where(eq(subagent.conversationId, id))
 		.get();
+}
+
+/** Conversations in the list (not background runs or subagents) that were active since `since`. */
+export function recentConversationIds(since: Date): string[] {
+	return getDb()
+		.select({ id: conversation.id })
+		.from(conversation)
+		.where(and(eq(conversation.hidden, false), gte(conversation.updatedAt, since)))
+		.all()
+		.map((r) => r.id);
 }
 
 export function listAllConversationIds(): string[] {
@@ -299,7 +310,7 @@ export function setPreset(id: string, presetId: string): Conversation {
  */
 export function rebuildSystemPrompt(
 	conv: Conversation,
-	profile: Pick<Profile, 'slug' | 'disabledSkills'>,
+	profile: Pick<Profile, 'id' | 'slug' | 'disabledSkills'>,
 	folderContext: string,
 	soul: { text: string; cut: boolean },
 	lastSeq: number | null
@@ -326,6 +337,11 @@ export function setProviderSession(id: string, session: Conversation['providerSe
 /** A background run becomes a normal conversation once someone continues it. */
 export function setHidden(id: string, hidden: boolean): void {
 	getDb().update(conversation).set({ hidden }).where(eq(conversation.id, id)).run();
+}
+
+/** nolune has looked over the conversation for memory up to row `seq`. */
+export function setLearnedSeq(id: string, seq: number): void {
+	getDb().update(conversation).set({ learnedSeq: seq }).where(eq(conversation.id, id)).run();
 }
 
 /** Background runs nobody continued, and subagents, last active before `before`. */
@@ -429,8 +445,15 @@ export function insertQueued(input: {
 		media: (PreparedMedia & { id: string })[];
 		uploadIds: string[];
 	};
+	/** What memory has on the message (recallFor), for the model only: the chat shows `text`. */
+	recall?: string | null;
 }): MessageRow {
 	const { attachments } = input;
+	// Without attachments the model sees only the sender's name and what they wrote.
+	const content: Block[] = [
+		...(attachments?.content ?? [{ type: 'text', text: `${input.senderName}: ${input.text}` }]),
+		...(input.recall ? [{ type: 'text' as const, text: input.recall }] : [])
+	];
 	return getDb().transaction((tx) => {
 		if (attachments?.uploadIds.length) {
 			const taken = tx
@@ -452,11 +475,7 @@ export function insertQueued(input: {
 				senderId: input.senderId,
 				senderName: input.senderName,
 				text: input.text,
-				// Without attachments the model sees only the sender's name and what they wrote.
-				content: JSON.stringify(
-					attachments?.content ??
-						([{ type: 'text', text: `${input.senderName}: ${input.text}` }] satisfies Block[])
-				),
+				content: JSON.stringify(content),
 				format: 'nolune',
 				attachments: attachments ? JSON.stringify(attachments.files) : null,
 				provider: input.provider ?? null,

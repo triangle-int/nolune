@@ -7,21 +7,25 @@
 		title: string;
 		/** The folder it's in, like "People" for people/anna.md. */
 		group: string | null;
+		/** Where its category is in the list of them; notes from before them come last. */
+		rank: number;
+		/** The member of the profile it's about, for a person's note. */
+		member: string | null;
 		updatedAt: number;
 		facts: MemoryFact[];
 	}
 
-	/** Most recently changed first. A folder's files stay together, where its newest one is. */
+	/**
+	 * In the order of the categories, so the page reads the same in every family. In a folder, the
+	 * members' notes first, then the most recently changed.
+	 */
 	export function orderTopics(topics: Topic[]): Topic[] {
-		const newest = [...topics].sort((a, b) => b.updatedAt - a.updatedAt);
-		const ordered: Topic[] = [];
-		for (const topic of newest) {
-			if (!topic.group) ordered.push(topic);
-			else if (!ordered.some((t) => t.group === topic.group)) {
-				ordered.push(...newest.filter((t) => t.group === topic.group));
-			}
-		}
-		return ordered;
+		return [...topics].sort(
+			(a, b) =>
+				a.rank - b.rank ||
+				Number(b.member !== null) - Number(a.member !== null) ||
+				b.updatedAt - a.updatedAt
+		);
 	}
 
 	const DAY = 24 * 60 * 60 * 1000;
@@ -40,6 +44,7 @@
 </script>
 
 <script lang="ts">
+	import UserAvatar from '$lib/components/UserAvatar.svelte';
 	import { formatAgo } from '$lib/format';
 	import { getI18n } from '$lib/i18n';
 
@@ -123,11 +128,16 @@
 				>
 					<button
 						type="button"
-						class="w-24 shrink-0 truncate text-left text-[15px] leading-4 text-foreground/70 transition-colors hover:text-foreground sm:w-40"
+						class="flex w-24 shrink-0 items-center gap-1.5 text-left text-[15px] leading-4 text-foreground/70 transition-colors hover:text-foreground sm:w-40"
 						class:pl-3={topic.group}
 						aria-label={m.memory.topicLabel(topic.title, topic.facts.length)}
-						onclick={() => onpick?.(topic.path)}>{topic.title}</button
+						onclick={() => onpick?.(topic.path)}
 					>
+						{#if topic.member}
+							<UserAvatar name={topic.member} class="size-4 text-[9px]" />
+						{/if}
+						<span class="min-w-0 truncate">{topic.title}</span>
+					</button>
 					<div class="flex min-h-4 flex-1 flex-wrap gap-2.5 sm:gap-3">
 						{#each timeline(topic.facts) as fact, i (i)}
 							<span

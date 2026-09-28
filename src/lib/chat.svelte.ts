@@ -1,6 +1,7 @@
 import type {
 	BackgroundItem,
 	ChatModel,
+	DisplayMemoryLook,
 	DisplayMessage,
 	LiveBlock,
 	LiveEvent,
@@ -24,6 +25,8 @@ export class ChatState {
 	toolOutput = $state<{ id: string; text: string } | null>(null);
 	/** Background commands and subagents still working for this chat. */
 	background = $state<BackgroundItem[]>([]);
+	/** What the note-taker saved from this chat, each shown after the last message it read. */
+	memory = $state<DisplayMemoryLook[]>([]);
 	connected = $state(false);
 	loaded = $state(false);
 
@@ -48,6 +51,7 @@ export class ChatState {
 				this.live = event.snapshot.live;
 				this.toolOutput = event.snapshot.toolOutput;
 				this.background = event.snapshot.background;
+				this.memory = event.snapshot.memory;
 				this.loaded = true;
 				break;
 			case 'title':
@@ -58,6 +62,9 @@ export class ChatState {
 				break;
 			case 'background':
 				this.background = event.background;
+				break;
+			case 'memory':
+				this.memory = event.memory;
 				break;
 			case 'status':
 				this.running = event.running;

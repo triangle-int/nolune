@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_PINNED_CHARS, listMemoryFiles, readMemoryNote } from './memory.ts';
 import { parseMemoryExport, type ExportedFact } from './memory-export.ts';
-import { importMemoryExport, noteName } from './memory-import.ts';
+import { noteName } from './memory-categories.ts';
+import { importMemoryExport } from './memory-import.ts';
 import { makeFamily } from './test/fixtures.ts';
 
 const EXPORT = `\`\`\`

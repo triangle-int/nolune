@@ -17,7 +17,9 @@ import { openaiBaseUrl } from './openai.ts';
 
 /*
  * Chats on OpenAI's models, through the Responses API and OpenAI's SDK, and its Files API for
- * pictures and PDFs. The rest of nolune calls it through models.ts.
+ * pictures and PDFs. The rest of nolune calls it through models.ts. A custom provider
+ * (custom-providers.ts) can speak the same API, so its chats go through the same code with its
+ * own client (a `ResponsesApi`), leaving out what only OpenAI has.
  *
  * Requests are stateless (`store: false`): like Anthropic's, every call sends the whole
  * transcript, so nothing depends on OpenAI keeping a conversation. A reply is stored as the
@@ -96,6 +98,27 @@ async function getClient(): Promise<OpenAI> {
 	return cached.client;
 }
 
+/**
+ * Where Responses API calls go: OpenAI, or a custom provider (custom-providers.ts). A custom
+ * provider gets the same requests without what only OpenAI has: encrypted reasoning, its prompt
+ * cache key and reasoning levels above `high`.
+ */
+export interface ResponsesApi {
+	provider: 'openai' | 'custom-openai';
+	client(): Promise<OpenAI>;
+	/** Whose calls these are, for what's learned from refusals: a hash or an address, never a key. */
+	account(): string;
+	/** The model's id where it runs: a custom provider's without its id before it. */
+	modelName(model: string): string;
+}
+
+const OPENAI: ResponsesApi = {
+	provider: 'openai',
+	client: getClient,
+	account: () => accountOf(apiKey()),
+	modelName: (model) => model
+};
+
 // --- nolune's format as OpenAI takes it ---
 
 type Stored = { type?: unknown } & Record<string, unknown>;
@@ -103,11 +126,11 @@ type Stored = { type?: unknown } & Record<string, unknown>;
 /** What OpenAI returned in a reply, which goes back as it is. */
 const OUTPUT_TYPES = new Set(['message', 'reasoning', 'function_call']);
 
-/** A text, picture or PDF block as an input content part; one OpenAI can't open, as a note. */
-function inputPart(block: Block): InputPart | null {
+/** A text, picture or PDF block as an input content part; one `provider` can't open, as a note. */
+function inputPart(block: Block, provider: ResponsesApi['provider']): InputPart | null {
 	if (block.type === 'text') return { type: 'input_text', text: block.text };
 	if (block.type !== 'image' && block.type !== 'pdf') return null;
-	if (heldElsewhere(block, 'openai')) {
+	if (heldElsewhere(block, provider)) {
 		return { type: 'input_text', text: heldElsewhereNote(block).text };
 	}
 	const { source } = block;
@@ -124,9 +147,12 @@ function inputPart(block: Block): InputPart | null {
 	return { type: 'input_file', filename: block.name || 'document.pdf', file_data: data };
 }
 
-function toolOutput(content: ToolResultBlock['content']): string | OutputPart[] {
+function toolOutput(
+	content: ToolResultBlock['content'],
+	provider: ResponsesApi['provider']
+): string | OutputPart[] {
 	if (typeof content === 'string') return content;
-	return content.flatMap((b) => (inputPart(b) as OutputPart | null) ?? []);
+	return content.flatMap((b) => (inputPart(b, provider) as OutputPart | null) ?? []);
 }
 
 /** A reply of this model's, as the API returned it: its output items, reasoning included. */
@@ -154,19 +180,24 @@ function nativeItems(content: unknown[]): InputItem[] {
 }
 
 /**
- * A conversation's messages as the Responses API's `input` for `model`. Replies it wrote go back
- * as they came, except reasoning without its encrypted content, which can't be read back without
- * `store`. Replies from another model or provider (the conversation switched), and nolune's own, go
- * as their text and calls: reasoning goes back only to the model that wrote it.
+ * A conversation's messages as the Responses API's `input` for `model` on `provider`. Replies it
+ * wrote go back as they came, except reasoning without its encrypted content, which can't be read
+ * back without `store` (a custom provider's never has any). Replies from another model or
+ * provider (the conversation switched), and nolune's own, go as their text and calls: reasoning goes
+ * back only to the model that wrote it.
  */
-export function toResponsesInput(messages: Message[], model: string): InputItem[] {
+export function toResponsesInput(
+	messages: Message[],
+	model: string,
+	provider: ResponsesApi['provider'] = 'openai'
+): InputItem[] {
 	const input: InputItem[] = [];
 	for (const m of messages) {
 		if (m.role === 'assistant') {
 			const native = m.native;
 			if (
 				native &&
-				(native.provider === null || (native.provider === 'openai' && native.model === model))
+				(native.provider === null || (native.provider === provider && native.model === model))
 			) {
 				input.push(...nativeItems(native.content));
 				continue;
@@ -197,10 +228,10 @@ export function toResponsesInput(messages: Message[], model: string): InputItem[
 				input.push({
 					type: 'function_call_output',
 					call_id: b.callId,
-					output: toolOutput(b.content)
+					output: toolOutput(b.content, provider)
 				});
 			} else {
-				const part = inputPart(b);
+				const part = inputPart(b, provider);
 				if (part) parts.push(part);
 			}
 		}
@@ -244,6 +275,53 @@ function refusesSummaries(err: unknown): boolean {
 	);
 }
 
+/**
+ * Models of a custom provider that refused reasoning settings (a model that doesn't reason, on a
+ * server that says so), by address and model, learned from the first refusal.
+ */
+const noReasoning = new Set<string>();
+
+function refusesReasoning(err: unknown): boolean {
+	return (
+		isSdkError(err, 'APIError') &&
+		(err.status === 400 || err.status === 422) &&
+		/reason|think|effort/i.test(err.message)
+	);
+}
+
+/**
+ * Makes a request with what the account and model take, learned from refusals: `summaries`, and
+ * on a custom provider `reasoning` at all. A refusal is learned and the request made again.
+ */
+async function withRefusals<T>(
+	api: ResponsesApi,
+	model: string,
+	request: (takes: { summaries: boolean; reasoning: boolean }) => Promise<T>
+): Promise<T> {
+	// A custom provider's client comes from custom-providers.ts: its errors are checked with this
+	// module's SDK.
+	await loadSdk();
+	const account = api.account();
+	const takes = () => ({
+		summaries: !noSummaries.has(account),
+		reasoning: supportsReasoning(api.modelName(model)) && !noReasoning.has(`${account} ${model}`)
+	});
+	try {
+		return await request(takes());
+	} catch (err) {
+		if (!noSummaries.has(account) && refusesSummaries(err)) noSummaries.add(account);
+		else if (api.provider !== 'openai' && takes().reasoning && refusesReasoning(err)) {
+			noReasoning.add(`${account} ${model}`);
+		} else throw err;
+		return request(takes());
+	}
+}
+
+/** OpenAI's levels above `high` are its own; a custom provider gets `high` for them. */
+function effortFor(api: ResponsesApi, effort: Effort): Effort {
+	return api.provider === 'openai' || !['xhigh', 'max'].includes(effort) ? effort : 'high';
+}
+
 /** Reads the stream, telling `onEvent` about each block as it grows, and returns the response. */
 async function readStream(
 	stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
@@ -262,9 +340,11 @@ async function readStream(
 				}
 				break;
 			}
+			// Text, a refusal, OpenAI's reasoning summary, or a server's reasoning in full (vLLM).
 			case 'response.output_text.delta':
 			case 'response.refusal.delta':
 			case 'response.reasoning_summary_text.delta':
+			case 'response.reasoning_text.delta':
 				onEvent({ type: 'delta', index: event.output_index, text: event.delta });
 				break;
 			case 'response.reasoning_summary_part.added':
@@ -284,71 +364,75 @@ async function readStream(
 	throw new ReplyError('The reply ended before it was complete.');
 }
 
-/** One model call, streamed. See models.ts for what stays fixed between calls. */
-export async function streamResponse(opts: {
-	model: string;
-	effort: Effort;
-	system: string;
-	tools: Anthropic.Tool[];
-	messages: Message[];
-	cacheKey: string;
-	signal: AbortSignal;
-	onEvent: (event: StreamEvent) => void;
-}): Promise<OpenAI.Responses.Response> {
-	const client = await getClient();
-	const account = accountOf(apiKey());
-	const request = (summaries: boolean) =>
+/**
+ * One model call, streamed. See models.ts for what stays fixed between calls. `api`: OpenAI, or
+ * a custom provider.
+ */
+export async function streamResponse(
+	opts: {
+		model: string;
+		effort: Effort;
+		system: string;
+		tools: Anthropic.Tool[];
+		messages: Message[];
+		cacheKey: string;
+		signal: AbortSignal;
+		onEvent: (event: StreamEvent) => void;
+	},
+	api: ResponsesApi = OPENAI
+): Promise<OpenAI.Responses.Response> {
+	const client = await api.client();
+	const openai = api.provider === 'openai';
+	const stream = await withRefusals(api, opts.model, (takes) =>
 		client.responses.create(
 			{
-				model: opts.model,
+				model: api.modelName(opts.model),
 				instructions: opts.system,
-				input: toResponsesInput(opts.messages, opts.model),
+				input: toResponsesInput(opts.messages, opts.model, api.provider),
 				tools: opts.tools.map(functionTool),
 				store: false,
 				stream: true,
-				...(supportsReasoning(opts.model)
+				...(takes.reasoning
 					? {
 							reasoning: {
-								effort: opts.effort,
-								...(summaries ? { summary: 'auto' as const } : {})
+								effort: effortFor(api, opts.effort),
+								...(takes.summaries ? { summary: 'auto' as const } : {})
 							},
-							include: ['reasoning.encrypted_content' as const]
+							...(openai ? { include: ['reasoning.encrypted_content' as const] } : {})
 						}
 					: {}),
-				prompt_cache_key: opts.cacheKey
+				...(openai ? { prompt_cache_key: opts.cacheKey } : {})
 			},
 			{ signal: opts.signal }
-		);
-	let stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>;
-	try {
-		stream = await request(!noSummaries.has(account));
-	} catch (err) {
-		if (noSummaries.has(account) || !refusesSummaries(err)) throw err;
-		noSummaries.add(account);
-		stream = await request(false);
-	}
+		)
+	);
 	return readStream(stream, opts.onEvent);
 }
 
 /** One short exchange, not streamed, at low effort (see models.ts). */
-export async function createResponse(opts: {
-	model: string;
-	system: string;
-	input: string;
-	maxTokens: number;
-	timeoutMs: number;
-}): Promise<OpenAI.Responses.Response> {
-	const client = await getClient();
-	return client.responses.create(
-		{
-			model: opts.model,
-			instructions: opts.system,
-			input: opts.input,
-			max_output_tokens: opts.maxTokens,
-			store: false,
-			...(supportsReasoning(opts.model) ? { reasoning: { effort: 'low' as const } } : {})
-		},
-		{ timeout: opts.timeoutMs }
+export async function createResponse(
+	opts: {
+		model: string;
+		system: string;
+		input: string;
+		maxTokens: number;
+		timeoutMs: number;
+	},
+	api: ResponsesApi = OPENAI
+): Promise<OpenAI.Responses.Response> {
+	const client = await api.client();
+	return withRefusals(api, opts.model, (takes) =>
+		client.responses.create(
+			{
+				model: api.modelName(opts.model),
+				instructions: opts.system,
+				input: opts.input,
+				max_output_tokens: opts.maxTokens,
+				store: false,
+				...(takes.reasoning ? { reasoning: { effort: 'low' as const } } : {})
+			},
+			{ timeout: opts.timeoutMs }
+		)
 	);
 }
 

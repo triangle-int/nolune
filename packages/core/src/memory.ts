@@ -23,6 +23,14 @@ import {
 	serializeFactIndex,
 	type FactIndex
 } from './memory-facts.ts';
+import {
+	aliasesOf,
+	categoryOf,
+	categoryProblem,
+	isAliasLine,
+	nameKey,
+	titleIn
+} from './memory-categories.ts';
 import { profileDir, profileMemoryDir } from './paths.ts';
 
 /*
@@ -125,13 +133,15 @@ function notePath(root: string, topic: string): string {
 	return full;
 }
 
-/** A note's name as a title: `people/anna-smith.md` is "Anna smith". */
+/** A note's name as a title: `home.md` is "Home", and a person's `people/anna-smith.md` "Anna Smith". */
 function titleOf(path: string): string {
 	const words = basename(path)
 		.replace(/\.[^.]+$/, '')
 		.replace(/[-_]+/g, ' ')
 		.trim();
-	return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Notes';
+	const upper = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+	if (!words) return 'Notes';
+	return categoryOf(path) === 'people' ? words.split(' ').map(upper).join(' ') : upper(words);
 }
 
 /** `path` is relative to the memory folder, like `core.md`. */
@@ -364,12 +374,32 @@ export function readMemoryNote(slug: string, topic: string): { path: string; tex
 
 // --- Changes, for `nolune memory` ---
 
-/** Adds one fact as a bullet at the end of a note, creating the note if needed. */
+/**
+ * The facts in `text`, one per line, without their bullets: a list given as one fact (by a model,
+ * or a command's quoted argument) would otherwise be joined into one line.
+ */
+export function factLines(text: string): string[] {
+	return text
+		.split(/\r?\n/)
+		.map((line) =>
+			line
+				.replace(/\s+/g, ' ')
+				.trim()
+				.replace(/^[-*+]\s+/, '')
+		)
+		.filter(Boolean);
+}
+
+/**
+ * Adds one fact as a bullet at the end of a note, or of the part under the heading `under`,
+ * creating the note if needed. A person's "Also called" that names no one new is a duplicate.
+ */
 export function addMemoryFact(
 	slug: string,
 	topic: string,
-	fact: string
-): { path: string; created: boolean; duplicate: boolean } {
+	fact: string,
+	under?: string
+): { path: string; created: boolean; duplicate: boolean; line: string } {
 	const root = openMemory(slug);
 	const full = notePath(root, topic);
 	const path = relPath(root, full);
@@ -380,16 +410,29 @@ export function addMemoryFact(
 	if (!line) refuse('The fact is empty.');
 	const exists = existsSync(full);
 	if (exists && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
+	if (!categoryOf(path)) refuse(categoryProblem(path, exists));
 	const before = exists ? readFileSync(full, 'utf8') : '';
 	const key = factKey(parseFacts(`- ${line}`)[0] ?? line);
-	if (parseFacts(before).some((known) => factKey(known) === key)) {
-		return { path, created: false, duplicate: true };
+	if (
+		parseFacts(before).some((known) => factKey(known) === key) ||
+		namesNoOneNew(path, before, line)
+	) {
+		return { path, created: false, duplicate: true, line: `- ${line}` };
 	}
-	const text = before.trim()
-		? `${before.trimEnd()}\n- ${line}\n`
-		: `# ${titleOf(path)}\n\n- ${line}\n`;
-	saveNote(root, full, text);
-	return { path, created: !exists, duplicate: false };
+	const lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
+	saveNote(root, full, `${withFact(lines, `- ${line}`, under).join('\n')}\n`);
+	return { path, created: !exists, duplicate: false, line: `- ${line}` };
+}
+
+/** A person's "Also called" line whose names their note has already, its title or its others. */
+function namesNoOneNew(path: string, note: string, line: string): boolean {
+	if (categoryOf(path) !== 'people' || !isAliasLine(line)) return false;
+	const known = new Set(
+		[titleOf(path), titleIn(note), ...aliasesOf(note)].flatMap((name) =>
+			name ? [nameKey(name)] : []
+		)
+	);
+	return aliasesOf(line).every((name) => known.has(nameKey(name)));
 }
 
 /**
@@ -408,6 +451,7 @@ export function addMemoryFacts(
 	const full = notePath(root, topic);
 	const path = relPath(root, full);
 	if (existsSync(full) && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
+	if (!categoryOf(path)) refuse(categoryProblem(path, existsSync(full)));
 	const before = existsSync(full) ? readFileSync(full, 'utf8') : '';
 	const known = new Set(parseFacts(before).map(factKey));
 	let lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
@@ -448,27 +492,40 @@ export function addMemoryFacts(
 	return { path, added, left };
 }
 
-/** The note's lines with a bullet added at the end of `## heading`, which is made if missing. */
+/**
+ * The note's lines with a bullet added at the end of the part under `heading`, a heading of any
+ * level (the note's title too) up to the next one, as readFacts tells which heading a fact is
+ * under; it's started as `## heading` at the end when the note lacks it. Without one, at the end.
+ */
 function withFact(lines: string[], bullet: string, heading?: string): string[] {
 	const out = [...lines];
-	if (!heading) return [...out, ...(out.at(-1)?.startsWith('- ') ? [] : ['']), bullet];
-	const start = out.findIndex((l) => l.trim().toLowerCase() === `## ${heading.toLowerCase()}`);
-	if (start === -1) return [...out, '', `## ${heading}`, '', bullet];
-	let end = out.findIndex((l, i) => i > start && /^#{1,2}\s/.test(l));
+	const title = heading
+		?.replace(/^#+\s*/, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (!title) return [...out, ...(out.at(-1)?.startsWith('- ') ? [] : ['']), bullet];
+	const headingOf = (line: string) => line.trim().match(/^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
+	const start = out.findIndex((l) => headingOf(l)?.[2].toLowerCase() === title.toLowerCase());
+	if (start === -1) return [...out, '', `## ${title}`, '', bullet];
+	let end = out.findIndex((l, i) => i > start && headingOf(l));
 	if (end === -1) end = out.length;
-	// After the section's last line, before the blank lines leading to the next heading.
+	// After the part's last line, before the blank lines leading to the next heading.
 	while (end > start + 1 && !out[end - 1].trim()) end--;
 	out.splice(end, 0, ...(end === start + 1 ? [''] : []), bullet);
 	return out;
 }
 
 /** Replaces text that appears exactly once in a note. */
+/**
+ * Replaces the one place `oldText` is in a note. Returns the whole lines it touched, as they were
+ * (`before`) and as they are now (`after`), for putting them back (revertMemoryLines).
+ */
 export function replaceInMemory(
 	slug: string,
 	topic: string,
 	oldText: string,
 	newText: string
-): { path: string } {
+): { path: string; before: string; after: string } {
 	const root = openMemory(slug);
 	const full = notePath(root, topic);
 	const path = relPath(root, full);
@@ -485,9 +542,54 @@ export function replaceInMemory(
 			`"${oldText}" is in ${path} ${hits.length} times (lines ${lines.join(', ')}). Include more of the text so it matches once.`
 		);
 	}
+	const at = hits[0];
 	// Sliced, not String.replace: `$&` and friends in the new text are meant literally.
-	saveNote(root, full, text.slice(0, hits[0]) + newText + text.slice(hits[0] + oldText.length));
-	return { path };
+	const changed = text.slice(0, at) + newText + text.slice(at + oldText.length);
+	saveNote(root, full, changed);
+	const start = text.lastIndexOf('\n', at - 1) + 1;
+	const next = text.indexOf('\n', at + oldText.length);
+	const end = next === -1 ? text.length : next;
+	return {
+		path,
+		before: text.slice(start, end),
+		after: changed.slice(start, end + newText.length - oldText.length)
+	};
+}
+
+/**
+ * Puts back what a change left in a note: the whole lines `current`, where they are once, become
+ * `restore`, or go when it's null. A note left without facts goes too when `dropEmpty`. Refuses
+ * when the lines aren't there once any more, since someone changed them since.
+ */
+export function revertMemoryLines(
+	slug: string,
+	topic: string,
+	current: string,
+	restore: string | null,
+	dropEmpty = false
+): { path: string; removedNote: boolean } {
+	const root = openMemory(slug);
+	const full = notePath(root, topic);
+	const path = relPath(root, full);
+	const lines = readNote(root, full, topic).split('\n');
+	const wanted = current.split('\n');
+	const starts: number[] = [];
+	for (let i = 0; i + wanted.length <= lines.length; i++) {
+		if (wanted.every((line, j) => lines[i + j] === line)) starts.push(i);
+	}
+	if (starts.length !== 1) refuse(`${path} changed since, so that can't be put back.`);
+	lines.splice(starts[0], wanted.length, ...(restore === null ? [] : restore.split('\n')));
+	const text = lines.join('\n');
+	if (dropEmpty && !parseFacts(text).length) {
+		changing(
+			root,
+			() => unlinkSync(full),
+			(index) => forgetFacts(index, path)
+		);
+		return { path, removedNote: true };
+	}
+	saveNote(root, full, text);
+	return { path, removedNote: false };
 }
 
 /** Removes the one line of a note that contains `match` (ignoring case). */
@@ -531,6 +633,9 @@ export function writeMemoryNote(
 	if (!text.trim()) refuse('The note is empty. To delete it, use `nolune memory rm`.');
 	if (existsSync(full) && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
 	const created = !existsSync(full);
+	// A note from before the categories can be rewritten; a new one goes into one.
+	if (created && !categoryOf(relPath(root, full)))
+		refuse(categoryProblem(relPath(root, full), false));
 	saveNote(root, full, text.endsWith('\n') ? text : `${text}\n`);
 	return { path: relPath(root, full), created };
 }
@@ -559,16 +664,166 @@ export function renameMemoryNote(
 	const text = readNote(root, source, from);
 	if (existsSync(target)) refuse(`There already is a note "${to}".`);
 	const moved = { from: relPath(root, source), to: relPath(root, target) };
-	checkSize(text, moved.to);
+	if (!categoryOf(moved.to)) refuse(categoryProblem(moved.to, false));
+	// Into people/ from elsewhere, it's titled with their name, like every person's note.
+	const retitled =
+		categoryOf(moved.to) === 'people' && categoryOf(moved.from) !== 'people'
+			? withTitle(text, titleOf(moved.to))
+			: null;
+	checkSize(retitled ?? text, moved.to);
 	changing(
 		root,
 		() => {
 			mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
 			renameSync(source, target);
+			if (retitled !== null) writeAtomic(target, retitled);
 		},
 		(index) => moveFacts(index, moved.from, moved.to)
 	);
 	return moved;
+}
+
+/** The note with `title` as its `# title`, in place of the one it had. */
+function withTitle(text: string, title: string): string {
+	const lines = text.split('\n');
+	const first = lines.findIndex((line) => line.trim());
+	if (first !== -1 && /^#\s/.test(lines[first].trim())) lines[first] = `# ${title}`;
+	else lines.unshift(`# ${title}`, '');
+	return lines.join('\n');
+}
+
+/**
+ * A note's body in the pieces a merge moves, each under the heading it was under (null: the
+ * note's title, or none): a bullet with its indented lines, a paragraph, a table, a code block.
+ */
+function noteParts(text: string): { title: string | null; parts: [string | null, string][] } {
+	const parts: [string | null, string][] = [];
+	let title: string | null = null;
+	let heading: string | null = null;
+	let piece: string[] = [];
+	let kind: 'bullet' | 'text' | 'table' | 'code' | null = null;
+	const flush = () => {
+		if (piece.length) parts.push([heading, piece.join('\n')]);
+		piece = [];
+		kind = null;
+	};
+	for (const raw of text.split('\n')) {
+		const line = raw.trimEnd();
+		if (kind === 'code') {
+			piece.push(line);
+			if (/^\s*(```|~~~)/.test(line)) flush();
+			continue;
+		}
+		const head = line.match(/^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
+		if (head) {
+			flush();
+			if (head[1] === '#' && title === null && !parts.length && heading === null) title = head[2];
+			else heading = head[2];
+			continue;
+		}
+		if (!line.trim()) {
+			if (kind !== 'bullet') flush();
+			continue;
+		}
+		if (/^\s*(```|~~~)/.test(line)) {
+			flush();
+			kind = 'code';
+			piece.push(line);
+		} else if (/^[-*+]\s+/.test(line)) {
+			flush();
+			kind = 'bullet';
+			piece.push(line);
+		} else if (kind === 'bullet' && /^\s/.test(line)) {
+			piece.push(line);
+		} else {
+			const next = line.startsWith('|') ? 'table' : 'text';
+			if (kind !== next) flush();
+			kind = next;
+			piece.push(line);
+		}
+	}
+	flush();
+	return { title, parts };
+}
+
+/**
+ * Puts what one note says into another about the same thing (two notes about one person, say)
+ * and deletes it: each piece under the heading it was under, with the dates its facts were
+ * learned; what the other note says already is left out. Into a person's note, the other's title
+ * and what it was called go into its "Also called" line. Into a note that isn't there yet, it's a
+ * move (`merged` is false).
+ */
+export function mergeMemoryNotes(
+	slug: string,
+	from: string,
+	into: string
+): { from: string; into: string; added: number; merged: boolean } {
+	const root = openMemory(slug);
+	const source = notePath(root, from);
+	const target = notePath(root, into);
+	const fromText = readNote(root, source, from);
+	const merged = { from: relPath(root, source), into: relPath(root, target) };
+	if (merged.from === merged.into) refuse('That is the same note.');
+	if (isPinnedNote(merged.from) || isPinnedNote(merged.into)) {
+		refuse('core is pinned and kept small: move facts in or out of it one at a time.');
+	}
+	if (existsSync(target)) {
+		// The same file by another name, on a disk that ignores case: merging would delete it.
+		const [a, b] = [statSync(source), statSync(target)];
+		if (a.ino === b.ino && a.dev === b.dev) refuse('That is the same note.');
+	} else {
+		const moved = renameMemoryNote(slug, from, into);
+		return { from: moved.from, into: moved.to, added: parseFacts(fromText).length, merged: false };
+	}
+	const intoText = readNote(root, target, into);
+	if (!categoryOf(merged.into)) refuse(categoryProblem(merged.into, true));
+
+	const person = categoryOf(merged.into) === 'people';
+	const known = new Set(parseFacts(intoText).map(factKey));
+	const { title: fromTitle, parts } = noteParts(fromText);
+	const intoTitle = titleIn(intoText);
+	let lines = intoText.trimEnd().split('\n');
+	let added = 0;
+	for (const [heading, piece] of parts) {
+		if (person && isAliasLine(piece)) continue;
+		const keys = parseFacts(piece).map(factKey);
+		if (!keys.length || keys.every((key) => known.has(key))) continue;
+		lines = withFact(lines, piece, heading ?? intoTitle ?? undefined);
+		for (const key of keys) known.add(key);
+		added++;
+	}
+	if (person) {
+		const taken = new Set(
+			[intoTitle, ...aliasesOf(intoText)].filter(Boolean).map((n) => nameKey(n!))
+		);
+		const names = [fromTitle, ...aliasesOf(fromText)].filter((name): name is string => {
+			const key = name ? nameKey(name) : '';
+			if (!key || taken.has(key)) return false;
+			taken.add(key);
+			return true;
+		});
+		const at = lines.findIndex(isAliasLine);
+		if (names.length && at !== -1) lines[at] = `${lines[at].trimEnd()}, ${names.join(', ')}`;
+		else if (names.length)
+			lines = withFact(lines, `- Also called: ${names.join(', ')}`, intoTitle ?? undefined);
+	}
+	const text = `${lines.join('\n')}\n`;
+	checkSize(text, merged.into);
+	changing(
+		root,
+		() => {
+			writeAtomic(target, text);
+			unlinkSync(source);
+		},
+		(index, now) => {
+			const learned = index.files.get(merged.from);
+			noteFacts(index, merged.into, text, now);
+			const dates = index.files.get(merged.into);
+			for (const [key, at] of learned ?? []) if (dates?.get(key) === now) dates.set(key, at);
+			forgetFacts(index, merged.from);
+		}
+	);
+	return { ...merged, added, merged: true };
 }
 
 // --- The Memory page ---

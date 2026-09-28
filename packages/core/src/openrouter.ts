@@ -9,11 +9,9 @@ import {
 	placeholder,
 	portableReply,
 	unresolved,
+	withoutUnreadable,
 	type Block,
-	type ImageBlock,
 	type Message,
-	type PdfBlock,
-	type TextBlock,
 	type ToolResultBlock
 } from './format.ts';
 import type { CacheTtl, Effort, ModelChoice, StreamEvent } from './models.ts';
@@ -285,46 +283,13 @@ export function toChatMessages(
 	return out;
 }
 
-/** What a model reads instead of a picture or PDF it can't take. */
-function unreadableNote(block: ImageBlock | PdfBlock, model: string): TextBlock {
-	const what =
-		block.type === 'image'
-			? `Picture not shown: ${model} can't see pictures`
-			: `PDF not shown: ${model} doesn't read PDFs itself`;
-	return { type: 'text', text: `[${what}. The line before this says where its file is.]` };
-}
-
 /**
  * The messages with each picture and PDF `model` can't take as a note, before resolveFiles
  * uploads them: a chat that switched to a text-only model may hold them, and a request carrying
  * one would fail. Messages without any are returned as they are.
  */
-export async function readableMessages(messages: Message[], model: string): Promise<Message[]> {
-	const isFile = (b: Block) => b.type === 'image' || b.type === 'pdf';
-	const holdsFiles = messages.some((m) =>
-		m.blocks.some(
-			(b) =>
-				isFile(b) ||
-				(b.type === 'tool_result' && Array.isArray(b.content) && b.content.some(isFile))
-		)
-	);
-	if (!holdsFiles) return messages;
-	const inputs = await modelInputs(model);
-	if (inputs.pictures && inputs.pdfs) return messages;
-	return messages.map((m) => {
-		let changed = false;
-		const readable = <B extends Block>(b: B): B | TextBlock => {
-			if ((b.type !== 'image' || inputs.pictures) && (b.type !== 'pdf' || inputs.pdfs)) return b;
-			changed = true;
-			return unreadableNote(b as unknown as ImageBlock | PdfBlock, model);
-		};
-		const blocks = m.blocks.map((b): Block =>
-			b.type === 'tool_result' && Array.isArray(b.content)
-				? { ...b, content: b.content.map(readable) }
-				: readable(b)
-		);
-		return changed ? { ...m, blocks } : m;
-	});
+export function readableMessages(messages: Message[], model: string): Promise<Message[]> {
+	return withoutUnreadable(messages, model, () => modelInputs(model));
 }
 
 /** A tool as nolune saves it (Anthropic's format) as a function tool. */

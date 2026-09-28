@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { resolve } from '$app/paths';
+	import type { MemberNote, PersonNote } from '@nolune/core';
 	import { isAvatar, type Avatar } from '@nolune/core/avatars';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -9,7 +11,9 @@
 	import AvatarPicker from '$lib/components/AvatarPicker.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import UserAvatar from '$lib/components/UserAvatar.svelte';
+	import PersonNoteChooser from '$lib/components/memory/PersonNoteChooser.svelte';
 	import { getI18n } from '$lib/i18n';
+	import { memoryAnchor } from '$lib/memory';
 	import { getPreferences } from '$lib/preferences.svelte';
 
 	let { data, form } = $props();
@@ -18,6 +22,39 @@
 	const { m } = getI18n();
 	let who = $state('');
 	let deleteOpen = $state(false);
+
+	/** Whose note is being chosen, and how: see PersonNoteChooser. */
+	let choosingFor = $state<string | null>(null);
+	let chooser = $state<{
+		notes: PersonNote[];
+		action: string;
+		fields: Record<string, string>;
+		current: string | null;
+		adding: boolean;
+	}>({ notes: [], action: '', fields: {}, current: null, adding: false });
+
+	/** The notes a member's could be: the ones that may be about them first, none of others'. */
+	function notesFor(member: MemberNote): PersonNote[] {
+		const others = new Set(
+			data.members.flatMap((other) => (other.id !== member.id && other.note ? [other.note] : []))
+		);
+		const first = new Set(member.candidates.map((note) => note.path));
+		return [
+			...member.candidates,
+			...data.people.filter((note) => !first.has(note.path) && !others.has(note.path))
+		];
+	}
+
+	function chooseFor(member: MemberNote) {
+		chooser = {
+			notes: notesFor(member),
+			action: '?/link',
+			fields: { userId: member.id },
+			current: member.note,
+			adding: false
+		};
+		choosingFor = member.name;
+	}
 	/** The avatar just clicked, shown as picked until the page has saved it. */
 	let picking = $state<Avatar | null>(null);
 	const avatar = $derived(picking ?? data.profile.avatar);
@@ -151,7 +188,33 @@
 				{#each data.members as member (member.id)}
 					<li class="flex items-center gap-3 border-b px-4 py-2.5 text-sm last:border-b-0">
 						<UserAvatar name={member.name} />
-						<span class="min-w-0 flex-1 truncate">{member.name}</span>
+						<div class="min-w-0 flex-1">
+							<p class="truncate">{member.name}</p>
+							<p class="truncate text-xs text-muted-foreground">
+								{#if member.note && member.exists}
+									<a
+										href="{resolve('/p/[slug]/memory', {
+											slug: data.profile.slug
+										})}#{memoryAnchor(member.note)}"
+										class="underline-offset-2 hover:text-foreground hover:underline"
+										>{m.profile.memberNote(member.note)}</a
+									>
+								{:else if member.note}
+									{m.profile.noteStarts(member.note)}
+								{:else}
+									{m.profile.mayHaveNote}
+								{/if}
+							</p>
+						</div>
+						{#if notesFor(member).some((note) => note.path !== member.note)}
+							<Button
+								variant="ghost"
+								size="sm"
+								class="text-muted-foreground"
+								onclick={() => chooseFor(member)}
+								>{member.note ? m.profile.changeNote : m.profile.chooseNote}</Button
+							>
+						{/if}
 						<form method="POST" action="?/remove" use:enhance>
 							<input type="hidden" name="userId" value={member.id} />
 							<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground"
@@ -162,7 +225,28 @@
 				{/each}
 			</ul>
 			{#if data.others.length}
-				<form method="POST" action="?/add" use:enhance class="flex gap-2">
+				<form
+					method="POST"
+					action="?/add"
+					use:enhance={() =>
+						async ({ result, update }) => {
+							const choose =
+								result.type === 'success'
+									? (result.data?.choose as { who: string; candidates: PersonNote[] } | undefined)
+									: undefined;
+							if (!choose) return update();
+							// Memory may know them already: which note is theirs?
+							chooser = {
+								notes: choose.candidates,
+								action: '?/add',
+								fields: { who },
+								current: null,
+								adding: true
+							};
+							choosingFor = choose.who;
+						}}
+					class="flex gap-2"
+				>
 					<input type="hidden" name="who" value={who} />
 					<Select.Root type="single" bind:value={who}>
 						<Select.Trigger
@@ -197,6 +281,8 @@
 		</section>
 	</div>
 </div>
+
+<PersonNoteChooser bind:person={choosingFor} {...chooser} />
 
 <AlertDialog.Root bind:open={deleteOpen}>
 	<AlertDialog.Content>

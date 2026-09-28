@@ -1,11 +1,18 @@
-import type { DisplayMedia, DisplayMessage, LiveBlock, Usage } from '@nolune/core';
+import type {
+	DisplayMedia,
+	DisplayMemoryLook,
+	DisplayMessage,
+	LiveBlock,
+	Usage
+} from '@nolune/core';
 import { firstLine, partialToolInput } from './commands';
 import type { Messages } from './i18n';
 
 /**
  * Turns the stored rows into what the chat shows: people's messages, and nolune's replies as a run
  * of text parts and "activity" parts. An activity part is every thinking and command block
- * between two pieces of text, folded into one collapsible group.
+ * between two pieces of text, folded into one collapsible group. What the note-taker saved goes
+ * after the last message it read.
  */
 
 export interface ToolResult {
@@ -70,6 +77,7 @@ export type Entry =
 			message: Extract<DisplayMessage, { kind: 'agent_message' }>;
 	  }
 	| { type: 'task_result'; key: string; message: Extract<DisplayMessage, { kind: 'task_result' }> }
+	| { type: 'memory'; key: string; look: DisplayMemoryLook }
 	| Reply;
 
 /** Messages that aren't nolune's: each one ends the reply before it. */
@@ -103,13 +111,26 @@ function addUsage(total: Usage | null, u: Usage | null): Usage | null {
 export function buildTranscript(
 	messages: DisplayMessage[],
 	live: (LiveBlock | null)[],
-	running: boolean
+	running: boolean,
+	memory: DisplayMemoryLook[] = []
 ): Entry[] {
 	const entries: Entry[] = [];
 	let reply: Reply | null = null;
 	/** Keys replies by what they answer, so a reply keeps its key when its live part is saved. */
 	let anchor = 'start';
 	let previousAt = 0;
+
+	const looks = [...memory].sort((a, b) => a.after - b.after);
+	/** The note-taker's looks at the chat before message `id`, each after the last one it read. */
+	const addLooks = (id: number) => {
+		while (looks.length && looks[0].after < id) {
+			const look = looks.shift()!;
+			const key = `memory-${look.after}`;
+			entries.push({ type: 'memory', key, look });
+			reply = null;
+			anchor = key;
+		}
+	};
 
 	const openReply = (): Reply => {
 		if (!reply) {
@@ -149,6 +170,7 @@ export function buildTranscript(
 	};
 
 	for (const message of messages) {
+		addLooks(message.id);
 		const entry = messageEntry(message);
 		if (entry) {
 			reply = null;
@@ -184,6 +206,8 @@ export function buildTranscript(
 		}
 		previousAt = message.createdAt;
 	}
+
+	addLooks(Infinity);
 
 	const streaming = live.filter((b): b is LiveBlock => b !== null);
 	if (streaming.length || running) {

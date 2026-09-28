@@ -31,6 +31,27 @@ export {
 	saveApiKey,
 	type ApiKeyStatus
 } from './api-keys.ts';
+export {
+	CUSTOM_APIS,
+	CUSTOM_LABELS,
+	CUSTOM_PROVIDERS,
+	CustomProviderError,
+	checkCustomProvider,
+	customProviderId,
+	customProviderNameProblem,
+	findCustomProvider,
+	isCustomProvider,
+	isProviderUrl,
+	listCustomProviders,
+	normalizeProviderUrl,
+	providerFor,
+	removeCustomProvider,
+	saveCustomProvider,
+	splitModel,
+	type CustomApi,
+	type CustomProvider,
+	type CustomProviderStatus
+} from './custom-providers.ts';
 export { getDb, schema, type DB } from './db/index.ts';
 export {
 	MIN_PASSWORD_LENGTH,
@@ -58,6 +79,7 @@ export {
 	onProfileChanged,
 	removeMember,
 	renameProfile,
+	setLearnFromChats,
 	setProfileAvatar,
 	setSkillsEnabled,
 	type Profile
@@ -129,6 +151,7 @@ export {
 	onLoopEnd,
 	onRunningChange,
 	recoverAfterRestart,
+	refreshMemoryLooks,
 	renameConversation,
 	runningConversationIds,
 	sendMessage,
@@ -212,17 +235,27 @@ export {
 } from './subagents.ts';
 export { stopConversation } from './subagent-host.ts';
 export {
+	MemoryUndoError,
+	recentMemoryChanges,
+	undoMemoryChange,
+	type DisplayMemoryChange,
+	type DisplayMemoryLook,
+	type RecentMemoryChange
+} from './memory-changes.ts';
+export {
 	CORE_NOTE,
 	MAX_PINNED_CHARS,
 	MemoryConflictError,
 	MemoryError,
 	addMemoryFact,
 	addMemoryFacts,
+	factLines,
 	forgetMemoryFact,
 	forgetMemoryFile,
 	isPinnedNote,
 	listMemoryFiles,
 	listMemoryNotes,
+	mergeMemoryNotes,
 	readMemoryNote,
 	readPinnedNote,
 	removeMemoryNote,
@@ -233,6 +266,39 @@ export {
 	type MemoryFact,
 	type MemoryFile
 } from './memory.ts';
+export {
+	MEMORY_CATEGORIES,
+	categoryOf,
+	noteName,
+	type MemoryCategory
+} from './memory-categories.ts';
+export {
+	addMemberWithNote,
+	linkPersonNote,
+	listPersonNotes,
+	membersWithNotes,
+	mergeProfileNotes,
+	moveProfileNote,
+	personNoteCandidates,
+	type AddedMember,
+	type MemberNote,
+	type PersonNote
+} from './memory-people.ts';
+export { recallFor, searchMemory, startEmbeddingMemory, type MemoryHit } from './memory-search.ts';
+export {
+	DEFAULT_EMBEDDING_MODELS,
+	embeddingProblem,
+	embeddingSource,
+	embeddingState,
+	embeddingStatus,
+	parseEmbeddingSetting,
+	saveEmbeddingSetting,
+	type EmbeddingProvider,
+	type EmbeddingSetting,
+	type EmbeddingSource,
+	type EmbeddingState
+} from './memory-embeddings.ts';
+export { learnFrom, type MemoryChange } from './memory-learning.ts';
 export {
 	EXPORT_PROMPT,
 	EXPORT_SECTIONS,
