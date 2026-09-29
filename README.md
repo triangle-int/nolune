@@ -205,6 +205,21 @@ and on pushes to `main`.
 
 ### Publishing
 
-`npm pack` builds and packs `build/`, `dist/cli.js` and the migrations. Before the first
-`npm publish`: pick a license, add `license` and `repository` to `package.json`, and remove
-`"private": true`.
+`npm pack` builds and packs `build/` (without source maps), `dist/cli.js` and the migrations.
+
+To release, set `version` in `package.json`, merge it to `main`, then push a matching tag:
+`git tag v0.1.0 && git push origin v0.1.0`. The Publish workflow (`.github/workflows/publish.yml`)
+checks the tag against `package.json`, runs format, lint, types and tests, and publishes with
+`npm publish`. It signs in to npm with
+[trusted publishing](https://docs.npmjs.com/trusted-publishers/), so there's no npm token in the
+repository's secrets, and npm adds provenance on its own.
+
+Once, by hand: publish the first version from your computer (`npm login`, then `npm publish`), since
+a trusted publisher is set on a package that exists. Then, on npmjs.com under the package's
+Settings, add a trusted publisher (GitHub Actions, this repository, `publish.yml`) that may publish
+with `npm publish`, and under Publishing access require two-factor authentication and disallow
+tokens.
+
+## License
+
+[MIT](LICENSE)

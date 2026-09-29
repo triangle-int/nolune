@@ -2,7 +2,16 @@
 	"name": "nolune",
 	"version": "0.0.1",
 	"description": "A small agent that lives on your computer and does things for your family, from a shared web chat.",
-	"private": true,
+	"license": "MIT",
+	"author": "Timur Turatbekov",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/P5ina/btw-agent.git"
+	},
+	"homepage": "https://github.com/P5ina/btw-agent#readme",
+	"bugs": {
+		"url": "https://github.com/P5ina/btw-agent/issues"
+	},
 	"type": "module",
 	"keywords": [
 		"agent",
@@ -17,6 +26,7 @@
 	},
 	"files": [
 		"build",
+		"!build/**/*.map",
 		"dist",
 		"packages/core/drizzle",
 		"packages/core/skills",

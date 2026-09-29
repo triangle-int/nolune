@@ -1577,9 +1577,11 @@ migrations, `build/index.js` and the CLI entry.
 
 ## Distribution
 
-Published to npm as `nolune` (not yet). `npm install -g nolune` gives the `nolune` command.
+Published to npm as `nolune` from a `v*` tag by `.github/workflows/publish.yml`, with npm trusted
+publishing (see Publishing in the README). `npm install -g nolune` gives the `nolune` command.
 
-- The package ships `build/` (the web app), `dist/cli.js` with its `dist/chunks`,
+- The package ships `build/` (the web app, without its source maps, which Node doesn't load unless
+  asked to and which are most of its size), `dist/cli.js` with its `dist/chunks`,
   `packages/core/drizzle`, the built-in skills in `packages/core/skills` and the built-in image
   templates in `packages/core/image-templates`. Its only runtime dependency is `better-sqlite3` (a
   native module with prebuilt binaries). Everything else is bundled. Node won't strip types inside
