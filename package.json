@@ -1,8 +1,17 @@
 {
 	"name": "nolune",
-	"version": "0.0.1",
+	"version": "0.1.0",
 	"description": "A small agent that lives on your computer and does things for your family, from a shared web chat.",
-	"private": true,
+	"license": "MIT",
+	"author": "Triangle Interactive, LLC",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/P5ina/nolune.git"
+	},
+	"homepage": "https://github.com/P5ina/nolune#readme",
+	"bugs": {
+		"url": "https://github.com/P5ina/nolune/issues"
+	},
 	"type": "module",
 	"keywords": [
 		"agent",
@@ -17,6 +26,7 @@
 	},
 	"files": [
 		"build",
+		"!build/**/*.map",
 		"dist",
 		"packages/core/drizzle",
 		"packages/core/skills",

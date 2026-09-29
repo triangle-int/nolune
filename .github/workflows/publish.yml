@@ -1,0 +1,53 @@
+name: Publish
+
+# Pushing a tag like v0.1.0 publishes that version to npm. The tag must match `version` in
+# package.json. npm trusted publishing (OIDC) signs in, so there's no npm token in the secrets.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@latest
+      - name: Check the tag matches package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match package.json version $version"
+            exit 1
+          fi
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec prettier --check .
+      - run: pnpm exec eslint .
+      - run: pnpm check
+      - run: pnpm test
+      # prepack runs `pnpm build`. A version that's on npm already (published by hand, or a re-run)
+      # is left as it is.
+      - name: Publish
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "nolune@$version" version >/dev/null 2>&1; then
+            echo "nolune@$version is on npm already"
+          else
+            npm publish
+          fi
