@@ -6,11 +6,11 @@
 	"author": "Triangle Interactive, LLC",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/P5ina/nolune.git"
+		"url": "git+https://github.com/triangle-int/nolune.git"
 	},
-	"homepage": "https://github.com/P5ina/nolune#readme",
+	"homepage": "https://github.com/triangle-int/nolune#readme",
 	"bugs": {
-		"url": "https://github.com/P5ina/nolune/issues"
+		"url": "https://github.com/triangle-int/nolune/issues"
 	},
 	"type": "module",
 	"keywords": [
