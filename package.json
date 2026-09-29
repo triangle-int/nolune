@@ -6,11 +6,11 @@
 	"author": "Timur Turatbekov",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/P5ina/btw-agent.git"
+		"url": "git+https://github.com/P5ina/nolune.git"
 	},
-	"homepage": "https://github.com/P5ina/btw-agent#readme",
+	"homepage": "https://github.com/P5ina/nolune#readme",
 	"bugs": {
-		"url": "https://github.com/P5ina/btw-agent/issues"
+		"url": "https://github.com/P5ina/nolune/issues"
 	},
 	"type": "module",
 	"keywords": [
