@@ -41,5 +41,13 @@ jobs:
       - run: pnpm exec eslint .
       - run: pnpm check
       - run: pnpm test
-      # prepack runs `pnpm build`.
-      - run: npm publish
+      # prepack runs `pnpm build`. A version that's on npm already (published by hand, or a re-run)
+      # is left as it is.
+      - name: Publish
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "nolune@$version" version >/dev/null 2>&1; then
+            echo "nolune@$version is on npm already"
+          else
+            npm publish
+          fi
