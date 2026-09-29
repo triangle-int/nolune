@@ -16,6 +16,7 @@
 	import StepIcon from './StepIcon.svelte';
 
 	interface Props {
+		conversationId: string;
 		part: ActivityPart;
 		results: Record<string, ToolResult>;
 		toolOutput: { id: string; text: string } | null;
@@ -25,7 +26,7 @@
 		running: boolean;
 	}
 
-	let { part, results, toolOutput, active, running }: Props = $props();
+	let { conversationId, part, results, toolOutput, active, running }: Props = $props();
 
 	const prefs = getPreferences();
 	const { m } = getI18n();
@@ -101,6 +102,7 @@
 						{/if}
 					{:else}
 						<CommandStep
+							{conversationId}
 							command={step.command}
 							cwd={step.cwd}
 							summary={step.summary}

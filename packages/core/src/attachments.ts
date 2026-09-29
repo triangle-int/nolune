@@ -302,25 +302,38 @@ export async function imageBlock(
 	};
 }
 
-/** The images `nolune view` left, for the command's tool_result, each after a line naming it. */
+/**
+ * The images `nolune view` left, for the command's tool_result, each after a line naming it; and
+ * those that were attached, for the chat to show.
+ */
 export async function viewedImageBlocks(
 	conv: ModelOf,
 	images: ViewedImage[],
 	used: ImageUse
-): Promise<(TextBlock | ImageBlock)[]> {
+): Promise<{
+	blocks: (TextBlock | ImageBlock)[];
+	attached: Exclude<ViewedImage, { problem: string }>[];
+}> {
 	const blocks: (TextBlock | ImageBlock)[] = [];
+	const attached: Exclude<ViewedImage, { problem: string }>[] = [];
+	const notAttached = (name: string, problem: string): TextBlock => ({
+		type: 'text',
+		text: `Not attached: ${name} (${problem}).`
+	});
 	for (const image of images) {
-		const result =
-			'problem' in image
-				? { problem: image.problem }
-				: await imageBlock(conv, image.data, image.mediaType, image.name, used);
-		if ('problem' in result) {
-			blocks.push({ type: 'text', text: `Not attached: ${image.name} (${result.problem}).` });
-		} else {
-			blocks.push({ type: 'text', text: `Image: ${image.name}` }, result.block);
+		if ('problem' in image) {
+			blocks.push(notAttached(image.name, image.problem));
+			continue;
 		}
+		const result = await imageBlock(conv, image.data, image.mediaType, image.name, used);
+		if ('problem' in result) {
+			blocks.push(notAttached(image.name, result.problem));
+			continue;
+		}
+		blocks.push({ type: 'text', text: `Image: ${image.name}` }, result.block);
+		attached.push(image);
 	}
-	return blocks;
+	return { blocks, attached };
 }
 
 /**

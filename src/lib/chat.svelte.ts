@@ -7,9 +7,9 @@ import type {
 	LiveEvent,
 	Snapshot
 } from '@nolune/core';
+import type { ToolResult } from './transcript';
 
 type ServerEvent = LiveEvent | { type: 'snapshot'; snapshot: Snapshot };
-type ToolResult = { output: string; isError: boolean };
 
 /** Live state of one conversation, fed by the server-sent event stream. */
 export class ChatState {

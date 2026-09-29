@@ -546,6 +546,15 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 				]
 			})
 		]);
+		// The chat shows the picture under the command's output, which no longer names it.
+		expect(getSnapshot(chat.id).messages.find((m) => m.kind === 'tool_results')).toMatchObject({
+			results: [
+				{
+					output: 'Viewing dot.png\n[exit code 0]',
+					pictures: [{ name: 'dot.png', mime: 'image/png', width: 1, height: 1, viewable: true }]
+				}
+			]
+		});
 	});
 
 	it('stops a running command and ends the turn', async () => {

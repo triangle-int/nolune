@@ -2,6 +2,7 @@ import type {
 	DisplayMedia,
 	DisplayMemoryLook,
 	DisplayMessage,
+	DisplayPicture,
 	LiveBlock,
 	Usage
 } from '@nolune/core';
@@ -18,6 +19,8 @@ import type { Messages } from './i18n';
 export interface ToolResult {
 	output: string;
 	isError: boolean;
+	/** What the command attached with `nolune view`, shown under its output. */
+	pictures: DisplayPicture[];
 }
 
 export type Step =

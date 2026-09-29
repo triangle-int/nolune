@@ -7,8 +7,10 @@
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { resultStatus, type ToolResult } from '$lib/transcript';
 	import { cn } from '$lib/utils';
+	import PictureButton from './PictureButton.svelte';
 
 	interface Props {
+		conversationId: string;
 		command: string | null;
 		cwd?: string;
 		/** What the model said the command does, in plain words. */
@@ -20,7 +22,7 @@
 		running: boolean;
 	}
 
-	let { command, cwd, summary, result, liveOutput, running }: Props = $props();
+	let { conversationId, command, cwd, summary, result, liveOutput, running }: Props = $props();
 
 	const prefs = getPreferences();
 	const { m } = getI18n();
@@ -87,6 +89,14 @@
 					'max-h-72 overflow-auto px-3 py-2 font-mono break-all whitespace-pre-wrap',
 					status === 'failed' ? 'text-destructive' : 'text-muted-foreground'
 				)}>{output || (status === 'running' ? m.steps.noOutputYet : m.steps.noOutput)}</pre>
+			{#if result?.pictures.length}
+				<!-- What the command showed the agent with `nolune view`. -->
+				<div class="flex flex-wrap gap-1.5 border-t px-3 py-2">
+					{#each result.pictures as picture (picture.id)}
+						<PictureButton {conversationId} {picture} />
+					{/each}
+				</div>
+			{/if}
 		</div>
 	</Collapsible.Content>
 </Collapsible.Root>
