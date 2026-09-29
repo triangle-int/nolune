@@ -3,7 +3,7 @@
 	"version": "0.0.1",
 	"description": "A small agent that lives on your computer and does things for your family, from a shared web chat.",
 	"license": "MIT",
-	"author": "Timur Turatbekov",
+	"author": "Triangle Interactive, LLC",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/P5ina/nolune.git"
