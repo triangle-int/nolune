@@ -64,7 +64,13 @@ import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts
 import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
-import { copyReplyMedia, listMedia, mediaByMessage, type PreparedMedia } from './media.ts';
+import {
+	copyReplyMedia,
+	copyViewedImages,
+	listMedia,
+	mediaByMessage,
+	type PreparedMedia
+} from './media.ts';
 import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
 import { memberWords } from './memory-people.ts';
 import { recallFor } from './memory-search.ts';
@@ -545,6 +551,12 @@ function profileSlug(profileId: string): string | undefined {
 		?.slug;
 }
 
+/**
+ * Copies of the pictures a command attached with `nolune view`, for the chat to show under it,
+ * by the result they belong to: they're saved with the results' row (saveResults).
+ */
+const viewedMedia = new WeakMap<ToolResultBlock, PreparedMedia[]>();
+
 function toolResult(
 	id: string,
 	text: string,
@@ -627,8 +639,12 @@ async function runToolCall(
 			}
 		});
 		st.toolOutput = null;
-		const attachments = await viewedImageBlocks(conv, readViewedImages(viewDir), images);
-		return toolResult(call.id, result.content, result.isError, attachments);
+		const viewed = await viewedImageBlocks(conv, readViewedImages(viewDir), images);
+		const block = toolResult(call.id, result.content, result.isError, viewed.blocks);
+		if (viewed.attached.length) {
+			viewedMedia.set(block, await copyViewedImages(call.id, viewed.attached));
+		}
+		return block;
 	} finally {
 		rmSync(viewDir, { recursive: true, force: true });
 		// The command may have changed the profile (`nolune profile avatar`): show it right away.
@@ -741,17 +757,22 @@ async function saveReply(
 
 /**
  * One row with the result of every call of the reply before it, in order. Their `nolune view`
- * pictures were prepared for the conversation's provider.
+ * pictures were prepared for the conversation's provider; the chat's copies are saved with it.
  */
 function saveResults(conv: Conversation, results: ToolResultBlock[]): void {
+	const media = results.flatMap((result) => viewedMedia.get(result) ?? []);
 	const resultsRow = appendRow({
 		conversationId: conv.id,
 		role: 'user',
 		kind: 'tool_results',
 		blocks: results,
-		provider: conv.provider
+		provider: conv.provider,
+		media
 	});
-	emit(conv.id, { type: 'message', message: toDisplay(resultsRow) });
+	emit(conv.id, {
+		type: 'message',
+		message: toDisplay(resultsRow, media.length ? listMedia(resultsRow.id) : [])
+	});
 }
 
 /** Rows a chat on a plan sends as the model's input: messages, not command results. */

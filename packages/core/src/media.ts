@@ -38,7 +38,8 @@ import { paths } from './paths.ts';
  * Pictures and files in the agent's replies. When a reply is saved, every picture
  * (`![alt](src)`) and file link (`[label](src)`) it contains is copied byte for byte into
  * `~/.nolune/media/<sha256>`, so the chat keeps showing it after the original moves or
- * disappears. The web UI only ever loads these copies, through ids checked against the
+ * disappears. The pictures commands attach with `nolune view` are kept the same way, to show under
+ * the command. The web UI only ever loads these copies, through ids checked against the
  * conversation.
  */
 
@@ -581,6 +582,52 @@ export async function copyReplyMedia(
 			return copyOne(href, baseDir, signal);
 		})
 	);
+}
+
+/** The `src` of a picture `nolune view` attached to a command's result: the call, and which one. */
+export function viewedSrc(callId: string, index: number): string {
+	return `${callId}#${index}`;
+}
+
+/**
+ * The pictures a command attached with `nolune view`, in order, from its result's rows. Null for
+ * a row that isn't one of them.
+ */
+export function viewedIndex(src: string, callId: string): number | null {
+	const prefix = `${callId}#`;
+	if (!src.startsWith(prefix)) return null;
+	const index = Number(src.slice(prefix.length));
+	return Number.isInteger(index) && index >= 0 ? index : null;
+}
+
+/** `name` with the extension of `mime`, where it names another type: a HEIC shown as a JPEG. */
+function withExtension(name: string, mime: string): string {
+	const ext = IMAGE_EXTENSIONS[mime];
+	const current = extname(name).toLowerCase();
+	if (!ext || current === ext || (ext === '.jpg' && current === '.jpeg')) return name;
+	return `${basename(name, extname(name))}${ext}`;
+}
+
+/**
+ * Copies of the pictures `nolune view` attached to a command's result, as the model got them
+ * (HEIC and big photos converted), for the chat to show under the command. A picture that can't
+ * be kept is left out: the model has it all the same.
+ */
+export async function copyViewedImages(
+	callId: string,
+	images: { name: string; data: Buffer; mediaType: string }[]
+): Promise<PreparedMedia[]> {
+	const copies: PreparedMedia[] = [];
+	for (const [i, image] of images.entries()) {
+		try {
+			const name = withExtension(basename(image.name) || 'picture', image.mediaType);
+			const stored = { ...storeBytes(image.data), mime: image.mediaType };
+			copies.push(await describeStored(stored, name, viewedSrc(callId, i)));
+		} catch (err) {
+			console.error(`[nolune] keeping ${image.name} for the chat failed:`, err);
+		}
+	}
+	return copies;
 }
 
 // --- reading files ---

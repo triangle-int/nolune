@@ -394,7 +394,10 @@ export const media = sqliteTable(
 		messageId: integer('message_id')
 			.notNull()
 			.references(() => message.id, { onDelete: 'cascade' }),
-		/** The link target exactly as the Markdown lexer read it from the reply. */
+		/**
+		 * The link target exactly as the Markdown lexer read it from the reply; for a picture a
+		 * command attached with `nolune view`, its call id and place (viewedSrc).
+		 */
 		src: text('src').notNull(),
 		status: text('status', {
 			enum: ['ok', 'missing', 'unsupported', 'too_large', 'blocked', 'failed']

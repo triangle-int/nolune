@@ -29,6 +29,7 @@ import { eq } from 'drizzle-orm';
 import { toAnthropicMessages } from './anthropic.ts';
 import { getDb } from './db/index.ts';
 import { modelPreset, upload } from './db/schema.ts';
+import { listMedia, viewedSrc, type PreparedMedia } from './media.ts';
 import { toResponsesInput } from './openai-chat.ts';
 import { removePreset } from './presets.ts';
 import { makeFamily, makePreset, makeUser } from './test/fixtures.ts';
@@ -235,6 +236,71 @@ describe('messages', () => {
 		});
 		expect(replyText(assistant)).toBe('Sunny.');
 		expect(foundText([human, assistant, results])).toBe('Anna: weather?\nSunny +21°C');
+	});
+
+	it("shows the pictures a command attached under its output, in order, where they're kept", () => {
+		const { chat } = newChat();
+		const image = {
+			type: 'image' as const,
+			source: { type: 'inline' as const, mime: 'image/png', data: 'iVBORw0KGgo=' }
+		};
+		const copy = (src: string, name: string): PreparedMedia => ({
+			src,
+			status: 'ok',
+			error: null,
+			name,
+			sha256: 'a'.repeat(64),
+			mime: 'image/png',
+			bytes: 8,
+			width: 1,
+			height: 1,
+			previewSha256: null
+		});
+		const row = appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'tool_results',
+			blocks: [
+				{
+					type: 'tool_result',
+					callId: 't1',
+					content: [
+						{ type: 'text', text: 'Attached a.png.\nAttached b.png.\n[exit code 0]' },
+						{ type: 'text', text: 'Image: a.png' },
+						image,
+						{ type: 'text', text: 'Not attached: c.txt (not an image).' },
+						{ type: 'text', text: 'Image: b.png' },
+						image
+					],
+					isError: false
+				},
+				// From before the chat kept its own copies: only the model has the picture.
+				{
+					type: 'tool_result',
+					callId: 't2',
+					content: [
+						{ type: 'text', text: 'Attached d.png.' },
+						{ type: 'text', text: 'Image: d.png' },
+						image
+					],
+					isError: false
+				}
+			],
+			media: [copy(viewedSrc('t1', 1), 'b.png'), copy(viewedSrc('t1', 0), 'a.png')]
+		});
+
+		expect(toDisplay(row, listMedia(row.id))).toMatchObject({
+			kind: 'tool_results',
+			results: [
+				{
+					id: 't1',
+					output:
+						'Attached a.png.\nAttached b.png.\n[exit code 0]\nNot attached: c.txt (not an image).',
+					pictures: [{ name: 'a.png' }, { name: 'b.png' }]
+				},
+				{ id: 't2', output: 'Attached d.png.\nImage: d.png\n[image]', pictures: [] }
+			]
+		});
 	});
 });
 

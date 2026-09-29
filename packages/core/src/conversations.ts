@@ -16,6 +16,7 @@ import {
 import { folderContextFor, getFolder } from './folders.ts';
 import {
 	messageText,
+	placeholder,
 	readMessage,
 	resultText,
 	type Block,
@@ -27,6 +28,7 @@ import {
 import {
 	newMediaId,
 	toDisplayMedia,
+	viewedIndex,
 	type DisplayMedia,
 	type MediaRow,
 	type PreparedMedia
@@ -68,6 +70,18 @@ export type DisplayAttachment = Extract<DisplayMedia, { status: 'ok' }> & {
 	/** Why the model got only its name and path. */
 	note?: string;
 };
+
+/** A picture a command attached with `nolune view`, as the chat shows it under the command. */
+export type DisplayPicture = Extract<DisplayMedia, { status: 'ok' }>;
+
+/** A command's result, as the chat shows it. */
+export interface DisplayResult {
+	id: string;
+	output: string;
+	isError: boolean;
+	/** What it attached with `nolune view`, in order. `output` leaves them out. */
+	pictures: DisplayPicture[];
+}
 
 export type DisplayMessage =
 	| {
@@ -121,7 +135,7 @@ export type DisplayMessage =
 	| {
 			id: number;
 			kind: 'tool_results';
-			results: { id: string; output: string; isError: boolean }[];
+			results: DisplayResult[];
 			createdAt: number;
 	  };
 
@@ -563,7 +577,10 @@ export function appendRow(
 		 */
 		provider?: Provider | null;
 		model?: string | null;
-		/** Assistant rows: copies of the pictures and files the reply links to, saved with it. */
+		/**
+		 * Copies saved with the row: the pictures and files a reply links to, the pictures commands
+		 * attached with `nolune view`.
+		 */
 		media?: PreparedMedia[];
 	} & (
 		| {
@@ -753,7 +770,35 @@ function displayAttachments(row: MessageRow, mediaRows: MediaRow[]): DisplayAtta
 	});
 }
 
-/** `mediaRows`: the row's pictures and files (a reply's links, a message's attachments). */
+function displayResult(block: ToolResultBlock, mediaRows: MediaRow[]): DisplayResult {
+	const pictures = mediaRows
+		.flatMap((row) => {
+			const index = viewedIndex(row.src, block.callId);
+			if (index === null) return [];
+			const shown = toDisplayMedia([row])[row.src];
+			return shown.status === 'ok' ? [{ index, shown }] : [];
+		})
+		.sort((a, b) => a.index - b.index)
+		.map((p) => p.shown);
+	const { content } = block;
+	// The chat shows the pictures under the output: not as `[image]`, nor the line naming each.
+	const output =
+		pictures.length && typeof content !== 'string'
+			? content
+					.flatMap((b, i) => {
+						if (b.type === 'image') return [];
+						if (b.type === 'text') return content[i + 1]?.type === 'image' ? [] : [b.text];
+						return [`[${placeholder(b)}]`];
+					})
+					.join('\n')
+			: resultText(content);
+	return { id: block.callId, output, isError: block.isError, pictures };
+}
+
+/**
+ * `mediaRows`: the row's pictures and files (a reply's links, a message's attachments, what its
+ * commands attached with `nolune view`).
+ */
 export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayMessage {
 	const createdAt = row.createdAt.getTime();
 	if (row.kind === 'trigger') {
@@ -802,9 +847,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			id: row.id,
 			kind: 'tool_results',
 			results: readRow(row).blocks.flatMap((b) =>
-				b.type === 'tool_result'
-					? [{ id: b.callId, output: resultText(b.content), isError: b.isError }]
-					: []
+				b.type === 'tool_result' ? [displayResult(b, mediaRows)] : []
 			),
 			createdAt
 		};

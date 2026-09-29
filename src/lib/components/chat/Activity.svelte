@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { getI18n } from '$lib/i18n';
@@ -16,6 +17,7 @@
 	import StepIcon from './StepIcon.svelte';
 
 	interface Props {
+		conversationId: string;
 		part: ActivityPart;
 		results: Record<string, ToolResult>;
 		toolOutput: { id: string; text: string } | null;
@@ -25,7 +27,7 @@
 		running: boolean;
 	}
 
-	let { part, results, toolOutput, active, running }: Props = $props();
+	let { conversationId, part, results, toolOutput, active, running }: Props = $props();
 
 	const prefs = getPreferences();
 	const { m } = getI18n();
@@ -42,6 +44,8 @@
 	const stopped = $derived(
 		commands.some((c) => results[c.id] && resultStatus(results[c.id]) === 'stopped')
 	);
+	/** The last pictures its commands looked at (`nolune view`), shown while it's folded. */
+	const pictures = $derived(commands.flatMap((c) => results[c.id]?.pictures ?? []).slice(-3));
 
 	const label = $derived.by(() => {
 		if (active) return activeStepLabel(part, results, prefs.technical, m);
@@ -74,6 +78,24 @@
 		{#if failed && !active && prefs.technical}
 			<span class="shrink-0 text-destructive">· {m.steps.failedCount(failed)}</span>
 		{/if}
+		{#if !open && pictures.length}
+			<!-- A glimpse only: opening the group shows them with their commands. -->
+			<span class="flex shrink-0 items-center gap-1" aria-hidden="true">
+				<span class="mr-0.5">·</span>
+				{#each pictures as picture (picture.id)}
+					<img
+						src={resolve('/api/c/[id]/media/[mediaId]', {
+							id: conversationId,
+							mediaId: picture.id
+						})}
+						alt=""
+						loading="lazy"
+						decoding="async"
+						class="h-6 w-9 rounded border bg-muted object-cover"
+					/>
+				{/each}
+			</span>
+		{/if}
 		<ChevronRightIcon
 			class="size-4 shrink-0 transition-transform group-data-[state=open]/activity:rotate-90"
 		/>
@@ -101,6 +123,7 @@
 						{/if}
 					{:else}
 						<CommandStep
+							{conversationId}
 							command={step.command}
 							cwd={step.cwd}
 							summary={step.summary}

@@ -548,9 +548,12 @@ describe('a chat on an OpenRouter model', () => {
 			return { content: 'Viewing dot.png\n[exit code 0]', isError: false, exitCode: 0 };
 		});
 
+		const live: LiveEvent[] = [];
+		const off = subscribe(chat.id, (event) => live.push(event));
 		const ended = loopEnd(chat.id);
 		await sendMessage(chat.id, user, 'Look');
 		await ended;
+		off();
 
 		// A tool message takes only text: the picture follows in a message of its own.
 		const [tool, after] = (turns()[1].json!.messages as unknown[]).slice(-2);
@@ -566,6 +569,13 @@ describe('a chat on an OpenRouter model', () => {
 				{ type: 'file', file: { file_id: 'or_file_1' } }
 			]
 		});
+		// The chat gets the picture with the result, to show under the command.
+		const shown = live.flatMap((e) =>
+			e.type === 'message' && e.message.kind === 'tool_results' ? e.message.results : []
+		);
+		expect(shown).toMatchObject([
+			{ id: 'toolu_1', output: 'Viewing dot.png\n[exit code 0]', pictures: [{ name: 'dot.png' }] }
+		]);
 	});
 });
 

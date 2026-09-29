@@ -500,6 +500,7 @@
 				/>
 			{:else}
 				<Activity
+					conversationId={conversation.id}
 					{part}
 					results={chat.results}
 					toolOutput={chat.toolOutput}
