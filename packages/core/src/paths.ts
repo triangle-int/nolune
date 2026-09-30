@@ -40,6 +40,8 @@ export const paths = {
 	bin: join(home, 'bin'),
 	logs: join(home, 'logs'),
 	profiles: join(home, 'profiles'),
+	/** Every user's card, a note each that goes with them into all their profiles (memory-cards.ts). */
+	cards: join(home, 'cards'),
 	trash: join(home, 'trash'),
 	/** Copies of the pictures and files shown in chats, named by their SHA-256. */
 	media: join(home, 'media'),
@@ -89,6 +91,32 @@ export function profileSoulFile(slug: string): string {
 /** Long-term memory: one Markdown note per topic. */
 export function profileMemoryDir(slug: string): string {
 	return join(paths.profiles, slug, 'memories');
+}
+
+/** The cards, as memory's functions take them in place of a profile's slug. */
+export interface CardsPlace {
+	readonly cards: true;
+}
+
+export const CARDS: CardsPlace = Object.freeze({ cards: true });
+
+/**
+ * Where notes are kept: a profile's memory, by the profile's slug, or CARDS, the folder with
+ * every user's card. Memory's functions work the same on both.
+ */
+export type MemoryPlace = string | CardsPlace;
+
+export function isCards(place: MemoryPlace): place is CardsPlace {
+	return typeof place !== 'string';
+}
+
+export function memoryDir(place: MemoryPlace): string {
+	return isCards(place) ? paths.cards : profileMemoryDir(place);
+}
+
+/** For logs: the profile's slug, or `cards`. */
+export function placeName(place: MemoryPlace): string {
+	return isCards(place) ? 'cards' : place;
 }
 
 /** Where the files of each chat folder are saved, one folder per chat folder. */

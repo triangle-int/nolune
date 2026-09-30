@@ -6,7 +6,7 @@ import { configuredApiKey, readConfig, updateConfig, type Config } from './confi
 import { findCustomProvider, openaiUrl, splitModel } from './custom-providers.ts';
 import { openaiBaseUrl } from './openai.ts';
 import { openrouterBaseUrl } from './openrouter.ts';
-import { profileMemoryDir } from './paths.ts';
+import { memoryDir, placeName, type MemoryPlace } from './paths.ts';
 
 /*
  * Embeddings of memory facts, for finding them by meaning (memory-search.ts), from any
@@ -223,7 +223,7 @@ export function similarity(a: Float32Array, b: Float32Array): number {
 	return sum;
 }
 
-// --- The vectors of a profile's facts ---
+// --- The vectors of a profile's facts, or the cards' ---
 
 interface Stored {
 	/** The source they came from: vectors of another model can't be compared. */
@@ -234,16 +234,16 @@ interface Stored {
 const sourceId = (source: EmbeddingSource) => `${source.url} ${source.model}`;
 const hash = (text: string) => createHash('sha256').update(text).digest('base64url').slice(0, 22);
 
-function file(slug: string): string {
-	return join(profileMemoryDir(slug), FILE);
+function file(place: MemoryPlace): string {
+	return join(memoryDir(place), FILE);
 }
 
 /** What's saved, when it's from `source`; nothing when it can't be read. */
-function load(slug: string, source: EmbeddingSource): Stored {
+function load(place: MemoryPlace, source: EmbeddingSource): Stored {
 	const empty: Stored = { source: sourceId(source), vectors: new Map() };
 	try {
-		if (!existsSync(file(slug))) return empty;
-		const saved = JSON.parse(readFileSync(file(slug), 'utf8')) as {
+		if (!existsSync(file(place))) return empty;
+		const saved = JSON.parse(readFileSync(file(place), 'utf8')) as {
 			version?: unknown;
 			source?: unknown;
 			vectors?: unknown;
@@ -265,8 +265,8 @@ function load(slug: string, source: EmbeddingSource): Stored {
 	return empty;
 }
 
-function save(slug: string, stored: Stored): void {
-	const dir = profileMemoryDir(slug);
+function save(place: MemoryPlace, stored: Stored): void {
+	const dir = memoryDir(place);
 	const temp = join(dir, `.tmp-${randomUUID()}`);
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -277,9 +277,9 @@ function save(slug: string, stored: Stored): void {
 		writeFileSync(temp, JSON.stringify({ version: 1, source: stored.source, vectors }), {
 			mode: 0o600
 		});
-		renameSync(temp, file(slug));
+		renameSync(temp, file(place));
 	} catch (err) {
-		console.error(`[nolune] ${slug} could not save memory embeddings:`, err);
+		console.error(`[nolune] ${placeName(place)} could not save memory embeddings:`, err);
 	} finally {
 		rmSync(temp, { force: true });
 	}
@@ -287,11 +287,11 @@ function save(slug: string, stored: Stored): void {
 
 /** The saved vectors of `texts` that have one, and the texts that don't. */
 export function savedVectors(
-	slug: string,
+	place: MemoryPlace,
 	source: EmbeddingSource,
 	texts: string[]
 ): { vectors: Map<string, Float32Array>; missing: string[] } {
-	const stored = load(slug, source);
+	const stored = load(place, source);
 	const vectors = new Map<string, Float32Array>();
 	const missing: string[] = [];
 	for (const text of texts) {
@@ -306,11 +306,12 @@ const updates = new Map<string, { again: boolean; done: Promise<void> }>();
 
 /**
  * Embeds the texts that have no vector yet and forgets the ones no longer in `texts`, which are
- * all of the profile's facts. One at a time per profile; a call while one runs waits for it and
- * then catches up.
+ * all of the profile's facts (or the cards'). One at a time per folder; a call while one runs
+ * waits for it and then catches up.
  */
-export function updateEmbeddings(slug: string, texts: () => string[]): Promise<void> {
-	const running = updates.get(slug);
+export function updateEmbeddings(place: MemoryPlace, texts: () => string[]): Promise<void> {
+	const key = memoryDir(place);
+	const running = updates.get(key);
 	if (running) {
 		running.again = true;
 		return running.done;
@@ -319,19 +320,19 @@ export function updateEmbeddings(slug: string, texts: () => string[]): Promise<v
 	state.done = (async () => {
 		do {
 			state.again = false;
-			await update(slug, texts()).catch((err: unknown) => {
-				console.error(`[nolune] ${slug} could not embed memory:`, describe(err));
+			await update(place, texts()).catch((err: unknown) => {
+				console.error(`[nolune] ${placeName(place)} could not embed memory:`, describe(err));
 			});
 		} while (state.again);
-	})().finally(() => updates.delete(slug));
-	updates.set(slug, state);
+	})().finally(() => updates.delete(key));
+	updates.set(key, state);
 	return state.done;
 }
 
-async function update(slug: string, texts: string[]): Promise<void> {
+async function update(place: MemoryPlace, texts: string[]): Promise<void> {
 	const source = embeddingSource();
 	if (!source) return;
-	const stored = load(slug, source);
+	const stored = load(place, source);
 	const wanted = new Map(texts.map((text) => [hash(text), text]));
 	const missing = [...wanted].filter(([key]) => !stored.vectors.has(key));
 	let changed = false;
@@ -350,11 +351,13 @@ async function update(slug: string, texts: string[]): Promise<void> {
 		batch.forEach(([key], j) => stored.vectors.set(key, vectors[j]));
 		changed = true;
 		// Saved after each batch: a big memory is usable before the last one is done.
-		save(slug, stored);
+		save(place, stored);
 	}
-	if (changed && !missing.length) save(slug, stored);
+	if (changed && !missing.length) save(place, stored);
 	if (missing.length) {
-		console.log(`[nolune] ${slug} embedded ${missing.length} memory facts with ${source.name}`);
+		console.log(
+			`[nolune] ${placeName(place)} embedded ${missing.length} memory facts with ${source.name}`
+		);
 	}
 }
 

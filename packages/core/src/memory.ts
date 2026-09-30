@@ -24,20 +24,26 @@ import {
 	type FactIndex
 } from './memory-facts.ts';
 import {
+	CARDS_FOLDER,
 	aliasesOf,
 	categoryOf,
 	categoryProblem,
 	isAliasLine,
+	isCardPath,
 	nameKey,
 	titleIn
 } from './memory-categories.ts';
-import { profileDir, profileMemoryDir } from './paths.ts';
+import { isCards, memoryDir, profileDir, type MemoryPlace } from './paths.ts';
 
 /*
  * A profile's long-term memory: short Markdown notes, one per topic, in its `memories` folder.
  * The agent reads and changes them with `nolune memory` (plain file commands work too); the family
  * sees them on the Memory page. `core.md` is pinned: every new chat starts with it in its prompt,
  * while the others are read when needed. Nothing here depends on the model provider.
+ *
+ * The same functions keep the cards (memory-cards.ts), given CARDS in place of a slug: a note
+ * per user, `cards/anna.md`, that goes whole into the prompts of all their profiles. There, every
+ * note is pinned, and there are no categories.
  */
 
 /** Notes are read into the context, so one stays small enough to read in one go. */
@@ -49,6 +55,8 @@ const MAX_NOTE_CHARS = 50_000;
 export const CORE_NOTE = 'core.md';
 /** The pinned note costs its length in every chat, so it holds a few facts, not a topic's worth. */
 export const MAX_PINNED_CHARS = 4_000;
+/** A card goes into every chat of every profile its owner is in, next to the others' cards. */
+export const MAX_CARD_CHARS = 2_000;
 const IMAGE = /\.(jpe?g|png|gif|webp|heic)$/i;
 /** Where memory lived before: one file, pasted into each new system prompt. */
 const LEGACY_FILE = 'MEMORY.md';
@@ -69,12 +77,37 @@ function refuse(message: string): never {
 	throw new MemoryError(message);
 }
 
-/** The profile's memory folder, created on first use. */
-function openMemory(slug: string): string {
-	const root = profileMemoryDir(slug);
-	mkdirSync(root, { recursive: true, mode: 0o700 });
-	importLegacyMemory(slug, root);
-	return root;
+/**
+ * A memory folder, open: where it is, and what its notes' paths start with (`cards/` for the
+ * cards, whose paths are the same wherever they're read).
+ */
+interface Folder {
+	dir: string;
+	prefix: string;
+	cards: boolean;
+}
+
+/** The memory folder, created on first use. */
+function openMemory(place: MemoryPlace): Folder {
+	const dir = memoryDir(place);
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+	if (isCards(place)) return { dir, prefix: `${CARDS_FOLDER}/`, cards: true };
+	importLegacyMemory(place, dir);
+	setAsideCardsFolder(dir);
+	return { dir, prefix: '', cards: false };
+}
+
+/**
+ * `cards/` in a profile's memory is where its members' cards are, so a folder by that name from
+ * before them (nothing could put one there since the categories) is renamed, and its notes show
+ * as notes from before the categories.
+ */
+function setAsideCardsFolder(dir: string): void {
+	const folder = join(dir, CARDS_FOLDER);
+	if (!existsSync(folder)) return;
+	let name = 'old-cards';
+	for (let i = 2; existsSync(join(dir, name)); i++) name = `old-cards-${i}`;
+	renameSync(folder, join(dir, name));
 }
 
 /**
@@ -94,25 +127,33 @@ function importLegacyMemory(slug: string, root: string): void {
 	renameSync(legacy, join(root, name));
 }
 
-/** A path relative to the folder, with forward slashes, like `people/anna.md`. */
-function relPath(root: string, full: string): string {
-	return relative(resolve(root), full).split(sep).join('/');
+/** A path relative to the folder, with forward slashes, like `people/anna.md` or `cards/anna.md`. */
+function relPath(folder: Folder, full: string): string {
+	return folder.prefix + relative(resolve(folder.dir), full).split(sep).join('/');
 }
 
 /**
  * A note's file, from a topic as people and the agent write it: `family`, `people/anna` or
- * `family.md`. Refuses anything outside the folder, hidden names and symbolic links.
+ * `family.md`, and a card's as `cards/anna`. Refuses anything outside the folder, hidden names
+ * and symbolic links.
  */
-function notePath(root: string, topic: string): string {
+function notePath(folder: Folder, topic: string): string {
 	const clean = topic
 		.trim()
 		.replace(/\\/g, '/')
 		.replace(/^\/+|\/+$/g, '');
 	if (!clean || clean.includes('\0'))
 		refuse('Which note? Give a topic like family or people/anna.');
+	if (folder.cards !== isCardPath(clean)) {
+		refuse(
+			folder.cards
+				? `"${topic}" isn't a card: cards are cards/<name>, like cards/anna.`
+				: `"${topic}" is a card, not one of this memory's notes.`
+		);
+	}
 	const file = /\.(md|markdown|txt)$/i.test(clean) ? clean : `${clean}.md`;
-	const base = resolve(root);
-	const full = resolve(base, file);
+	const base = resolve(folder.dir);
+	const full = resolve(base, file.slice(folder.prefix.length));
 	if (!full.startsWith(base + sep)) refuse(`"${topic}" is outside the memory folder.`);
 	if (
 		relative(base, full)
@@ -141,12 +182,19 @@ function titleOf(path: string): string {
 		.trim();
 	const upper = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 	if (!words) return 'Notes';
-	return categoryOf(path) === 'people' ? words.split(' ').map(upper).join(' ') : upper(words);
+	return categoryOf(path) === 'people' || isCardPath(path)
+		? words.split(' ').map(upper).join(' ')
+		: upper(words);
 }
 
 /** `path` is relative to the memory folder, like `core.md`. */
 export function isPinnedNote(path: string): boolean {
 	return path === CORE_NOTE;
+}
+
+/** How long a note that goes whole into prompts can be: core, and every card. Null for the rest. */
+export function pinnedLimit(path: string): number | null {
+	return isPinnedNote(path) ? MAX_PINNED_CHARS : isCardPath(path) ? MAX_CARD_CHARS : null;
 }
 
 /** The start of a text that grew past `max` some other way (an editor), cut at a line. */
@@ -158,10 +206,13 @@ export function cutAtLine(text: string, max: number): { text: string; cut: boole
 }
 
 function checkSize(text: string, path: string): void {
-	if (isPinnedNote(path)) {
-		if (text.length > MAX_PINNED_CHARS) {
+	const pinned = pinnedLimit(path);
+	if (pinned !== null) {
+		if (text.length > pinned) {
 			refuse(
-				`${path} would be ${text.length} characters; a pinned note can have at most ${MAX_PINNED_CHARS}, because it goes into every chat. Keep only what matters in almost every conversation there, and move the rest to other notes.`
+				isCardPath(path)
+					? `${path} would be ${text.length} characters; a card can have at most ${pinned}, because it goes into every chat of every profile its owner is in. Keep it to what they'd want known everywhere, and put the rest in their note in this profile.`
+					: `${path} would be ${text.length} characters; a pinned note can have at most ${pinned}, because it goes into every chat. Keep only what matters in almost every conversation there, and move the rest to other notes.`
 			);
 		}
 	} else if (text.length > MAX_NOTE_CHARS) {
@@ -183,7 +234,7 @@ function writeAtomic(full: string, text: string): void {
 	}
 }
 
-function readNote(root: string, full: string, topic: string): string {
+function readNote(full: string, topic: string): string {
 	if (!existsSync(full) || !statSync(full).isFile()) {
 		refuse(`There is no note "${topic}". \`nolune memory\` lists them.`);
 	}
@@ -200,7 +251,7 @@ interface StoredFile {
 }
 
 /** Every note, sorted by path. */
-function readMemoryFiles(root: string): StoredFile[] {
+function readMemoryFiles(folder: Folder): StoredFile[] {
 	const files: StoredFile[] = [];
 	const walk = (dir: string, depth: number) => {
 		for (const name of readdirSync(dir).sort()) {
@@ -216,7 +267,7 @@ function readMemoryFiles(root: string): StoredFile[] {
 				if (depth < MAX_DEPTH) walk(full, depth + 1);
 			} else if (stat.isFile() && !IMAGE.test(name) && stat.size <= MAX_BYTES) {
 				files.push({
-					path: relPath(root, full),
+					path: relPath(folder, full),
 					text: readFileSync(full, 'utf8'),
 					size: stat.size,
 					updatedAt: stat.mtimeMs
@@ -224,7 +275,7 @@ function readMemoryFiles(root: string): StoredFile[] {
 			}
 		}
 	};
-	walk(root, 1);
+	walk(folder.dir, 1);
 	return files;
 }
 
@@ -235,11 +286,11 @@ function readMemoryFiles(root: string): StoredFile[] {
  * this bookkeeping must never stop memory itself from working.
  */
 function loadFacts(
-	root: string,
-	files = readMemoryFiles(root)
+	folder: Folder,
+	files = readMemoryFiles(folder)
 ): { index: FactIndex; changed: boolean } | null {
 	try {
-		const file = join(root, FACTS_FILE);
+		const file = join(folder.dir, FACTS_FILE);
 		const stored = existsSync(file) ? parseFactIndex(readFileSync(file, 'utf8')) : null;
 		const index = stored ?? emptyFactIndex();
 		let changed = !stored;
@@ -259,9 +310,9 @@ function loadFacts(
 	}
 }
 
-function saveFacts(root: string, index: FactIndex): void {
+function saveFacts(folder: Folder, index: FactIndex): void {
 	try {
-		writeAtomic(join(root, FACTS_FILE), serializeFactIndex(index));
+		writeAtomic(join(folder.dir, FACTS_FILE), serializeFactIndex(index));
 	} catch (err) {
 		console.error('[nolune] could not save memory fact dates:', err);
 	}
@@ -272,27 +323,35 @@ function saveFacts(root: string, index: FactIndex): void {
  * mistaken for something that happened before.
  */
 function changing<T>(
-	root: string,
+	folder: Folder,
 	change: () => T,
 	record: (index: FactIndex, now: number) => void
 ): T {
-	const facts = loadFacts(root);
+	const facts = loadFacts(folder);
 	const result = change();
 	if (facts) {
 		record(facts.index, Date.now());
-		saveFacts(root, facts.index);
+		saveFacts(folder, facts.index);
 	}
 	return result;
 }
 
 /** Writes a note and dates its new facts. */
-function saveNote(root: string, full: string, text: string): void {
-	checkSize(text, relPath(root, full));
+function saveNote(folder: Folder, full: string, text: string): void {
+	checkSize(text, relPath(folder, full));
 	changing(
-		root,
+		folder,
 		() => writeAtomic(full, text),
-		(index, now) => noteFacts(index, relPath(root, full), text, now)
+		(index, now) => noteFacts(index, relPath(folder, full), text, now)
 	);
+}
+
+/**
+ * Why a note can't be started or added to at `path`: a profile's go only into the categories. A
+ * card can always be written, within its size.
+ */
+function placeProblem(folder: Folder, path: string, exists: boolean): string | null {
+	return folder.cards || categoryOf(path) ? null : categoryProblem(path, exists);
 }
 
 function lineNumbers(text: string, match: (line: string) => boolean): number[] {
@@ -319,11 +378,11 @@ export interface MemoryFile {
 }
 
 /** Every note in the profile's memory, sorted by path, with its facts and their dates. */
-export function listMemoryFiles(slug: string): MemoryFile[] {
-	const root = openMemory(slug);
-	const files = readMemoryFiles(root);
-	const facts = loadFacts(root, files);
-	if (facts?.changed) saveFacts(root, facts.index);
+export function listMemoryFiles(place: MemoryPlace): MemoryFile[] {
+	const folder = openMemory(place);
+	const files = readMemoryFiles(folder);
+	const facts = loadFacts(folder, files);
+	if (facts?.changed) saveFacts(folder, facts.index);
 	return files.map((file) => {
 		const dates = facts?.index.files.get(file.path);
 		return {
@@ -337,13 +396,15 @@ export function listMemoryFiles(slug: string): MemoryFile[] {
 }
 
 /** The notes' paths, without reading the fact dates: for the system prompt. */
-export function listMemoryNotes(slug: string): string[] {
-	return readMemoryFiles(openMemory(slug)).map((file) => file.path);
+export function listMemoryNotes(place: MemoryPlace): string[] {
+	return readMemoryFiles(openMemory(place)).map((file) => file.path);
 }
 
 /** Every note with its text, sorted by path, without the fact dates: for the new-chat suggestions. */
-export function readMemoryNotes(slug: string): { path: string; text: string; updatedAt: number }[] {
-	return readMemoryFiles(openMemory(slug)).map(({ path, text, updatedAt }) => ({
+export function readMemoryNotes(
+	place: MemoryPlace
+): { path: string; text: string; updatedAt: number }[] {
+	return readMemoryFiles(openMemory(place)).map(({ path, text, updatedAt }) => ({
 		path,
 		text,
 		updatedAt
@@ -351,11 +412,14 @@ export function readMemoryNotes(slug: string): { path: string; text: string; upd
 }
 
 /** The pinned note as the system prompt shows it (see cutAtLine); null while empty or missing. */
-export function readPinnedNote(slug: string, path: string): { text: string; cut: boolean } | null {
-	const root = openMemory(slug);
+export function readPinnedNote(
+	place: MemoryPlace,
+	path: string
+): { text: string; cut: boolean } | null {
+	const folder = openMemory(place);
 	let text: string;
 	try {
-		const full = notePath(root, path);
+		const full = notePath(folder, path);
 		const stat = lstatSync(full);
 		// Like the listing: no links, nothing only a person could have copied in.
 		if (!stat.isFile() || stat.size > MAX_BYTES) return null;
@@ -363,13 +427,13 @@ export function readPinnedNote(slug: string, path: string): { text: string; cut:
 	} catch {
 		return null;
 	}
-	return text ? cutAtLine(text, MAX_PINNED_CHARS) : null;
+	return text ? cutAtLine(text, pinnedLimit(path) ?? MAX_PINNED_CHARS) : null;
 }
 
-export function readMemoryNote(slug: string, topic: string): { path: string; text: string } {
-	const root = openMemory(slug);
-	const full = notePath(root, topic);
-	return { path: relPath(root, full), text: readNote(root, full, topic) };
+export function readMemoryNote(place: MemoryPlace, topic: string): { path: string; text: string } {
+	const folder = openMemory(place);
+	const full = notePath(folder, topic);
+	return { path: relPath(folder, full), text: readNote(full, topic) };
 }
 
 // --- Changes, for `nolune memory` ---
@@ -395,14 +459,14 @@ export function factLines(text: string): string[] {
  * creating the note if needed. A person's "Also called" that names no one new is a duplicate.
  */
 export function addMemoryFact(
-	slug: string,
+	place: MemoryPlace,
 	topic: string,
 	fact: string,
 	under?: string
 ): { path: string; created: boolean; duplicate: boolean; line: string } {
-	const root = openMemory(slug);
-	const full = notePath(root, topic);
-	const path = relPath(root, full);
+	const folder = openMemory(place);
+	const full = notePath(folder, topic);
+	const path = relPath(folder, full);
 	const line = fact
 		.replace(/\s+/g, ' ')
 		.trim()
@@ -410,7 +474,8 @@ export function addMemoryFact(
 	if (!line) refuse('The fact is empty.');
 	const exists = existsSync(full);
 	if (exists && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
-	if (!categoryOf(path)) refuse(categoryProblem(path, exists));
+	const problem = placeProblem(folder, path, exists);
+	if (problem) refuse(problem);
 	const before = exists ? readFileSync(full, 'utf8') : '';
 	const key = factKey(parseFacts(`- ${line}`)[0] ?? line);
 	if (
@@ -420,7 +485,7 @@ export function addMemoryFact(
 		return { path, created: false, duplicate: true, line: `- ${line}` };
 	}
 	const lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
-	saveNote(root, full, `${withFact(lines, `- ${line}`, under).join('\n')}\n`);
+	saveNote(folder, full, `${withFact(lines, `- ${line}`, under).join('\n')}\n`);
 	return { path, created: !exists, duplicate: false, line: `- ${line}` };
 }
 
@@ -442,16 +507,17 @@ function namesNoOneNew(path: string, note: string, line: string): boolean {
  * rest comes back in `left`.
  */
 export function addMemoryFacts(
-	slug: string,
+	place: MemoryPlace,
 	topic: string,
 	facts: { text: string; learnedAt: number | null }[],
 	heading?: string
 ): { path: string; added: MemoryFact[]; left: MemoryFact[] } {
-	const root = openMemory(slug);
-	const full = notePath(root, topic);
-	const path = relPath(root, full);
+	const folder = openMemory(place);
+	const full = notePath(folder, topic);
+	const path = relPath(folder, full);
 	if (existsSync(full) && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
-	if (!categoryOf(path)) refuse(categoryProblem(path, existsSync(full)));
+	const problem = placeProblem(folder, path, existsSync(full));
+	if (problem) refuse(problem);
 	const before = existsSync(full) ? readFileSync(full, 'utf8') : '';
 	const known = new Set(parseFacts(before).map(factKey));
 	let lines = (before.trim() ? before.trimEnd() : `# ${titleOf(path)}`).split('\n');
@@ -465,7 +531,8 @@ export function addMemoryFacts(
 		const key = factKey(parseFacts(`- ${line}`)[0] ?? line);
 		if (!line || known.has(key)) continue;
 		const next = withFact(lines, `- ${line}`, heading);
-		if (isPinnedNote(path) && next.join('\n').length + 1 > MAX_PINNED_CHARS) {
+		const pinned = pinnedLimit(path);
+		if (pinned !== null && next.join('\n').length + 1 > pinned) {
 			left.push({ text: line, learnedAt: fact.learnedAt });
 			continue;
 		}
@@ -477,7 +544,7 @@ export function addMemoryFacts(
 	const text = `${lines.join('\n')}\n`;
 	checkSize(text, path);
 	changing(
-		root,
+		folder,
 		() => writeAtomic(full, text),
 		(index, now) => {
 			noteFacts(index, path, text, now);
@@ -521,15 +588,15 @@ function withFact(lines: string[], bullet: string, heading?: string): string[] {
  * (`before`) and as they are now (`after`), for putting them back (revertMemoryLines).
  */
 export function replaceInMemory(
-	slug: string,
+	place: MemoryPlace,
 	topic: string,
 	oldText: string,
 	newText: string
 ): { path: string; before: string; after: string } {
-	const root = openMemory(slug);
-	const full = notePath(root, topic);
-	const path = relPath(root, full);
-	const text = readNote(root, full, topic);
+	const folder = openMemory(place);
+	const full = notePath(folder, topic);
+	const path = relPath(folder, full);
+	const text = readNote(full, topic);
 	if (!oldText) refuse('Give the text to replace.');
 	const hits: number[] = [];
 	for (let at = text.indexOf(oldText); at !== -1; at = text.indexOf(oldText, at + 1)) hits.push(at);
@@ -545,7 +612,7 @@ export function replaceInMemory(
 	const at = hits[0];
 	// Sliced, not String.replace: `$&` and friends in the new text are meant literally.
 	const changed = text.slice(0, at) + newText + text.slice(at + oldText.length);
-	saveNote(root, full, changed);
+	saveNote(folder, full, changed);
 	const start = text.lastIndexOf('\n', at - 1) + 1;
 	const next = text.indexOf('\n', at + oldText.length);
 	const end = next === -1 ? text.length : next;
@@ -562,16 +629,16 @@ export function replaceInMemory(
  * when the lines aren't there once any more, since someone changed them since.
  */
 export function revertMemoryLines(
-	slug: string,
+	place: MemoryPlace,
 	topic: string,
 	current: string,
 	restore: string | null,
 	dropEmpty = false
 ): { path: string; removedNote: boolean } {
-	const root = openMemory(slug);
-	const full = notePath(root, topic);
-	const path = relPath(root, full);
-	const lines = readNote(root, full, topic).split('\n');
+	const folder = openMemory(place);
+	const full = notePath(folder, topic);
+	const path = relPath(folder, full);
+	const lines = readNote(full, topic).split('\n');
 	const wanted = current.split('\n');
 	const starts: number[] = [];
 	for (let i = 0; i + wanted.length <= lines.length; i++) {
@@ -582,26 +649,26 @@ export function revertMemoryLines(
 	const text = lines.join('\n');
 	if (dropEmpty && !parseFacts(text).length) {
 		changing(
-			root,
+			folder,
 			() => unlinkSync(full),
 			(index) => forgetFacts(index, path)
 		);
 		return { path, removedNote: true };
 	}
-	saveNote(root, full, text);
+	saveNote(folder, full, text);
 	return { path, removedNote: false };
 }
 
 /** Removes the one line of a note that contains `match` (ignoring case). */
 export function forgetMemoryFact(
-	slug: string,
+	place: MemoryPlace,
 	topic: string,
 	match: string
 ): { path: string; removed: string } {
-	const root = openMemory(slug);
-	const full = notePath(root, topic);
-	const path = relPath(root, full);
-	const text = readNote(root, full, topic);
+	const folder = openMemory(place);
+	const full = notePath(folder, topic);
+	const path = relPath(folder, full);
+	const text = readNote(full, topic);
 	const needle = match.trim().toLowerCase();
 	if (!needle) refuse('Give some text from the fact to forget.');
 	const lines = text.split('\n');
@@ -618,35 +685,35 @@ export function forgetMemoryFact(
 		);
 	}
 	const [removed] = lines.splice(hits[0] - 1, 1);
-	saveNote(root, full, lines.join('\n'));
+	saveNote(folder, full, lines.join('\n'));
 	return { path, removed: removed.trim() };
 }
 
 /** Replaces a whole note, e.g. to reorganize it. */
 export function writeMemoryNote(
-	slug: string,
+	place: MemoryPlace,
 	topic: string,
 	text: string
 ): { path: string; created: boolean } {
-	const root = openMemory(slug);
-	const full = notePath(root, topic);
+	const folder = openMemory(place);
+	const full = notePath(folder, topic);
 	if (!text.trim()) refuse('The note is empty. To delete it, use `nolune memory rm`.');
 	if (existsSync(full) && !statSync(full).isFile()) refuse(`"${topic}" is a folder, not a note.`);
 	const created = !existsSync(full);
 	// A note from before the categories can be rewritten; a new one goes into one.
-	if (created && !categoryOf(relPath(root, full)))
-		refuse(categoryProblem(relPath(root, full), false));
-	saveNote(root, full, text.endsWith('\n') ? text : `${text}\n`);
-	return { path: relPath(root, full), created };
+	const problem = created ? placeProblem(folder, relPath(folder, full), false) : null;
+	if (problem) refuse(problem);
+	saveNote(folder, full, text.endsWith('\n') ? text : `${text}\n`);
+	return { path: relPath(folder, full), created };
 }
 
-export function removeMemoryNote(slug: string, topic: string): { path: string } {
-	const root = openMemory(slug);
-	const full = notePath(root, topic);
-	readNote(root, full, topic);
-	const path = relPath(root, full);
+export function removeMemoryNote(place: MemoryPlace, topic: string): { path: string } {
+	const folder = openMemory(place);
+	const full = notePath(folder, topic);
+	readNote(full, topic);
+	const path = relPath(folder, full);
 	changing(
-		root,
+		folder,
 		() => unlinkSync(full),
 		(index) => forgetFacts(index, path)
 	);
@@ -654,16 +721,17 @@ export function removeMemoryNote(slug: string, topic: string): { path: string } 
 }
 
 export function renameMemoryNote(
-	slug: string,
+	place: MemoryPlace,
 	from: string,
 	to: string
 ): { from: string; to: string } {
-	const root = openMemory(slug);
-	const source = notePath(root, from);
-	const target = notePath(root, to);
-	const text = readNote(root, source, from);
+	const folder = openMemory(place);
+	if (folder.cards) refuse("A card keeps its name, and cards aren't moved or merged.");
+	const source = notePath(folder, from);
+	const target = notePath(folder, to);
+	const text = readNote(source, from);
 	if (existsSync(target)) refuse(`There already is a note "${to}".`);
-	const moved = { from: relPath(root, source), to: relPath(root, target) };
+	const moved = { from: relPath(folder, source), to: relPath(folder, target) };
 	if (!categoryOf(moved.to)) refuse(categoryProblem(moved.to, false));
 	// Into people/ from elsewhere, it's titled with their name, like every person's note.
 	const retitled =
@@ -672,7 +740,7 @@ export function renameMemoryNote(
 			: null;
 	checkSize(retitled ?? text, moved.to);
 	changing(
-		root,
+		folder,
 		() => {
 			mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
 			renameSync(source, target);
@@ -754,15 +822,16 @@ function noteParts(text: string): { title: string | null; parts: [string | null,
  * move (`merged` is false).
  */
 export function mergeMemoryNotes(
-	slug: string,
+	place: MemoryPlace,
 	from: string,
 	into: string
 ): { from: string; into: string; added: number; merged: boolean } {
-	const root = openMemory(slug);
-	const source = notePath(root, from);
-	const target = notePath(root, into);
-	const fromText = readNote(root, source, from);
-	const merged = { from: relPath(root, source), into: relPath(root, target) };
+	const folder = openMemory(place);
+	if (folder.cards) refuse("A card keeps its name, and cards aren't moved or merged.");
+	const source = notePath(folder, from);
+	const target = notePath(folder, into);
+	const fromText = readNote(source, from);
+	const merged = { from: relPath(folder, source), into: relPath(folder, target) };
 	if (merged.from === merged.into) refuse('That is the same note.');
 	if (isPinnedNote(merged.from) || isPinnedNote(merged.into)) {
 		refuse('core is pinned and kept small: move facts in or out of it one at a time.');
@@ -772,10 +841,10 @@ export function mergeMemoryNotes(
 		const [a, b] = [statSync(source), statSync(target)];
 		if (a.ino === b.ino && a.dev === b.dev) refuse('That is the same note.');
 	} else {
-		const moved = renameMemoryNote(slug, from, into);
+		const moved = renameMemoryNote(place, from, into);
 		return { from: moved.from, into: moved.to, added: parseFacts(fromText).length, merged: false };
 	}
-	const intoText = readNote(root, target, into);
+	const intoText = readNote(target, into);
 	if (!categoryOf(merged.into)) refuse(categoryProblem(merged.into, true));
 
 	const person = categoryOf(merged.into) === 'people';
@@ -810,7 +879,7 @@ export function mergeMemoryNotes(
 	const text = `${lines.join('\n')}\n`;
 	checkSize(text, merged.into);
 	changing(
-		root,
+		folder,
 		() => {
 			writeAtomic(target, text);
 			unlinkSync(source);
@@ -833,9 +902,14 @@ export function mergeMemoryNotes(
  * or 0 for a note that didn't exist yet (the page offers to start the core note); if the agent
  * changed the note since, nothing is written.
  */
-export function writeMemoryFile(slug: string, path: string, text: string, basedOn: number): void {
-	const root = openMemory(slug);
-	const full = notePath(root, path);
+export function writeMemoryFile(
+	place: MemoryPlace,
+	path: string,
+	text: string,
+	basedOn: number
+): void {
+	const folder = openMemory(place);
+	const full = notePath(folder, path);
 	if (!existsSync(full)) {
 		if (basedOn) throw new MemoryConflictError(`${path} was deleted while you were editing it.`);
 	} else if (!statSync(full).isFile()) {
@@ -847,16 +921,16 @@ export function writeMemoryFile(slug: string, path: string, text: string, basedO
 				: `nolune started ${path} while you were writing it.`
 		);
 	}
-	saveNote(root, full, text);
+	saveNote(folder, full, text);
 }
 
-export function forgetMemoryFile(slug: string, path: string): void {
-	const root = openMemory(slug);
-	const full = notePath(root, path);
+export function forgetMemoryFile(place: MemoryPlace, path: string): void {
+	const folder = openMemory(place);
+	const full = notePath(folder, path);
 	if (!existsSync(full) || !statSync(full).isFile()) return;
 	changing(
-		root,
+		folder,
 		() => unlinkSync(full),
-		(index) => forgetFacts(index, relPath(root, full))
+		(index) => forgetFacts(index, relPath(folder, full))
 	);
 }

@@ -78,6 +78,19 @@ export function categoryOf(path: string): MemoryCategory | null {
 	return parts.length === 2 && parts[1] && FOLDERS.includes(top) ? top : null;
 }
 
+/**
+ * Where the cards (memory-cards.ts) are in a profile's memory: `cards/anna.md` is a member's card,
+ * a note of its own that goes with them into all their profiles. Not a category: nothing of the
+ * profile's own goes there.
+ */
+export const CARDS_FOLDER = 'cards';
+
+/** Whether a note's path (or topic) is a card's, like `cards/anna` or `cards/anna.md`. */
+export function isCardPath(path: string): boolean {
+	const parts = stem(path.trim().replace(/^\/+|\/+$/g, '')).split('/');
+	return parts.length === 2 && parts[0] === CARDS_FOLDER && !!parts[1];
+}
+
 /** Why a note can't be written to, for the agent: the categories, and where things go. */
 export function categoryProblem(path: string, exists: boolean): string {
 	const topic = stem(path);
