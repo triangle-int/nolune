@@ -311,6 +311,7 @@ export const ru: Messages = {
 		reconnecting: 'Переподключение…',
 		empty: 'Попросите о чём-нибудь, чтобы начать.',
 		readsAfterStep: 'nolune прочитает это после текущего шага',
+		typing: (names: string[]) => `${list(names)} ${names.length === 1 ? 'печатает' : 'печатают'}`,
 		working: 'nolune работает',
 		thinking: 'Думает',
 		writing: 'Пишет',

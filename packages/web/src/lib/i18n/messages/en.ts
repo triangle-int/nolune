@@ -1,7 +1,9 @@
 import { describeSchedule } from '@nolune/core/schedule';
-import { plural } from '../plural';
+import { listOf, plural } from '../plural';
 
 const p = plural('en');
+/** British, like the interface's dates (i18n/index.ts): "a, b and c". */
+const list = listOf('en-GB');
 
 /**
  * The interface in English, which every other language follows key for key. `{slots}` are filled
@@ -165,6 +167,8 @@ export const en = {
 		reconnecting: 'Reconnecting…',
 		empty: 'Ask for something to get started.',
 		readsAfterStep: 'nolune reads this after its current step',
+		/** The others writing in the chat right now. */
+		typing: (names: string[]) => `${list(names)} ${names.length === 1 ? 'is' : 'are'} typing`,
 		working: 'nolune is working',
 		thinking: 'Thinking',
 		writing: 'Writing',

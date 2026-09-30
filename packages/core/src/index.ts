@@ -180,6 +180,7 @@ export {
 	renameConversation,
 	runningConversationIds,
 	sendMessage,
+	setTyping,
 	stop,
 	subscribe,
 	type BackgroundItem,
@@ -187,7 +188,8 @@ export {
 	type ChatModel,
 	type LiveBlock,
 	type LiveEvent,
-	type Snapshot
+	type Snapshot,
+	type Typist
 } from './runner.ts';
 export { TitleError } from './titles.ts';
 export {

@@ -253,6 +253,8 @@ export const fr: Messages = {
 		reconnecting: 'Reconnexion…',
 		empty: 'Demandez quelque chose pour commencer.',
 		readsAfterStep: 'nolune lira ceci après son étape en cours',
+		typing: (names: string[]) =>
+			`${list(names)} ${names.length === 1 ? 'est' : 'sont'} en train d’écrire`,
 		working: 'nolune travaille',
 		thinking: 'Réflexion',
 		writing: 'Rédaction',

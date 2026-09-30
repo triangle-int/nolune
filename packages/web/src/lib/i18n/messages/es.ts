@@ -261,6 +261,8 @@ export const es: Messages = {
 		reconnecting: 'Reconectando…',
 		empty: 'Pide algo para empezar.',
 		readsAfterStep: 'nolune lo leerá después de su paso actual',
+		typing: (names: string[]) =>
+			`${list(names)} ${names.length === 1 ? 'está' : 'están'} escribiendo`,
 		working: 'nolune está trabajando',
 		thinking: 'Pensando',
 		writing: 'Escribiendo',

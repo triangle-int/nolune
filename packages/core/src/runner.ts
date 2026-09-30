@@ -122,7 +122,23 @@ export type LiveEvent =
 	| { type: 'commands'; commands: ChatCommands }
 	| { type: 'background'; background: BackgroundItem[] }
 	/** What the note-taker saved from the chat (memory-changes.ts), all of it. */
-	| { type: 'memory'; memory: DisplayMemoryLook[] };
+	| { type: 'memory'; memory: DisplayMemoryLook[] }
+	/** Everyone writing in the chat's composer right now, in the order they started. */
+	| { type: 'typing'; typing: Typist[] };
+
+/** Someone writing a message in a chat, which the others who have it open see. */
+export interface Typist {
+	/** Their user id. */
+	id: string;
+	name: string;
+}
+
+/**
+ * How long someone counts as typing after their page last said so. While they type it says so
+ * again every few seconds, and that they stopped when they do; this is for a page that closed or
+ * lost its connection first.
+ */
+export const TYPING_TTL_MS = 8_000;
 
 /** The model and reasoning level a conversation's next model call uses. */
 export interface ChatModel {
@@ -186,6 +202,8 @@ export interface Snapshot {
 	background: BackgroundItem[];
 	/** What the note-taker saved from it. */
 	memory: DisplayMemoryLook[];
+	/** Who is writing in it right now, the person looking at it included. */
+	typing: Typist[];
 }
 
 /**
@@ -214,6 +232,8 @@ interface State {
 	live: (LiveBlock | null)[];
 	toolOutput: { id: string; text: string } | null;
 	safety: SafetyTally;
+	/** Who is typing, by user id, each until their TYPING_TTL_MS runs out. */
+	typing: Map<string, { name: string; expiry: NodeJS.Timeout }>;
 	emitter: EventEmitter;
 }
 
@@ -287,6 +307,7 @@ function stateFor(conversationId: string): State {
 			live: [],
 			toolOutput: null,
 			safety: freshTally(),
+			typing: new Map(),
 			emitter: new EventEmitter()
 		};
 		st.emitter.setMaxListeners(100);
@@ -323,8 +344,34 @@ export function getSnapshot(conversationId: string): Snapshot {
 		live: st.live,
 		toolOutput: st.toolOutput,
 		background: backgroundItems(conversationId),
-		memory: memoryLooks(conversationId)
+		memory: memoryLooks(conversationId),
+		typing: typists(st)
 	};
+}
+
+function typists(st: State): Typist[] {
+	return [...st.typing].map(([id, { name }]) => ({ id, name }));
+}
+
+/**
+ * Whether `person` is writing in the chat, for everyone who has it open. Someone typing is told
+ * again every few seconds; that only tells the others when their name changed. They stop by
+ * saying so, by sending their message, or TYPING_TTL_MS after they last said they were typing.
+ */
+export function setTyping(conversationId: string, person: Typist, typing: boolean): void {
+	const st = stateFor(conversationId);
+	const known = st.typing.get(person.id);
+	if (known) clearTimeout(known.expiry);
+	if (typing) {
+		const expiry = setTimeout(() => setTyping(conversationId, person, false), TYPING_TTL_MS);
+		expiry.unref();
+		st.typing.set(person.id, { name: person.name, expiry });
+		if (known?.name === person.name) return;
+	} else {
+		if (!known) return;
+		st.typing.delete(person.id);
+	}
+	emit(conversationId, { type: 'typing', typing: typists(st) });
 }
 
 /** The subagents a command waits for with `nolune agent watch`, if it does. */
@@ -486,6 +533,8 @@ async function queueMessage(
 	const placeholder = conv.title ? undefined : opening.slice(0, TITLE_LIMIT);
 	touchConversation(conversationId, placeholder);
 	emitQueued(conversationId);
+	// After the message shows, so the chat doesn't shrink for a moment in between.
+	setTyping(conversationId, sender, false);
 	kick(conversationId);
 	if (placeholder !== undefined) nameConversation(conv, opening, placeholder);
 }

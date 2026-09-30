@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -39,6 +39,7 @@
 	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { activeStepLabel, buildTranscript, replyText, type Reply } from '$lib/transcript';
+	import { TypingReporter } from '$lib/typing';
 	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
 	import AssistantAvatar, { type Mood } from './AssistantAvatar.svelte';
@@ -55,6 +56,7 @@
 	import CommandModeMenu from './chat/CommandModeMenu.svelte';
 	import ModelMenu, { shortModelName } from './chat/ModelMenu.svelte';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
+	import TypingIndicator from './chat/TypingIndicator.svelte';
 	import PageHeader from './PageHeader.svelte';
 	import Rich from './Rich.svelte';
 	import TypedText from './TypedText.svelte';
@@ -129,6 +131,20 @@
 	let textarea = $state<HTMLTextAreaElement | null>(null);
 
 	$effect(() => chat.connect(conversation.id));
+
+	/** Tells the others in the chat when this person is writing in it. */
+	const typing = new TypingReporter((typing) =>
+		fetch(`/api/c/${conversation.id}/typing`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ typing }),
+			// So that they stopped still gets there when the page closes.
+			keepalive: true
+		})
+	);
+	onDestroy(() => typing.stop());
+	/** The others writing in the chat, shown where their message will land. */
+	const typists = $derived(chat.typing.filter((typist) => typist.id !== page.data.user?.id));
 
 	/** The model and reasoning level: anyone in the profile can change them, which arrives live. */
 	const model: ChatModel = $derived(
@@ -421,7 +437,10 @@
 		if ((!message && !uploads.length) || sending || attachments.uploading) return;
 		sending = true;
 		stickToBottom = true;
+		// A "typing" still on its way would otherwise show them typing again after the message.
+		await typing.settled();
 		if (await post('messages', { text: message, uploads })) {
+			typing.sent();
 			text = '';
 			attachments.clear();
 			continued = true;
@@ -822,6 +841,10 @@
 				{/if}
 			{/each}
 
+			{#if typists.length}
+				<TypingIndicator {typists} />
+			{/if}
+
 			{#if chat.error || (unanswered && !conversation.subagent)}
 				<div class="relative flex flex-col gap-3">
 					{#if !liveReply}
@@ -886,6 +909,7 @@
 				placeholder={chat.running ? m.chat.placeholderRunning : m.chat.placeholder}
 				onsubmit={send}
 				onstop={() => post('stop')}
+				oninput={(value) => typing.input(value)}
 			>
 				{#snippet tools()}
 					<ModelMenu
@@ -919,6 +943,13 @@
 		{/if}
 	</ComposerDock>
 </div>
+
+<!-- Someone who switched tabs or apps isn't typing, whatever the box still holds. -->
+<svelte:document
+	onvisibilitychange={() => {
+		if (document.visibilityState === 'hidden') typing.stop();
+	}}
+/>
 
 <MediaViewer bind:picture={viewing} />
 

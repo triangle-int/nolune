@@ -1346,6 +1346,18 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   Anyone in the profile can rename a chat from its menu (the sidebar's, or the chat header's). The
   new name reaches everyone who has the chat open, doesn't move it up the list, and isn't replaced
   by a name the model was still thinking of.
+- **Typing:** someone writing in a chat shows to the others who have it open, where their message
+  will land and like one from them: their avatar and "Max is typing" over a bubble of bouncing dots
+  (`TypingIndicator.svelte`; with reduced motion the dots only fade). The page tells the gateway
+  (`POST /api/c/<id>/typing`, `TypingReporter` in `packages/web/src/lib/typing.ts`) as the person
+  types, again every 3 s while they go on, and that they stopped when the box is emptied, after 5 s
+  without a keystroke, when the tab is hidden or closed, and when they leave the chat. Sending the
+  message stops it on the gateway, right after the message shows. Reports go out one at a time and
+  a message waits for the last, so a late "typing" never lands after it. The gateway keeps who is
+  typing in memory (`setTyping` in `runner.ts`), with the name from their session, sends the list
+  as a `typing` event (and in the snapshot), and forgets someone whose page hasn't said so for 8 s:
+  a browser that died or lost its connection. The page leaves out the person looking at it, and
+  forgets everyone while its stream reconnects.
 - `/` redirects to the last profile opened (`nolune-profile` cookie) or the only one, else to
   `/profiles`.
   Creating a profile there opens its [welcome](#welcome).
