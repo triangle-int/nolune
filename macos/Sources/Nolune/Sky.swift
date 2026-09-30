@@ -1,15 +1,15 @@
 import SwiftUI
 
 /**
- * The welcome's sky, as IntroSky.svelte draws it on the web: deep space with stars coming out and
- * drifting past, one shooting star, the eight avatar colors circling the wordmark like planets,
- * then melting into a glow behind the questions.
+ * The welcome's sky, as IntroSky.svelte draws it on the web: deep space with stars drifting past
+ * and the eight avatar colors pooled into a glow behind the questions. Here the stars fly out of a
+ * big bang (`burst`) and the colors after them; circling the wordmark is the web intro's.
  *
  * The onboarding sets `stage` and friends; `draw` reads them each frame, like the web's `tick`.
  */
 final class Sky {
 	enum Stage: Equatable {
-		case dark, stars, orbit, aurora, gone
+		case dark, stars, aurora, gone
 	}
 
 	var stage: Stage = .dark
@@ -17,11 +17,13 @@ final class Sky {
 	var space = true
 	/// Jump to the stage's resting state instead of moving there (skipped, or reduced motion).
 	var still = false
-	/// Where the planets start from (the wordmark's dots), and what they circle.
-	var origins: [CGPoint] = []
+	/// What the colors spread around: the middle of the window.
 	var center: CGPoint?
 	/// A swell in the glow that fades by itself: access granted.
 	var bloom: Double = 0
+	/// The stars come out of the middle all at once and fly out to their places, a big bang,
+	/// instead of fading in one by one.
+	var burst = false
 
 	private struct Star {
 		/// Across the screen at depth 1, from -1 to 1.
@@ -35,6 +37,8 @@ final class Sky {
 		var appears: Double
 		var twinkle: Double
 		var phase: Double
+		/// In a burst, how long after the first it flies.
+		var delay: Double
 	}
 
 	private struct Orb {
@@ -65,13 +69,12 @@ final class Sky {
 	private static let drift = 0.022
 	/// And how fast the whole field turns.
 	private static let turnRate = 0.006
-	private static let tilt = -11 * Double.pi / 180
+	/// How long the stars take to fly out in a burst: fast at first, settling.
+	private static let burstLength = 2.2
 
 	private var stars: [Star] = []
 	private var orbs = Array(repeating: Orb(), count: Theme.avatars.count)
 	private var from = Array(repeating: Orb(), count: Theme.avatars.count)
-	/// Where each planet has just been, for its trail.
-	private var trails = Array(repeating: [CGPoint](), count: Theme.avatars.count)
 	private var current: Stage = .dark
 	private var since: TimeInterval = 0
 	private var starsSince: TimeInterval?
@@ -90,7 +93,6 @@ final class Sky {
 	private var skyTime: Double = 0
 	private var fadeOut: Double = 1
 	private var solid: Double = 0
-	private var orbitsAlpha: Double = 0
 
 	func draw(_ context: inout GraphicsContext, size: CGSize, now: TimeInterval) {
 		advance(size: size, now: now)
@@ -106,7 +108,11 @@ final class Sky {
 		let dt = min(0.1, max(0, now - (last ?? now)))
 		last = now
 		if stage != current {
-			if current == .orbit { trails = trails.map { _ in [CGPoint]() } }
+			// The colors come out of the middle, after the stars.
+			if stage == .aurora, current != .aurora {
+				let center = mid
+				orbs = orbs.map { _ in Orb(x: center.x, y: center.y, r: 3, alpha: 1) }
+			}
 			current = stage
 			since = now
 			from = orbs
@@ -132,30 +138,11 @@ final class Sky {
 		bloom = max(0, bloom - dt / 3)
 
 		// One shooting star, a few seconds in.
-		if shooting == nil, !still, current != .dark, skyTime > 5.5, skyTime < 6 {
+		if shooting == nil, !still, !burst, current != .dark, skyTime > 5.5, skyTime < 6 {
 			shooting = (skyTime, width * 0.18, height * 0.14, width * 0.34, height * 0.16)
 		}
 
 		switch current {
-		case .orbit:
-			let k = still ? 1 : easeOut(t / 1.8)
-			solid = k
-			orbitsAlpha = 0.07 * (still ? 1 : clamp((t - 0.6) / 2))
-			for i in orbs.indices {
-				let target = onEllipse(i, t: t)
-				let start = origins.isEmpty ? CGPoint(x: mid.x, y: mid.y) : origins[i % origins.count]
-				let tx = Double(target.x)
-				let ty = Double(target.y)
-				let sx = Double(start.x)
-				let sy = Double(start.y)
-				orbs[i].x = sx + (tx - sx) * k
-				orbs[i].y = sy + (ty - sy) * k
-				orbs[i].r = 2.5 + (1.5 + Double(i % 3) * 1.2) * k
-				orbs[i].alpha = min(1, t * 4)
-				// The trail: where it just was.
-				trails[i].append(CGPoint(x: orbs[i].x, y: orbs[i].y))
-				if trails[i].count > 9 { trails[i].removeFirst() }
-			}
 		case .aurora, .gone:
 			let k = still ? 1 : easeOut(t / 2.4)
 			// The planets melt into the glow.
@@ -184,19 +171,6 @@ final class Sky {
 		drawSpace(&context, t: skyTime, fadeOut: fadeOut)
 
 		switch current {
-		case .orbit:
-			drawOrbits(&context, alpha: orbitsAlpha)
-			for i in orbs.indices {
-				// Fainter the longer ago it was there.
-				for (age, point) in trails[i].dropLast().reversed().enumerated() {
-					var ghost = orbs[i]
-					ghost.x = point.x
-					ghost.y = point.y
-					ghost.alpha *= 0.55 * pow(0.78, Double(age))
-					drawOrb(&context, ghost, color: Theme.avatars[i], solid: 0)
-				}
-				drawOrb(&context, orbs[i], color: Theme.avatars[i], solid: solid)
-			}
 		case .aurora, .gone:
 			for i in orbs.indices {
 				var shown = orbs[i]
@@ -219,40 +193,6 @@ final class Sky {
 	private var radii: (rx: Double, ry: Double) {
 		let rx = min(width * 0.47, 460)
 		return (rx, rx * 0.3)
-	}
-
-	/// Planet `i`'s orbit, as a share of the widest: the first closest in.
-	private func orbitOf(_ i: Int) -> Double {
-		0.55 + 0.45 * Double(i) / Double(orbs.count - 1)
-	}
-
-	private func onEllipse(_ i: Int, t: Double) -> CGPoint {
-		let scale = orbitOf(i)
-		let (rx, ry) = radii
-		// Closer in goes faster, as planets do; each starts somewhere else around.
-		let a = Double(i) * 2.4 + t * 0.26 * pow(scale, -1.5)
-		let ex: Double = cos(a) * rx * scale
-		let ey: Double = sin(a) * ry * scale
-		let center = mid
-		let x: Double = center.x + ex * cos(Sky.tilt) - ey * sin(Sky.tilt)
-		let y: Double = center.y + ex * sin(Sky.tilt) + ey * cos(Sky.tilt)
-		return CGPoint(x: x, y: y)
-	}
-
-	/// The orbits themselves, faint, like a map of them.
-	private func drawOrbits(_ context: inout GraphicsContext, alpha: Double) {
-		guard alpha > 0.001 else { return }
-		let (rx, ry) = radii
-		let center = mid
-		var c = context
-		c.opacity = alpha
-		c.translateBy(x: center.x, y: center.y)
-		c.rotate(by: .radians(Sky.tilt))
-		for i in orbs.indices {
-			let s = orbitOf(i)
-			let rect = CGRect(x: -rx * s, y: -ry * s, width: 2 * rx * s, height: 2 * ry * s)
-			c.stroke(Path(ellipseIn: rect), with: .color(.white), lineWidth: 1)
-		}
 	}
 
 	/// Each color's place in the glow: spread wide and low behind the middle, drifting.
@@ -305,7 +245,7 @@ final class Sky {
 			band.translateBy(x: width / 2, y: height / 2)
 			band.rotate(by: .radians(Sky.band + turn))
 			band.scaleBy(x: 1, y: 0.16)
-			band.opacity = spaceAmount * 0.12 * clamp(t / 5) * fadeOut
+			band.opacity = spaceAmount * 0.12 * clamp(t / (burst ? 2 : 5)) * fadeOut
 			let bandColor = Color(red: 150 / 255, green: 165 / 255, blue: 220 / 255)
 			let r = extent * 0.75
 			band.fill(
@@ -320,7 +260,7 @@ final class Sky {
 				let x = (n.x + sin(t * 0.03 + n.r) * 0.03) * width
 				let y = (n.y + cos(t * 0.025 + n.r) * 0.03) * height
 				var cloud = context
-				cloud.opacity = spaceAmount * n.alpha * clamp(t / 6) * fadeOut
+				cloud.opacity = spaceAmount * n.alpha * clamp(t / (burst ? 2.5 : 6)) * fadeOut
 				cloud.fill(
 					whole,
 					with: .radialGradient(
@@ -340,19 +280,37 @@ final class Sky {
 		let cosTurn = cos(turn)
 		let sinTurn = sin(turn)
 		for s in stars {
-			let come = still ? 1 : clamp((t - s.appears) / 1.2)
+			var come = still ? 1 : clamp((t - s.appears) / 1.2)
+			// In a burst, how far out of the middle it has flown, now and a moment ago.
+			var out = 1.0
+			var before = 1.0
+			if burst, !still {
+				let k = (t - s.delay) / Sky.burstLength
+				come = k > 0 ? 1 : 0
+				out = Sky.inflate(k)
+				before = Sky.inflate(k - 0.05)
+			}
 			if come <= 0 { continue }
 			let px: Double = (s.x * cosTurn - s.y * sinTurn) / s.z
 			let py: Double = (s.x * sinTurn + s.y * cosTurn) / s.z
-			let x: Double = cx + px * half
-			let y: Double = cy + py * half
+			let x: Double = cx + px * half * out
+			let y: Double = cy + py * half * out
 			if x < -4 || x > width + 4 || y < -4 || y > height + 4 { continue }
 			let near = 1 - s.z
 			let twinkle: Double = s.twinkle > 0 ? 0.7 + 0.3 * sin(t * s.twinkle + s.phase) : 1
-			let alpha: Double = shown * come * twinkle * (0.45 + 0.55 * near)
+			// Hot out of the bang, cooling as they settle.
+			let heat: Double = 1 + 1.5 * (1 - out)
+			let alpha: Double = min(1, shown * come * twinkle * (0.45 + 0.55 * near) * heat)
 			let r: Double = s.size * (0.6 + near * 1.1)
 			var c = context
 			c.opacity = alpha
+			if out - before > 0.002 {
+				// Still flying: a streak behind it.
+				var streak = Path()
+				streak.move(to: CGPoint(x: cx + px * half * before, y: cy + py * half * before))
+				streak.addLine(to: CGPoint(x: x, y: y))
+				c.stroke(streak, with: .color(s.color), lineWidth: max(0.6, r * 1.2))
+			}
 			if r >= 1.6 {
 				// The brightest have a soft halo.
 				let reach = r * 4
@@ -410,6 +368,11 @@ final class Sky {
 	}
 
 	/// Somewhere on screen at depth `z`, as the camera's turned now: crowded along the band.
+	/// The big bang's expansion: very fast at first, then settling into place.
+	private static func inflate(_ k: Double) -> Double {
+		1 - pow(1 - clamp(k), 5)
+	}
+
 	private func newStar(appears: Double, z: Double) -> Star {
 		let half = max(width, height) / 2
 		var sx: Double
@@ -435,7 +398,8 @@ final class Sky {
 			color: Sky.starColors.randomElement() ?? .white,
 			appears: appears,
 			twinkle: Double.random(in: 0..<1) < 0.4 ? 1.5 + Double.random(in: 0..<3) : 0,
-			phase: Double.random(in: 0..<(2 * Double.pi))
+			phase: Double.random(in: 0..<(2 * Double.pi)),
+			delay: Double.random(in: 0..<0.2)
 		)
 	}
 }
@@ -447,26 +411,6 @@ func easeOut(_ t: Double) -> Double { 1 - pow(1 - clamp(t), 3) }
 func easeInOut(_ t: Double) -> Double {
 	let t = clamp(t)
 	return t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
-}
-
-/// CSS's cubic-bezier(x1, y1, x2, y2), for the wordmark's keyframes.
-func cubicBezier(_ x1: Double, _ y1: Double, _ x2: Double, _ y2: Double, _ t: Double) -> Double {
-	let t = clamp(t)
-	if t == 0 || t == 1 { return t }
-	func sample(_ a: Double, _ b: Double, _ s: Double) -> Double {
-		3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s
-	}
-	// Find s where x(s) = t by bisection: plenty for an animation.
-	var low = 0.0
-	var high = 1.0
-	var s = t
-	for _ in 0..<24 {
-		let x = sample(x1, x2, s)
-		if abs(x - t) < 1e-5 { break }
-		if x < t { low = s } else { high = s }
-		s = (low + high) / 2
-	}
-	return sample(y1, y2, s)
 }
 
 /// The sky, redrawn every frame.

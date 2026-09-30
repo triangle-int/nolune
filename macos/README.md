@@ -56,9 +56,10 @@ onboarding over.
   running process may not see the grant before it relaunches.
 - **Signing** (`scripts/build-app.sh`): every Mach-O in the package, then Node with the
   entitlements V8 needs (`Resources/node.entitlements`, as Node's own builds have), then the app.
-- **The intro** (`Sky.swift`, `IntroView.swift`) is IntroSky.svelte and the welcome's wordmark
-  animation, redrawn with SwiftUI's `Canvas` on the web's timings and song. The wordmark's path is
-  copied from `packages/web/src/lib/assets/logo.svg`; keep them in step.
+- **The intro** (`IntroView.swift`, `Sky.swift`) is a big bang of about four seconds: a point of
+  light bursts and the stars and the eight colors fly out of it into the web welcome's sky
+  (IntroSky.svelte, redrawn with SwiftUI's `Canvas`). The full intro, with the wordmark, is the
+  web welcome's, which comes next.
 
 The CI workflow `macos.yml` builds the app on every change here, checks the bundle starts a
 gateway that answers, and keeps every screen as a PNG (`Nolune --snapshot <folder>`, which draws

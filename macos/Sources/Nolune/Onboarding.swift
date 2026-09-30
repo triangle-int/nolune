@@ -73,9 +73,10 @@ final class Onboarding: ObservableObject {
 	// MARK: Intro
 
 	/**
-	 * Space, to the song: stars come out, one of them draws the wordmark, its three dots type,
-	 * then fly out as the eight avatar colors and orbit it, pooling into a glow behind the welcome
-	 * as the song lifts. About 24 seconds, as on the web; a click or Esc skips it.
+	 * A big bang (IntroView.swift): a point of light gathers in the dark and bursts, the song
+	 * starts, the stars fly out of it and the eight avatar colors after them, pooling into a glow
+	 * behind the welcome. About four seconds; the full intro is the web welcome's, next. A click or
+	 * Esc skips it.
 	 */
 	func startIntro(layout: IntroLayout) async {
 		guard !Snapshot.active else { return }
@@ -87,10 +88,8 @@ final class Onboarding: ObservableObject {
 			skipIntro()
 			return
 		}
-		music.play()
 		let start = Date()
 		introStart = start
-		sky.stage = .stars
 
 		func at(_ seconds: TimeInterval) async -> Bool {
 			let wait = start.addingTimeInterval(seconds).timeIntervalSinceNow
@@ -98,17 +97,18 @@ final class Onboarding: ObservableObject {
 			return phase == .intro && !skipped
 		}
 
-		// The dots break loose as eight colors, and circle the wordmark like planets.
-		guard await at(IntroTiming.orbit) else { return }
-		sky.origins = layout.dotCenters
-		sky.center = layout.center
-		sky.stage = .orbit
+		// It bursts: the song starts, and the stars fly out of the flash.
+		guard await at(IntroTiming.bang) else { return }
+		music.play()
+		sky.burst = true
+		sky.stage = .stars
 
-		// They pool into a glow as the wordmark fades.
-		guard await at(IntroTiming.aurora) else { return }
+		// The colors follow and pool into a glow.
+		guard await at(IntroTiming.colors) else { return }
+		sky.center = layout.center
 		sky.stage = .aurora
 
-		// Space gives way to the page as the song lifts.
+		// Space gives way to the page.
 		guard await at(IntroTiming.dawn) else { return }
 		sky.space = false
 		guard await at(IntroTiming.welcome) else { return }
@@ -268,19 +268,15 @@ final class Onboarding: ObservableObject {
 	}
 }
 
-/// The intro's beats, in seconds from its start, as the web times them to the song.
+/// The intro's beats, in seconds from its start.
 enum IntroTiming {
-	/// A star at the middle brightens and draws the letters.
-	static let draw: TimeInterval = 9
-	static let drawLength: TimeInterval = 2.8
-	/// The three dots type.
-	static let typing = draw + drawLength
-	static let beat: TimeInterval = 0.62
-	static let gap: TimeInterval = 0.18
-	/// They break loose and orbit.
-	static let orbit = typing + 2 * beat + 2 * gap
-	/// They pool into a glow; the wordmark fades.
-	static let aurora = orbit + 7
-	static let dawn = aurora + 2.4
+	/// A point of light gathers in the middle.
+	static let gather: TimeInterval = 0.3
+	/// It bursts, and the stars fly out of it.
+	static let bang: TimeInterval = 1.3
+	/// The eight colors follow and pool into a glow.
+	static let colors = bang + 0.6
+	/// Space gives way to the page.
+	static let dawn = bang + 2.3
 	static let welcome = dawn + 0.8
 }

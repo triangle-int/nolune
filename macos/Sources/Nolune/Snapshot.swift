@@ -31,13 +31,11 @@ enum Snapshot {
 	private static func render(into folder: URL) async {
 		let size = OnboardingView.size
 		let moments: [(String, Double)] = [
-			("01-stars", 3.5),
-			("02-star", IntroTiming.draw + 0.5),
-			("03-sweep", IntroTiming.draw + 1.9),
-			("04-typing", IntroTiming.typing + 0.3),
-			("05-burst", IntroTiming.orbit + 0.35),
-			("06-orbit", IntroTiming.orbit + 4),
-			("07-aurora", IntroTiming.aurora + 1.2)
+			("01-gather", IntroTiming.bang - 0.15),
+			("02-bang", IntroTiming.bang + 0.12),
+			("03-burst", IntroTiming.bang + 0.45),
+			("04-colors", IntroTiming.colors + 0.6),
+			("05-dawn", IntroTiming.dawn + 0.4)
 		]
 		intro = true
 		for (name, t) in moments {
@@ -148,14 +146,14 @@ enum Snapshot {
 	/// The sky's stages at `t` into the intro, as Onboarding.startIntro sets them.
 	private static func stage(_ sky: Sky, at t: Double, layout: IntroLayout) {
 		if t >= IntroTiming.dawn { sky.space = false }
-		if t >= IntroTiming.aurora {
-			sky.stage = .aurora
-		} else if t >= IntroTiming.orbit {
-			sky.origins = layout.dotCenters
+		if t >= IntroTiming.colors {
 			sky.center = layout.center
-			sky.stage = .orbit
-		} else {
+			sky.stage = .aurora
+		} else if t >= IntroTiming.bang {
+			sky.burst = true
 			sky.stage = .stars
+		} else {
+			sky.stage = .dark
 		}
 	}
 }

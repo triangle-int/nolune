@@ -1674,9 +1674,11 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
 and the npm package installed in `Contents/Resources/app`. See `macos/README.md` for building and
 signing.
 
-- **First run.** The web welcome's intro, redrawn natively (IntroSky.svelte in `Sky.swift`, the
-  wordmark's star, sweep, typing dots and burst in `IntroView.swift`), on the same timings and
-  song. Then three steps with the web welcome's look (Figtree, the off-white pill, the progress
+- **First run.** A big bang, about four seconds (`IntroView.swift`): in the dark a point of light
+  gathers and bursts in a flash and a shock wave, the song starts, and the stars fly out of it,
+  fast then settling (IntroSky.svelte's sky in `Sky.swift`, with a `burst`), the eight colors
+  after them, pooling into the glow. The full intro, with the wordmark, stays the web welcome's,
+  which the admin sees next, so it isn't played twice. Then three steps with the web welcome's look (Figtree, the off-white pill, the progress
   bars): the admin account (`nolune setup`, with a generated password to keep; skipped when an
   admin exists), Full Disk Access, and the gateway started in the background. Opened from the
   DMG (or translocated from Downloads), it first offers to move itself to Applications
