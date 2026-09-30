@@ -23,17 +23,22 @@ profile, everyone can pick up the same conversation, and the assistant knows who
 
 ## Bringing someone into the family
 
-1. Create their account on the host computer:
+1. Give them an account. As an admin, open **People** from the menu under your name, then either:
+   - **Create invite link** and send it to them. They open it, pick their name, email and
+     password, and they're in. A link works once, for 7 days, and you can take it back.
+   - Or **Add a person** with their name and email, and send them the address and the password
+     nolune shows you.
 
-   ```sh
-   nolune user create Anna anna@example.com
-   ```
+   At the terminal, `nolune user invite Anna` prints an invite link, and
+   `nolune user create Anna anna@example.com` makes the account and prints a password.
 
-2. Give them the address and the password printed by the command.
-3. Open **People & profile** in the profile you want to share, and add them by name or email.
+2. Open **People & profile** in the profile you want to share, and add them by name or email.
 
-They can create their own profiles and add existing users too. Accounts are created by the host's
-administrator; web sign-up is off, and joining a profile doesn't send an email invitation.
+They can create their own profiles and add existing users too. Only admins make accounts; there's
+no sign-up page, and joining a profile doesn't send an email invitation.
+
+**People** is also where an admin resets someone's forgotten password, makes someone an admin, or
+removes an account.
 
 ## Your name and picture
 

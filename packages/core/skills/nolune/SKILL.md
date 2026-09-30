@@ -211,12 +211,15 @@ one that isn't in the list, say which ones there are.
 
 ## Accounts
 
-There is no sign-up page: accounts are made only with `nolune user`. Everyone with an account can ask
-you to do anything on this computer, so only add people, make admins, reset passwords or remove
-accounts when an admin asks. Check the name and email with them before creating an account.
+There is no sign-up page: admins make accounts on the People page, or ask you. Everyone with an
+account can ask you to do anything on this computer, so only add people, make invite links, make
+admins, reset passwords or remove accounts when an admin asks. Prefer an invite link: the person
+picks their own password, so none passes through the chat. Check the name and email with them
+before creating an account.
 
 ```sh
 nolune user list                                  # name, email, and "admin"
+nolune user invite Grandma                        # prints a link for her, good once for 7 days
 nolune user create Grandma grandma@example.com    # prints her password
 nolune user create Dad dad@example.com --admin
 nolune user passwd Anna                           # prints a new password

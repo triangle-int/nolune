@@ -57,15 +57,18 @@ export {
 } from './custom-providers.ts';
 export { getDb, schema, type DB } from './db/index.ts';
 export {
+	EmailError,
 	MAX_NAME_LENGTH,
 	MAX_PICTURE_BYTES,
 	MIN_PASSWORD_LENGTH,
+	PasswordError,
 	PictureError,
 	UserNameError,
 	clearUserPicture,
 	createUser,
 	deleteUser,
 	findUser,
+	findUserById,
 	generatePassword,
 	listUsers,
 	passwordProblem,
@@ -73,8 +76,19 @@ export {
 	setAdmin,
 	setPassword,
 	setUserPicture,
-	userPictureFile
+	userPictureFile,
+	type PasswordReason
 } from './users.ts';
+export {
+	INVITE_DAYS,
+	InviteError,
+	acceptInvite,
+	createInvite,
+	findInvite,
+	listInvites,
+	revokeInvite,
+	type Invite
+} from './invites.ts';
 export {
 	addMember,
 	createProfile,

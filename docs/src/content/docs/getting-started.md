@@ -24,14 +24,15 @@ npm install -g nolune
 nolune setup                   # your account, and the address: nolune's relay, or your own
 nolune key set openai          # optional: GPT models for chats, and pictures (Images page)
 nolune service install         # run in the background: a LaunchAgent on macOS, systemd on Linux
-nolune user create Anna anna@example.com   # add family members (prints their password)
+nolune user invite Anna        # a link for a family member to make their account
 ```
 
 Without systemd, run `nolune start` under your own process manager instead.
 
 Then open the address `nolune setup` printed, sign in and make a profile: its welcome asks for a
 model, on an API key or a plan. As the admin you can also add or replace API keys, sign in with
-ChatGPT, and add models on the web, under **Models & keys** in your account menu.
+ChatGPT, and add models on the web, under **Models & keys** in your account menu, and add
+people or send them invite links under **People**.
 
 ## On a Mac
 

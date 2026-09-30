@@ -8,7 +8,9 @@ import { blobPath, storeBytes } from './media.ts';
 import { createProfile, listMembers, noticeProfileChanges, onProfileChanged } from './profiles.ts';
 import { makeUser } from './test/fixtures.ts';
 import {
+	EmailError,
 	MAX_PICTURE_BYTES,
+	PasswordError,
 	PictureError,
 	UserNameError,
 	clearUserPicture,
@@ -75,7 +77,30 @@ describe('createUser', () => {
 		await expect(
 			createUser({ name: 'max@home', email: 'max@example.com', password: PASSWORD })
 		).rejects.toThrow("Name can't contain @");
+		await expect(
+			createUser({ name: 'Max', email: 'max at example.com', password: PASSWORD })
+		).rejects.toThrow('"max at example.com" isn\'t an email address');
 		expect(listUsers()).toHaveLength(1);
+	});
+
+	it('says why, for the web UI to say it in its language', async () => {
+		await createUser({ name: 'Anna', email: 'anna@example.com', password: PASSWORD });
+		const reason = (input: { name?: string; email?: string; password?: string }) =>
+			createUser({ name: 'Max', email: 'max@example.com', password: PASSWORD, ...input }).then(
+				() => null,
+				(err: EmailError | PasswordError) => [err.constructor.name, err.reason]
+			);
+		expect(await reason({ email: 'max' })).toEqual(['EmailError', 'invalid']);
+		expect(await reason({ email: 'Anna@example.com' })).toEqual(['EmailError', 'taken']);
+		expect(await reason({ password: 'Short1!' })).toEqual(['PasswordError', 'tooShort']);
+		expect(await reason({ password: 'alllowercaseletters' })).toEqual([
+			'PasswordError',
+			'tooSimple'
+		]);
+		expect(await reason({ password: 'aaaaaaaaaaaaaaaaaaaaaaa' })).toEqual([
+			'PasswordError',
+			'tooRepetitive'
+		]);
 	});
 });
 

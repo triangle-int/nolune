@@ -141,6 +141,13 @@
 			"when": 1790735462679,
 			"tag": "0019_user_picture",
 			"breakpoints": true
+		},
+		{
+			"idx": 20,
+			"version": "6",
+			"when": 1790783857892,
+			"tag": "0020_invites",
+			"breakpoints": true
 		}
 	]
 }
