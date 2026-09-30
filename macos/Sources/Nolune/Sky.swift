@@ -63,7 +63,8 @@ final class Sky {
 	]
 	/// The galaxy's band across the sky, tilted; many of the stars crowd along it.
 	private static let band = -0.42
-	private static let starColors: [Color] = ([0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFF1D6, 0xD6E4FF, 0xFFE1C2] as [UInt32])
+	/// Mostly white, some warm, some blue; the outburst's sparks too.
+	static let starColors: [Color] = ([0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFF1D6, 0xD6E4FF, 0xFFE1C2] as [UInt32])
 		.map { Color(hex: $0) }
 	/// How fast the camera drifts into the stars, in depth per second: slow, like floating.
 	private static let drift = 0.022
