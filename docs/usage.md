@@ -76,7 +76,8 @@ nolune service restart
 
 **Files in Documents, Desktop, Photos, Mail.** macOS blocks background processes from these until
 you give the `node` binary Full Disk Access (System Settings > Privacy & Security > Full Disk
-Access). `nolune setup` prints the exact path.
+Access). `nolune setup` prints the exact path. The macOS app (`macos/`, see its README) walks you
+through this instead, and its switch is named nolune and covers only nolune.
 
 **Keep the Mac awake** if people should reach it at any time (System Settings > Energy).
 

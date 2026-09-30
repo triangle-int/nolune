@@ -73,6 +73,7 @@ import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { SOUL_HELP, soulCommand } from './soul.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
+	appManaged,
 	installService,
 	logFile,
 	renderPlist,
@@ -334,6 +335,9 @@ function listenAddress() {
 }
 
 function fullDiskAccessHint(): string {
+	if (appManaged()) {
+		return 'To let the agent reach Documents, Desktop, Downloads, Photos and Mail, turn on nolune in System Settings > Privacy & Security > Full Disk Access.';
+	}
 	return `To let the agent reach Documents, Desktop, Downloads, Photos and Mail, give Full Disk Access to
   ${process.execPath}
   in System Settings > Privacy & Security > Full Disk Access (click +, press Cmd+Shift+G, paste the path).
@@ -425,6 +429,7 @@ async function start(io: Io): Promise<void> {
 async function service(io: Io, action: string | undefined, args: string[]): Promise<void> {
 	switch (action) {
 		case 'install': {
+			if (appManaged()) fail('the nolune app runs the gateway in the background already.');
 			requireInit();
 			if (!existsSync(paths.server))
 				fail('no server build. In a source checkout, run `pnpm build` first.');
@@ -443,6 +448,11 @@ ${fullDiskAccessHint()}`);
 			return;
 		}
 		case 'uninstall':
+			if (appManaged()) {
+				fail(
+					'the nolune app runs the gateway. Turn nolune off under System Settings > General > Login Items, or delete the app.'
+				);
+			}
 			uninstallService();
 			io.log('Removed the background service.');
 			return;
@@ -452,7 +462,8 @@ ${fullDiskAccessHint()}`);
 			return;
 		case 'status': {
 			const status = serviceStatus();
-			if (!status.installed) io.log('Not installed. Run `nolune service install`.');
+			if (!status.installed && appManaged()) io.log('Not running. Open the nolune app.');
+			else if (!status.installed) io.log('Not installed. Run `nolune service install`.');
 			else if (!status.loaded) io.log('Installed but not loaded. Run `nolune service install`.');
 			else
 				io.log(

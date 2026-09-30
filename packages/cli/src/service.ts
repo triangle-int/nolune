@@ -10,6 +10,14 @@ const LABEL = 'dev.nolune.gateway';
 const plistPath = join(homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
 export const logFile = join(paths.logs, 'gateway.log');
 
+/**
+ * Run from nolune.app (macos/): its Node sits inside the app, and the app registers this
+ * LaunchAgent itself, from its bundle, under the same label.
+ */
+export function appManaged(execPath = process.execPath): boolean {
+	return /\.app\/Contents\/MacOS\/node$/.test(execPath);
+}
+
 function target(): string {
 	return `gui/${process.getuid?.() ?? 501}/${LABEL}`;
 }
@@ -100,7 +108,7 @@ export function serviceStatus(): { installed: boolean; loaded: boolean; pid: num
 	const result = launchctl('print', target());
 	const pid = /\bpid = (\d+)/.exec(result.stdout ?? '')?.[1];
 	return {
-		installed: existsSync(plistPath),
+		installed: existsSync(plistPath) || (appManaged() && result.status === 0),
 		loaded: result.status === 0,
 		pid: pid ? Number(pid) : null
 	};

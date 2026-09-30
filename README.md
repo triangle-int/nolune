@@ -135,7 +135,9 @@ nolune service restart
 ```
 
 Keep the host awake when the family needs access. On macOS, access to protected folders may
-require Full Disk Access for the Node binary; setup prints its path.
+require Full Disk Access for the Node binary; setup prints its path. The macOS app in
+[`macos/`](macos/README.md) does the setup, Full Disk Access and background service for you, with
+its own Node.
 
 See the [setup and usage guide](docs/usage.md) for model connections, subscription integrations,
 remote access, skills, automations, and everyday commands.

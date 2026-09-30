@@ -1569,6 +1569,8 @@ src/            SvelteKit gateway (adapter-node). @nolune/core is bundled into t
                 profile's welcome in welcome/, its sounds in src/lib/welcome), the interface's
                 languages in src/lib/i18n.
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
+macos/          nolune.app: the SwiftUI onboarding, the gateway's supervisor and the menu bar
+                extra (see [The macOS app](#the-macos-app)); scripts/build-app.sh bundles it.
 ```
 
 Core finds the package root by walking up to the `package.json` named `nolune`. That works
@@ -1601,7 +1603,35 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
   binds to localhost by default.
 - macOS privacy (TCC): the background `node` process needs Full Disk Access to reach Documents,
   Desktop, Photos and Mail. Setup prints the path. Granting it applies to everything that node
-  binary runs.
+  binary runs. The macOS app avoids that: its switch is named nolune and covers only nolune.
+
+## The macOS app
+
+`nolune.app` (`macos/`, built by `macos/scripts/build-app.sh`, checked by
+`.github/workflows/macos.yml`) is nolune without a Terminal: a SwiftUI launcher with its own Node
+and the npm package installed in `Contents/Resources/app`. See `macos/README.md` for building and
+signing.
+
+- **First run.** The web welcome's intro, redrawn natively (IntroSky.svelte in `Sky.swift`, the
+  wordmark's star, sweep, typing dots and burst in `IntroView.swift`), on the same timings and
+  song. Then three steps with the web welcome's look (Figtree, the off-white pill, the progress
+  bars): the admin account (`nolune setup`, with a generated password to keep; skipped when an
+  admin exists), Full Disk Access, and the gateway started in the background. A relaunch halfway
+  (System Settings' "Quit & Reopen") comes back to the step it was on, without the intro.
+- **The gateway as the app.** An `SMAppService` LaunchAgent inside the bundle runs the app's own
+  executable with `--gateway`, which starts `node cli.js start` as its child and passes signals
+  on. macOS charges file access to the app launchd started, so the gateway and the commands it
+  runs count as nolune, and the grant survives updates (the signature, not the file, is what's
+  matched). Same label as `nolune service install`: `nolune service restart|status|logs` work, the
+  app removes the CLI's LaunchAgent before registering its own, and the CLI knows the app's Node
+  (`appManaged` in service.ts) and says to use the app for install and uninstall.
+- **Full Disk Access.** No API asks for it. The step opens the pane, reads a protected file (which
+  usually lists the app, switched off), offers the app's icon to drag in, and checks every second
+  in a fresh `--probe-disk-access` process, since a running one may not see the grant until it
+  relaunches. When the switch goes on, the step's own big switch flips with it and the aurora
+  swells.
+- **After.** A menu bar extra: whether the gateway answers, the people with accounts, the address,
+  open, restart, the log. Opening the app again opens nolune in the browser.
 
 ## Not done yet
 
