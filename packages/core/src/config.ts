@@ -52,9 +52,30 @@ export interface Config {
 	port?: number;
 	/** Public URL people open, e.g. https://nolune.example.com. Defaults to http://localhost:<port>. */
 	origin?: string;
+	/**
+	 * The relay (packages/relay) that gives nolune its public address, set by `nolune relay enable`:
+	 * where it runs, the name and address it gave, and the token the gateway connects with. While
+	 * it's set, its address is the origin.
+	 */
+	relay?: RelayConfig;
+}
+
+export interface RelayConfig {
+	server: string;
+	name: string;
+	url: string;
+	token: string;
 }
 
 export const DEFAULT_PORT = 5780;
+
+/** nolune's own relay, for everyone who doesn't run one (`nolune relay enable --server`). */
+export const DEFAULT_RELAY_SERVER = 'https://relay.nolune.dev';
+
+/** The address people open: the relay's while it's on, else the origin set, else this computer. */
+export function publicOrigin(config: Config): string {
+	return config.relay?.url ?? config.origin ?? `http://localhost:${config.port ?? DEFAULT_PORT}`;
+}
 
 /** Where each provider's API key is kept, and the environment variable used when it isn't. */
 export const API_KEYS = {

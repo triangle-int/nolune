@@ -1,0 +1,30 @@
+{
+	email {$ACME_EMAIL}
+	# Lines people can read (time, level, what happened), rather than JSON.
+	log {
+		format console
+	}
+}
+
+# The relay's own host (relay.nolune.dev), the domain without a name (nolune.family, which the
+# relay sends on to the site), and every gateway's address with one wildcard certificate
+# (*.nolune.family). Let's Encrypt checks them through DNS records, which Caddy makes with a
+# Cloudflare token. A relay whose host is its domain leaves out {$RELAY_DOMAIN}: Caddy won't take
+# the same address twice.
+{$RELAY_HOST}, {$RELAY_DOMAIN}, *.{$RELAY_DOMAIN} {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+		# Finding each name's zone and checking the challenge records asks Cloudflare's resolvers,
+		# which answer for its zones at once, rather than the server's, which may not (SERVFAIL).
+		resolvers 1.1.1.1 1.0.0.1
+	}
+	reverse_proxy relay:8080 {
+		# Event streams go on as they come, not when a buffer fills.
+		flush_interval -1
+		transport http {
+			# Less than the relay keeps an idle connection (75 s), so Caddy never reuses one the
+			# relay has just closed.
+			keepalive 60s
+		}
+	}
+}

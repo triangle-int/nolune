@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Cron } from 'croner';
 import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, notInArray } from 'drizzle-orm';
 import { EFFORTS, type Effort } from './models.ts';
-import { DEFAULT_PORT, readConfig } from './config.ts';
+import { publicOrigin, readConfig } from './config.ts';
 import { getDb } from './db/index.ts';
 import { trigger, triggerRun } from './db/schema.ts';
 import { getConversation } from './conversations.ts';
@@ -289,9 +289,7 @@ export function findTrigger(ref: string, profileId?: string): Trigger {
 }
 
 export function webhookUrl(token: string): string {
-	const config = readConfig();
-	const origin =
-		process.env.ORIGIN || config.origin || `http://localhost:${config.port ?? DEFAULT_PORT}`;
+	const origin = process.env.ORIGIN || publicOrigin(readConfig());
 	return `${origin.replace(/\/+$/, '')}/api/hooks/${token}`;
 }
 

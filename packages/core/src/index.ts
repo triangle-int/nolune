@@ -12,15 +12,18 @@ export {
 export {
 	API_KEYS,
 	DEFAULT_PORT,
+	DEFAULT_RELAY_SERVER,
 	apiKeyHelp,
 	configExists,
 	initConfig,
 	isApiKeyProvider,
+	publicOrigin,
 	readConfig,
 	updateConfig,
 	writeConfig,
 	type ApiKeyProvider,
-	type Config
+	type Config,
+	type RelayConfig
 } from './config.ts';
 export {
 	ApiKeyError,

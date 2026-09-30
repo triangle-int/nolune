@@ -31,6 +31,9 @@ vite.config.ts.timestamp-*
 /dist
 *.tgz
 
+# The relay run from source
+/packages/relay/data
+
 # The macOS app (macos/)
 /macos/.build
 /macos/dist

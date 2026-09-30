@@ -48,6 +48,7 @@ import {
 	normalizeApiKey,
 	parseImageModel,
 	paths,
+	publicOrigin,
 	profileSkillsDir,
 	readConfig,
 	removeApiKey,
@@ -77,6 +78,7 @@ import { fail, type Io } from './io.ts';
 import { planCommand, requireClaudePlan } from './plans.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { PROFILE_HELP, profileCommand } from './profile.ts';
+import { RELAY_HELP, RelayUnreachable, connectRelay, enableRelay, relayCommand } from './relay.ts';
 import { SOUL_HELP, soulCommand } from './soul.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
@@ -93,16 +95,21 @@ import {
 const help = () => `nolune - a family agent that runs on this computer
 
 Getting started
-  nolune setup                               interactive first-time setup (your account, public URL);
-                                             the model comes after: a new profile's welcome on the
-                                             web asks for one, or use key set and preset add below
+  nolune setup                               interactive first-time setup (your account, and the
+                                             address the family opens: nolune's relay, this
+                                             computer, or your own URL); the model comes after: a
+                                             new profile's welcome on the web asks for one, or use
+                                             key set and preset add below
   nolune start                               run the gateway in the foreground
   nolune service install|uninstall|restart|status|logs [-f]
                                              run it in the background (macOS, or Linux with systemd)
 
+${RELAY_HELP}
+
 Settings (${paths.home})
   nolune config                                 show address, port and what's configured
-  nolune config set <host|port|origin> <value>  origin = the public URL people open
+  nolune config set <host|port|origin> <value>  origin = the public URL people open (the relay's
+                                             address is used instead while the relay is on)
   nolune config set image-model <provider/model>  for pictures, e.g. openai/gpt-image-2.5-flare
   nolune config set embeddings <auto|off|provider/model>
                                              what memory search finds meaning with: auto uses the
@@ -342,11 +349,10 @@ function formatTokens(n: number | null): string {
 
 function listenAddress() {
 	const config = readConfig();
-	const port = config.port ?? DEFAULT_PORT;
 	return {
 		host: config.host ?? '127.0.0.1',
-		port,
-		origin: config.origin ?? `http://localhost:${port}`
+		port: config.port ?? DEFAULT_PORT,
+		origin: publicOrigin(config)
 	};
 }
 
@@ -371,9 +377,12 @@ async function setup(io: Io, args: string[]): Promise<void> {
 			password: { type: 'string' },
 			origin: { type: 'string' },
 			port: { type: 'string' },
+			relay: { type: 'boolean' },
+			'relay-name': { type: 'string' },
 			url: { type: 'string' },
 			api: { type: 'string' }
-		}
+		},
+		allowNegative: true
 	});
 
 	const { created } = initConfig();
@@ -394,17 +403,32 @@ async function setup(io: Io, args: string[]): Promise<void> {
 
 	const current = listenAddress();
 	const port = values.port ? Number(values.port) : current.port;
-	const origin =
-		values.origin ??
-		(await ask(
-			io,
-			'Public URL people will open (leave as is for this computer only)',
-			readConfig().origin ?? `http://localhost:${port}`
-		));
 	updateConfig((c) => {
 		c.port = port;
-		c.origin = origin;
 	});
+	const relay = values.origin === undefined && (await setupRelay(io, values));
+	if (!relay) {
+		const origin =
+			values.origin ??
+			(await ask(
+				io,
+				'Public URL people will open (leave as is for this computer only)',
+				readConfig().origin ?? `http://localhost:${port}`
+			));
+		updateConfig((c) => {
+			c.origin = origin;
+		});
+	}
+	const origin = publicOrigin(readConfig());
+
+	const reach = relay
+		? `Family members open that address on any device, at home or away, while the gateway runs. The
+relay passes traffic between their browsers and this computer, and could see it, as any tunnel
+could: \`nolune relay disable\` stops using it.`
+		: `The gateway listens on http://${current.host}:${port}. To reach it from outside your home, run
+\`nolune relay enable\` for an address through nolune's relay, or point a tunnel of your own at
+it (Tailscale Funnel, Cloudflare Tunnel, or a VPS) and set its URL with
+\`nolune config set origin https://...\`.`;
 
 	io.log(`
 Done. Next:
@@ -415,9 +439,56 @@ Done. Next:
 Chats need a model: sign in and make a profile, and its welcome asks for one (a key or a plan,
 then the model). Or add one under Models & keys, or with \`nolune key set\` and \`nolune preset add\`.
 
-The gateway listens on http://${current.host}:${port}. To reach it from outside your home, point a
-tunnel at that address (Tailscale Funnel, Cloudflare Tunnel, or your own VPS) and set its URL with
-\`nolune config set origin https://...\`.${fullDiskAccessHint()}`);
+${reach}${fullDiskAccessHint()}`);
+}
+
+/**
+ * Setup's question of how the family reaches nolune: through the relay unless they'd rather not
+ * (`--relay` / `--no-relay` answer it; without a terminal and without either, it's no). Returns
+ * whether nolune has a relay address, which it keeps once it has one. One it can't get leaves the
+ * choice to the origin.
+ */
+async function setupRelay(
+	io: Io,
+	values: { relay?: boolean; 'relay-name'?: string }
+): Promise<boolean> {
+	const existing = readConfig().relay;
+	if (existing) {
+		io.log(`Address (through nolune's relay): ${existing.url}`);
+		return true;
+	}
+	let wanted = values.relay;
+	if (wanted === undefined && io.stdinIsTTY) {
+		io.log(`
+How will your family open nolune? nolune's relay gives it an address like
+https://smiths.nolune.family that works on any device, at home or away, with no tunnel or
+port forwarding. It passes their traffic to this computer, and could see it, as any tunnel
+could. Or keep nolune to this computer, or give a URL of your own.`);
+		wanted = /^y/i.test(await ask(io, 'Use the relay? (y/n)', 'y'));
+	}
+	if (!wanted) return false;
+	let name = values['relay-name'];
+	for (let tries = 0; ; tries++) {
+		if (name === undefined && io.stdinIsTTY) {
+			name = await ask(
+				io,
+				'A name for the address, like smiths (letters, digits and dashes; empty for a random one)'
+			);
+		}
+		try {
+			const { relay } = await enableRelay(io, { name });
+			io.log(`Address: ${relay.url}`);
+			return true;
+		} catch (err) {
+			io.error(`nolune: ${(err as Error).message}`);
+			// Another name may do; the relay being out of reach won't change by asking again.
+			if (!io.stdinIsTTY || tries >= 2 || err instanceof RelayUnreachable) {
+				io.log('Leaving the relay off for now: `nolune relay enable` turns it on later.');
+				return false;
+			}
+			name = undefined;
+		}
+	}
 }
 
 /** Runs the gateway in this process, so it only makes sense in a process of its own. */
@@ -431,6 +502,7 @@ async function start(io: Io): Promise<void> {
 	process.env.HOST ??= host;
 	process.env.PORT ??= String(port);
 	process.env.ORIGIN ??= origin;
+	const { relay } = readConfig();
 	// adapter-node refuses bodies over 512 KB; attachments go up to MAX_MEDIA_BYTES. Every route
 	// except the upload one keeps a 1 MB limit (src/hooks.server.ts).
 	process.env.BODY_SIZE_LIMIT ??= String(MAX_MEDIA_BYTES + 1024 * 1024);
@@ -440,6 +512,21 @@ async function start(io: Io): Promise<void> {
 	// `pnpm dev` loads this file through Vite (src/hooks.server.ts), which can't follow a runtime
 	// path: the built server is loaded by Node, as is.
 	await import(/* @vite-ignore */ pathToFileURL(paths.server).href);
+	if (relay) {
+		// The relay's requests come in as anyone's would, to the address the server listens on.
+		const listening = process.env.HOST;
+		const link = connectRelay(
+			relay,
+			{
+				host: !listening || listening === '0.0.0.0' || listening === '::' ? '127.0.0.1' : listening,
+				port: Number(process.env.PORT)
+			},
+			(message) => io.log(`[nolune] relay: ${message}`)
+		);
+		// Before adapter-node's shutdown, which waits for open connections, like the relay's
+		// event streams, to end.
+		for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => link.close());
+	}
 }
 
 async function service(io: Io, action: string | undefined, args: string[]): Promise<void> {
@@ -538,6 +625,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		case 'service':
 			return service(io, action, rest);
 
+		case 'relay':
+			requireInit();
+			return relayCommand(io, action, rest);
+
 		case 'init': {
 			// Non-interactive part of `nolune setup`, kept for scripts.
 			const { created } = initConfig();
@@ -558,6 +649,12 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				row('home', paths.home);
 				row('listen', `http://${host}:${port}`);
 				row('origin', origin);
+				row(
+					'relay',
+					config.relay
+						? `on, through ${config.relay.server} (nolune relay status)`
+						: 'off (nolune relay enable gives nolune an address that works from anywhere)'
+				);
 				for (const key of apiKeyStatuses()) {
 					const where =
 						key.source === 'config' ? 'key set' : key.source === 'env' ? `key from ${key.env}` : '';
@@ -673,7 +770,11 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Pictures are now made with ${model}.${problem ? ` ${problem}` : ''}`);
 				return;
 			}
-			io.log(`Set ${key}. Run \`nolune service restart\` if the service is running.`);
+			const relayNote =
+				key === 'origin' && readConfig().relay
+					? ` While the relay is on, nolune's address stays ${readConfig().relay?.url}; \`nolune relay disable\` switches to this one.`
+					: '';
+			io.log(`Set ${key}. Run \`nolune service restart\` if the service is running.${relayNote}`);
 			return;
 		}
 

@@ -234,19 +234,24 @@ nolune user rm Anna                               # can't be undone: ask first
 ## The address
 
 `nolune config` shows `listen`, where the gateway listens (`127.0.0.1:5780` unless changed), and
-`origin`, the address people open, usually a tunnel (Tailscale Funnel, Cloudflare Tunnel) pointed
-at `listen`.
+`origin`, the address people open: nolune's relay's while `relay` is on, else usually a tunnel
+(Tailscale Funnel, Cloudflare Tunnel) pointed at `listen`. The relay gives an address like
+`https://smiths.nolune.family` that works from anywhere with nothing to set up; it could see
+the traffic it passes on, as any tunnel could.
 
 ```sh
+nolune relay status                                        # the address; is nolune connected?
+nolune relay enable --name smiths                          # smiths.nolune.family, after a restart
+nolune relay disable                                       # back to the origin, after a restart
 nolune config set origin https://nolune.example.com
 nolune config set port 5781                                # the tunnel must point at it too
 nolune config set image-model openai/gpt-image-2.5-flare   # applies right away
 ```
 
-`origin`, `host` and `port` apply after a restart, and a wrong one locks everyone out, including
-the admin who could ask you to fix it. Before you restart, check that a new origin already reaches
-nolune (`curl -sI https://nolune.example.com`) and that the tunnel points at a new port, and tell the
-admin the command that switches it back, to run at the computer.
+`origin`, `host`, `port` and the relay apply after a restart, and a wrong one locks everyone out,
+including the admin who could ask you to fix it. Before you restart, check that a new origin
+already reaches nolune (`curl -sI https://nolune.example.com`) and that the tunnel points at a new
+port, and tell the admin the command that switches it back, to run at the computer.
 
 ## The service
 
