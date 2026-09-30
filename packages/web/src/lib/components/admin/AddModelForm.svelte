@@ -8,7 +8,7 @@
 
 	type Props = Pick<
 		ComponentProps<typeof PresetForm>,
-		'providers' | 'keys' | 'customProviders' | 'claudeInstalled' | 'codexInstalled' | 'problem'
+		'providers' | 'keys' | 'customProviders' | 'claudeInstalled' | 'chatgptSignedIn' | 'problem'
 	> & {
 		/** Open from the start: when there are no models yet. */
 		startOpen: boolean;

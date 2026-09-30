@@ -799,7 +799,7 @@ export const de: Messages = {
 				},
 				'chatgpt-plan': {
 					title: 'ChatGPT-Abo',
-					about: 'Ein Plus-, Pro- oder Business-Abo, über Codex auf diesem Computer'
+					about: 'Ein Plus- oder Pro-Abo, angemeldet mit ChatGPT'
 				},
 				anthropic: {
 					title: 'Anthropic-API-Schlüssel',
@@ -819,7 +819,18 @@ export const de: Messages = {
 			checkAgain: 'Noch einmal prüfen',
 			pickModel: 'Mit welchem Modell sollen neue Chats beginnen?',
 			asking: 'Frage nach den Modellen…',
-			modelId: 'Modell-ID'
+			modelId: 'Modell-ID',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Mit ChatGPT anmelden',
+				about:
+					'Melde dich auf der Seite von ChatGPT an und erlaube nolune, dein Plus- oder Pro-Abo zu nutzen. Chats zählen dann zur Nutzung des Abos, wie bei ChatGPT selbst.',
+				newTab: 'Die Anmeldeseite von ChatGPT öffnet sich in einem neuen Tab.',
+				waiting: 'Sobald du dort angemeldet bist, geht es hier von selbst weiter.',
+				starting: 'Die Anmeldeseite von ChatGPT wird vorbereitet…',
+				tryAgain: 'Erneut versuchen',
+				otherDevice: 'Meldest du dich auf einem anderen Gerät an?'
+			}
 		},
 		avatar: {
 			title: 'Wer soll ich sein?',
@@ -921,20 +932,30 @@ export const de: Messages = {
 		plan: 'Claude-Abo',
 		plans: 'Abos',
 		plansHint:
-			'Chats mit einer Abo-Voreinstellung laufen über das eigene Abo von jemandem statt über einen API-Schlüssel, mit dem Agenten des Anbieters auf diesem Computer. nolune startet ihn und sieht die Anmeldung nie. Die Abo-Limits gehen von der normalen Nutzung durch eine Person aus, also lass viel beschäftigte Automationen und Subagenten auf einer Voreinstellung mit API-Schlüssel.',
+			'Chats mit einer Abo-Voreinstellung laufen über das eigene Abo von jemandem statt über einen API-Schlüssel: das Claude-Abo über Claude Code auf diesem Computer, das die Anmeldung selbst verwahrt; das ChatGPT-Abo über „Mit ChatGPT anmelden“, dessen Anmeldung nolune auf diesem Computer verwahrt. Die Abo-Limits gehen von der normalen Nutzung durch eine Person aus, also lass viel beschäftigte Automationen und Subagenten auf einer Voreinstellung mit API-Schlüssel.',
 		claudePlanAbout: 'Pro oder Max, über Claude Code.',
 		chatgptPlan: 'ChatGPT-Abo',
-		chatgptPlanAbout: 'Plus, Pro oder Business, über Codex von OpenAI.',
-		chatgptInstall:
-			'Führe in einem Terminal auf diesem Computer {setup} aus: Es installiert Codex mit npm (nach Rückfrage) und meldet es bei ChatGPT an. Oder installiere es selbst und melde dich dann hier an:',
-		chatgptSignIn: 'Mit ChatGPT anmelden',
+		chatgptPlanAbout: 'Plus oder Pro, angemeldet mit ChatGPT.',
+		chatgptSignIn: 'Weiter mit ChatGPT',
+		chatgptContinueAs: (account: string) => `Weiter als ${account}`,
+		chatgptAnotherAccount: 'Anderes Konto',
 		chatgptSignInAgain: 'Erneut anmelden',
-		chatgptAsking: 'ChatGPT wird gefragt…',
+		chatgptStarting: 'Wird gestartet…',
 		signOut: 'Abmelden',
-		chatgptOpen: 'Öffne {link} auf einem beliebigen Gerät und melde dich bei ChatGPT an.',
-		chatgptCode: 'Gib diesen Code ein: {code}',
-		chatgptCodeHint:
-			'Der Code gilt 15 Minuten. Diese Seite aktualisiert sich, sobald er eingegeben ist.',
+		chatgptOpen:
+			'Öffne {link} und melde dich an; erlaube nolune dabei, dein ChatGPT-Abo zu nutzen.',
+		chatgptSignInPage: 'die Anmeldeseite von ChatGPT',
+		chatgptHere:
+			'In einem Browser auf diesem Computer war’s das: Diese Seite aktualisiert sich, sobald du angemeldet bist.',
+		chatgptElsewhere:
+			'Auf einem anderen Gerät lädt die Seite nicht, zu der ChatGPT dich zurückschickt. Kopiere ihre Adresse (sie beginnt mit http://127.0.0.1) und füge sie hier ein:',
+		chatgptFinish: 'Fertig',
+		chatgptSignedIn: 'Angemeldet. Chats mit ChatGPT-Abo-Voreinstellungen nutzen jetzt dieses Abo.',
+		chatgptUsing: 'Chats mit ChatGPT-Abo-Voreinstellungen nutzen dieses Abo. {link}',
+		chatgptManageUsage: 'Nutzung verwalten',
+		chatgptNobody: 'Niemand ist mit ChatGPT angemeldet.',
+		chatgptSignedOutLocally:
+			'Hier abgemeldet, aber OpenAI konnte nicht benachrichtigt werden: Trenne nolune zur Sicherheit in den Einstellungen von ChatGPT.',
 		chatgptSignOutTitle: 'Von ChatGPT abmelden?',
 		chatgptSignOutBody:
 			'Chats mit ChatGPT-Abo-Voreinstellungen funktionieren erst wieder, wenn sich jemand erneut anmeldet.',
@@ -981,12 +1002,13 @@ export const de: Messages = {
 				'custom-anthropic':
 					'Auto verwendet das Fenster, das der Server für das Modell angibt, falls er eines angibt (vLLM tut es); sonst bleibt es offen.',
 				'claude-plan': 'Claude Code meldet es nicht: Auto kennt nur seine Modelle mit 1M Kontext.',
-				'chatgpt-plan': 'Codex meldet es nicht, also lässt Auto es offen.'
+				'chatgpt-plan':
+					'Auto nutzt das Fenster, das ChatGPT für das Modell angibt, falls es eines angibt; sonst bleibt es offen.'
 			},
 			onPlan: 'Läuft über das Pro- oder Max-Abo, mit dem Claude Code angemeldet ist.',
 			noClaudeCode: 'Claude Code ist noch nicht installiert: siehe „Claude-Abo“ oben.',
-			onChatGptPlan: 'Läuft über das ChatGPT-Abo, mit dem Codex angemeldet ist.',
-			noCodex: 'Codex ist noch nicht installiert: siehe „ChatGPT-Abo“ oben.',
+			onChatGptPlan: 'Läuft über das ChatGPT-Abo der Person, die oben mit ChatGPT angemeldet ist.',
+			noChatGpt: 'Noch ist niemand mit ChatGPT angemeldet: siehe „ChatGPT-Abo“ oben.',
 			onKey: (provider: string) => `Läuft über den ${provider}-API-Schlüssel.`,
 			noKey: (provider: string) =>
 				`Noch kein ${provider}-API-Schlüssel: Füge oben unter „API-Schlüssel“ einen hinzu.`,
@@ -998,7 +1020,6 @@ export const de: Messages = {
 			couldNotList: (status: number) => `nolune konnte die Modelle nicht abrufen (${status}).`,
 			unreachable: 'nolune ist nicht erreichbar.',
 			checkingClaude: 'Claude Code wird geprüft…',
-			checkingCodex: 'Codex wird geprüft…',
 			checkingModel: 'Modell wird geprüft…',
 			saving: 'Wird gespeichert…',
 			pick: 'Modell wählen',

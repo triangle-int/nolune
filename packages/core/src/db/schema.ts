@@ -277,16 +277,16 @@ export const conversation = sqliteTable(
 		 */
 		tools: text('tools', { mode: 'json' }).$type<Anthropic.Tool[]>(),
 		/**
-		 * Chats on a plan (plans.ts): the session of the plan's agent (Claude Code's, or Codex's
-		 * thread) that holds the model's side of the chat, and the last row it has been sent. Null
-		 * until its first turn starts.
+		 * Chats on the Claude plan (plans.ts): the Claude Code session that holds the model's side of
+		 * the chat, and the last row it has been sent. Null until its first turn starts. Chats on
+		 * the ChatGPT plan may have Codex's thread here, from when Codex ran it, which is unused.
 		 */
 		providerSession: text('provider_session', { mode: 'json' }).$type<{
 			id: string;
 			sentSeq: number;
 			/**
-			 * The plan whose agent has the session, since a chat can switch between them. Missing:
-			 * the Claude plan's, from before there was another.
+			 * The plan whose agent has the session: the Claude plan's, or Codex's from before.
+			 * Missing: the Claude plan's, from before there was another.
 			 */
 			provider?: 'claude-plan' | 'chatgpt-plan';
 		}>(),

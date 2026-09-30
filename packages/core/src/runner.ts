@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
-import { isPlan, type Plan } from './plans.ts';
+import { isAgentPlan, type AgentPlan } from './plans.ts';
 import {
 	describeApiError,
 	isAbortError,
@@ -87,7 +87,7 @@ import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
 import { memberWords } from './memory-people.ts';
 import { recallFor } from './memory-search.ts';
 import { profileDir } from './paths.ts';
-import { resolveFiles } from './provider-files.ts';
+import { hasFileStore, resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
 import {
 	RUN_COMMAND_TOOL,
@@ -979,7 +979,7 @@ function isPlanInput(row: MessageRow): boolean {
  * chat switched away from the plan and back. That session never saw those replies, so the chat
  * starts a new one.
  */
-function missedReplies(session: { sentSeq: number }, rows: MessageRow[], plan: Plan): boolean {
+function missedReplies(session: { sentSeq: number }, rows: MessageRow[], plan: AgentPlan): boolean {
 	return rows.some(
 		(row) =>
 			(row.seq ?? 0) > session.sentSeq &&
@@ -996,14 +996,14 @@ function missedReplies(session: { sentSeq: number }, rows: MessageRow[], plan: P
  * chat used before): those go along as a transcript, in a new session.
  */
 function planInput(
-	conv: Conversation & { provider: Plan },
+	conv: Conversation & { provider: AgentPlan },
 	rows: MessageRow[],
 	newSessionId = conv.id
 ) {
 	const sentSeq = rows.at(-1)?.seq ?? 0;
 	const content = (row: MessageRow) => readRow(row).blocks;
 	const kept = conv.providerSession;
-	// The other plan's agent can't open it.
+	// Codex's, from when it ran the ChatGPT plan, can't be opened.
 	const ours = kept && (kept.provider ?? 'claude-plan') === conv.provider ? kept : null;
 	const session = ours && !missedReplies(ours, rows, conv.provider) ? ours : null;
 	// The chat's first session has its id.
@@ -1045,7 +1045,7 @@ function planInput(
  * when the loop should end: stopped, or failed with `st.error`.
  */
 async function planTurn(
-	conv: Conversation & { provider: Plan },
+	conv: Conversation & { provider: AgentPlan },
 	rows: MessageRow[],
 	st: State,
 	abort: AbortController
@@ -1058,7 +1058,7 @@ async function planTurn(
 	}
 	const cwd = profileDir(slug);
 	mkdirSync(cwd, { recursive: true });
-	// The plan's agent gets pictures (and PDFs, on the Claude plan) inline, so their bytes count too.
+	// The plan's agent gets pictures and PDFs inline, so their bytes count too.
 	const images = imageUse(rows.map(readRow), true);
 	let next = planInput(conv, rows);
 	for (let retried = false; ; retried = true) {
@@ -1152,7 +1152,7 @@ async function loop(conversationId: string): Promise<void> {
 
 			const abort = new AbortController();
 			st.abort = abort;
-			if (isPlan(conv.provider)) {
+			if (isAgentPlan(conv.provider)) {
 				if (!(await planTurn({ ...conv, provider: conv.provider }, rows, st, abort))) return;
 				// The agent ended its turn: only messages that came meanwhile start another.
 				if (!queuedRows(conversationId).length) return;
@@ -1196,8 +1196,12 @@ async function loop(conversationId: string): Promise<void> {
 			// No tool calls: the turn is over. Loop again in case messages arrived meanwhile.
 			if (calls.length === 0) continue;
 
-			// Queued messages may carry pictures too; they join the history at the next step.
-			const images = imageUse([...messages, ...queuedRows(conversationId).map(readRow)]);
+			// Queued messages may carry pictures too; they join the history at the next step. Without
+			// a Files API (the ChatGPT plan), every request carries them inline.
+			const images = imageUse(
+				[...messages, ...queuedRows(conversationId).map(readRow)],
+				!hasFileStore(conv.provider)
+			);
 			const results: ToolResultBlock[] = [];
 			for (const call of calls) {
 				// A call that throws still gets its result, or the reply would wait for one forever.

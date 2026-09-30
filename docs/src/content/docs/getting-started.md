@@ -13,8 +13,7 @@ description: Install nolune, connect a model and add the family.
     models, or on any model OpenRouter serves that can call tools; you can have all three;
   - a model server of your own (Ollama, LM Studio, oMLX, vLLM...) with a model that can call tools;
   - a Claude Pro or Max plan signed in to [Claude Code](https://claude.com/claude-code) on the same
-    computer, or a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
-    [Codex](https://developers.openai.com/codex/cli) there.
+    computer, or a ChatGPT Plus or Pro plan, signed in with ChatGPT.
 
 [Models and keys](/docs/guides/models/) explains each of them.
 

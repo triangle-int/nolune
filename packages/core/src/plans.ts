@@ -4,12 +4,14 @@ import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
 
 /*
  * Chats on someone's subscription plan instead of an API key: the Claude plan (claude-plan.ts,
- * through Claude Code) and the ChatGPT plan (chatgpt-plan.ts, through Codex). Both run the maker's
- * own agent, installed on this computer and signed in there: it keeps the sign-in, the
- * conversation and the agent loop, and asks nolune to run each command. So both take the same whole
- * turn from the runner (PlanTurn), and what people see of them is shared: one kind of error, one
- * way of saying who a plan is signed in as, and one status for Models & keys, `nolune <plan> status`
- * and adding a preset.
+ * through Claude Code) and the ChatGPT plan (chatgpt-plan.ts, through Sign in with ChatGPT). What
+ * people see of them is shared: one kind of error, one way of saying who a plan is signed in as,
+ * and one status for Models & keys, `nolune <plan> status` and adding a preset.
+ *
+ * The Claude plan runs its maker's own agent, installed on this computer and signed in there: it
+ * keeps the sign-in, the conversation and the agent loop, and asks nolune to run each command, so
+ * it takes whole turns from the runner (PlanTurn). The ChatGPT plan lets nolune make the requests
+ * itself, in its own loop, with the plan's sign-in.
  *
  * This module imports neither plan, so both can build on it.
  */
@@ -19,6 +21,13 @@ export type Plan = (typeof PLANS)[number];
 
 export function isPlan(provider: string): provider is Plan {
 	return (PLANS as readonly string[]).includes(provider);
+}
+
+/** Plans whose maker's agent runs the turn, which the runner hands it whole (PlanTurn). */
+export type AgentPlan = 'claude-plan';
+
+export function isAgentPlan(provider: string): provider is AgentPlan {
+	return provider === 'claude-plan';
 }
 
 /** What went wrong with a plan, in words for the people in the chat. */
@@ -46,7 +55,7 @@ export function isPlanStopped(err: unknown): boolean {
 export interface PlanTurn {
 	/**
 	 * The chat's session in the plan's agent, and whether it exists yet. A new one is created with
-	 * this id where the agent takes one (Claude Code); Codex picks its own (`onStarted` says it).
+	 * this id (`onStarted` says which the agent took).
 	 */
 	sessionId: string;
 	resume: boolean;
@@ -93,9 +102,12 @@ export function describePlanAccount(account: PlanAccount): string {
 }
 
 export interface PlanStatus {
-	/** The agent nolune runs (`claude`, `codex`), if it found one or was told where it is. */
+	/**
+	 * The agent nolune runs (`claude`), if it found one or was told where it is. Null for the
+	 * ChatGPT plan, which needs none.
+	 */
 	path: string | null;
-	/** Whether that agent is there. */
+	/** Whether that agent is there: always, for the ChatGPT plan. */
 	installed: boolean;
 	/** Who the plan is signed in as ("signed in as …"); null when it isn't, or couldn't be asked. */
 	signedIn: string | null;

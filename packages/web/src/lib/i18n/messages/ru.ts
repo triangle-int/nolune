@@ -874,7 +874,7 @@ export const ru: Messages = {
 				},
 				'chatgpt-plan': {
 					title: 'Подписка ChatGPT',
-					about: 'Тариф Plus, Pro или Business через Codex на этом компьютере'
+					about: 'Тариф Plus или Pro, вход через ChatGPT'
 				},
 				anthropic: {
 					title: 'API-ключ Anthropic',
@@ -894,7 +894,18 @@ export const ru: Messages = {
 			checkAgain: 'Проверить ещё раз',
 			pickModel: 'С какой модели начинать новые чаты?',
 			asking: 'Запрашиваю список моделей…',
-			modelId: 'ID модели'
+			modelId: 'ID модели',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Вход через ChatGPT',
+				about:
+					'Войдите на странице ChatGPT и разрешите nolune пользоваться вашей подпиской Plus или Pro. Чаты будут расходовать её лимиты, как и сам ChatGPT.',
+				newTab: 'Страница входа ChatGPT откроется в новой вкладке.',
+				waiting: 'Когда войдёте там, эта страница продолжит сама.',
+				starting: 'Готовим страницу входа ChatGPT…',
+				tryAgain: 'Попробовать снова',
+				otherDevice: 'Входите с другого устройства?'
+			}
 		},
 		avatar: {
 			title: 'Кем мне быть?',
@@ -1003,19 +1014,29 @@ export const ru: Messages = {
 		plan: 'Подписка Claude',
 		plans: 'Подписки',
 		plansHint:
-			'Чаты на пресете с подпиской работают по чьей-то собственной подписке, а не по API-ключу, через агента её создателя на этом компьютере. nolune запускает его и никогда не видит данные для входа. Лимиты подписок рассчитаны на обычное использование одним человеком, поэтому частые автоматизации и субагентов лучше оставить на пресете с API-ключом.',
+			'Чаты на пресете с подпиской работают по чьей-то собственной подписке, а не по API-ключу: подписка Claude — через Claude Code на этом компьютере, который сам хранит вход; подписка ChatGPT — через «Вход с ChatGPT», и этот вход nolune хранит на этом компьютере. Лимиты подписок рассчитаны на обычное использование одним человеком, поэтому частые автоматизации и субагентов лучше оставить на пресете с API-ключом.',
 		claudePlanAbout: 'Pro или Max, через Claude Code.',
 		chatgptPlan: 'Подписка ChatGPT',
-		chatgptPlanAbout: 'Plus, Pro или Business, через Codex от OpenAI.',
-		chatgptInstall:
-			'В терминале на этом компьютере выполните {setup}: команда установит Codex через npm, спросив перед этим, и войдёт в ChatGPT. Или установите его сами, а затем войдите здесь:',
-		chatgptSignIn: 'Войти через ChatGPT',
+		chatgptPlanAbout: 'Plus или Pro, вход через ChatGPT.',
+		chatgptSignIn: 'Продолжить с ChatGPT',
+		chatgptContinueAs: (account: string) => `Продолжить как ${account}`,
+		chatgptAnotherAccount: 'Другой аккаунт',
 		chatgptSignInAgain: 'Войти заново',
-		chatgptAsking: 'Запрашиваем ChatGPT…',
+		chatgptStarting: 'Запускаем…',
 		signOut: 'Выйти',
-		chatgptOpen: 'Откройте {link} на любом устройстве и войдите в ChatGPT.',
-		chatgptCode: 'Введите этот код: {code}',
-		chatgptCodeHint: 'Код действует 15 минут. Страница обновится, когда его введут.',
+		chatgptOpen: 'Откройте {link} и войдите, разрешив nolune пользоваться вашей подпиской ChatGPT.',
+		chatgptSignInPage: 'страницу входа ChatGPT',
+		chatgptHere:
+			'Если браузер на этом компьютере, больше ничего не нужно: страница обновится, когда вход завершится.',
+		chatgptElsewhere:
+			'На другом устройстве страница, на которую ChatGPT вернёт вас, не откроется. Скопируйте её адрес (он начинается с http://127.0.0.1) и вставьте сюда:',
+		chatgptFinish: 'Готово',
+		chatgptSignedIn: 'Вход выполнен. Чаты на пресетах с подпиской ChatGPT теперь работают по ней.',
+		chatgptUsing: 'Чаты на пресетах с подпиской ChatGPT работают по этой подписке. {link}',
+		chatgptManageUsage: 'Управлять лимитами',
+		chatgptNobody: 'Никто не вошёл через ChatGPT.',
+		chatgptSignedOutLocally:
+			'Выход выполнен здесь, но сообщить OpenAI не удалось: для надёжности отключите nolune в настройках ChatGPT.',
 		chatgptSignOutTitle: 'Выйти из ChatGPT?',
 		chatgptSignOutBody:
 			'Чаты на пресетах с подпиской ChatGPT перестанут работать, пока кто-нибудь снова не войдёт.',
@@ -1064,12 +1085,13 @@ export const ru: Messages = {
 				'custom-anthropic':
 					'В режиме «Авто» берётся окно, которое сервер указывает для модели, если указывает (vLLM указывает); иначе оно остаётся неизвестным.',
 				'claude-plan': 'Claude Code его не сообщает: «Авто» знает только модели с контекстом 1M.',
-				'chatgpt-plan': 'Codex его не сообщает, поэтому «Авто» оставляет его неизвестным.'
+				'chatgpt-plan':
+					'«Авто» берёт окно, которое ChatGPT указывает для модели, если указывает; иначе оно остаётся неизвестным.'
 			},
 			onPlan: 'Работает по тарифу Pro или Max, с которым вошли в Claude Code.',
 			noClaudeCode: 'Claude Code ещё не установлен: см. «Подписка Claude» выше.',
-			onChatGptPlan: 'Работает по подписке ChatGPT, с которой вошли в Codex.',
-			noCodex: 'Codex ещё не установлен: см. «Подписка ChatGPT» выше.',
+			onChatGptPlan: 'Работает по подписке ChatGPT того, кто вошёл через ChatGPT выше.',
+			noChatGpt: 'Через ChatGPT ещё никто не вошёл: см. «Подписка ChatGPT» выше.',
 			onKey: (provider: string) => `Работает по API-ключу ${provider}.`,
 			noKey: (provider: string) =>
 				`API-ключа ${provider} пока нет: добавьте его в разделе «API-ключи» выше.`,
@@ -1081,7 +1103,6 @@ export const ru: Messages = {
 			couldNotList: (status: number) => `nolune не удалось получить список моделей (${status}).`,
 			unreachable: 'Не удалось связаться с nolune.',
 			checkingClaude: 'Проверяем Claude Code…',
-			checkingCodex: 'Проверяем Codex…',
 			checkingModel: 'Проверяем модель…',
 			saving: 'Сохраняем…',
 			pick: 'Выберите модель',
