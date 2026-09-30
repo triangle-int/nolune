@@ -5,6 +5,9 @@ import type { Messages } from './en';
 const p = plural('es');
 const list = listOf('es');
 
+/** ", Anna" to finish a greeting with, or nothing when there's no name. */
+const to = (name: string) => (name ? `, ${name}` : '');
+
 /** By JavaScript's numbers: 0 is Sunday. */
 const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 /** "los lunes" */
@@ -161,7 +164,7 @@ export const es: Messages = {
 
 	settings: {
 		title: 'Ajustes',
-		description: 'Cómo se ve nolune en este dispositivo.',
+		description: 'Tu nombre y tu foto, y cómo se ve nolune en este dispositivo.',
 		theme: 'Tema',
 		system: 'Sistema',
 		light: 'Claro',
@@ -179,6 +182,24 @@ export const es: Messages = {
 		soundsHint: 'Sonidos suaves donde nolune se mueve solo, como la bienvenida de un perfil nuevo.',
 		logOut: 'Cerrar sesión',
 		deviceOnly: 'Estos ajustes solo se guardan en este dispositivo.'
+	},
+
+	account: {
+		name: 'Tu nombre',
+		hint: 'Todos en tus perfiles ven tu nombre y tu foto, y nolune lee tu nombre con cada mensaje que envías.',
+		addPicture: 'Añadir una foto',
+		changePicture: 'Cambiar foto',
+		removePicture: 'Quitar foto',
+		cropHint: 'Arrastra la foto para colocarla en el círculo.',
+		zoom: 'Zoom',
+		usePicture: 'Usar esta foto',
+		cantOpen: 'No se pudo abrir esa imagen. Prueba con JPEG o PNG.',
+		nameRequired: 'Escribe un nombre.',
+		nameTooLong: (max: number) => `Un nombre puede tener como mucho ${max} caracteres.`,
+		nameHasAt: 'Un nombre no puede llevar @.',
+		nameTaken: (name: string) => `Ya hay alguien que se llama ${name}.`,
+		notPicture: 'nolune no puede usar esa imagen.',
+		pictureTooLarge: 'Esa imagen es demasiado grande.'
 	},
 
 	userMenu: {
@@ -244,6 +265,8 @@ export const es: Messages = {
 		reconnecting: 'Reconectando…',
 		empty: 'Pide algo para empezar.',
 		readsAfterStep: 'nolune lo leerá después de su paso actual',
+		typing: (names: string[]) =>
+			`${list(names)} ${names.length === 1 ? 'está' : 'están'} escribiendo`,
 		working: 'nolune está trabajando',
 		thinking: 'Pensando',
 		writing: 'Escribiendo',
@@ -361,8 +384,38 @@ export const es: Messages = {
 	},
 
 	newChat: {
-		greeting: (name: string) => `¿En qué te ayudo, ${name}?`,
-		greetingNoName: '¿En qué te ayudo?',
+		greetings: {
+			morning: [
+				(name: string) => `¡Buenos días${to(name)}!`,
+				(name: string) => `Buenos días${to(name)}. ¿Por dónde empezamos hoy?`,
+				(name: string) => `¿Primero un café o vamos al grano${to(name)}?`,
+				(name: string) => `¿Qué hay para hoy${to(name)}?`
+			],
+			afternoon: [
+				(name: string) => `¡Buenas tardes${to(name)}!`,
+				(name: string) => `Buenas tardes${to(name)}. ¿Qué tal va el día?`,
+				(name: string) => `¿Qué te quito de encima esta tarde${to(name)}?`,
+				(name: string) => `¿Te echo una mano esta tarde${to(name)}?`
+			],
+			evening: [
+				(name: string) => `¿Qué tal tu día${to(name)}?`,
+				(name: string) => `¿Queda algo pendiente para hoy${to(name)}?`,
+				(name: string) => `¿Qué planes hay para esta noche${to(name)}?`,
+				(name: string) => `¿En qué te ayudo esta noche${to(name)}?`
+			],
+			night: [
+				(name: string) => `¿Trasnochando${to(name)}?`,
+				(name: string) => `¿No puedes dormir${to(name)}? Aquí estoy.`,
+				(name: string) => `Se está haciendo tarde${to(name)}. ¿Qué necesitas?`,
+				(name: string) => `¿Una noche larga${to(name)}?`
+			],
+			anytime: [
+				(name: string) => `¿En qué te ayudo${to(name)}?`,
+				(name: string) => `¿Qué tienes en mente${to(name)}?`,
+				(name: string) => `¿En qué trabajamos${to(name)}?`,
+				(name: string) => `¡Qué gusto verte${to(name)}! ¿Qué hay de nuevo?`
+			]
+		},
 		noModels:
 			'Todavía no hay modelos configurados. Un administrador puede añadir uno en la página «Modelos y claves» o con {command}.',
 		couldNotStart: 'No se pudo empezar el chat.',
@@ -844,7 +897,7 @@ export const es: Messages = {
 				},
 				'chatgpt-plan': {
 					title: 'Plan de ChatGPT',
-					about: 'Un plan Plus, Pro o Business, con Codex en este ordenador'
+					about: 'Un plan Plus o Pro, con inicio de sesión de ChatGPT'
 				},
 				anthropic: { title: 'Clave de API de Anthropic', about: 'Modelos Claude, pago por uso' },
 				openai: { title: 'Clave de API de OpenAI', about: 'Modelos GPT, pago por uso' },
@@ -861,7 +914,18 @@ export const es: Messages = {
 			checkAgain: 'Volver a comprobar',
 			pickModel: '¿Con qué modelo deben empezar los chats nuevos?',
 			asking: 'Pidiendo los modelos…',
-			modelId: 'ID del modelo'
+			modelId: 'ID del modelo',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Iniciar sesión con ChatGPT',
+				about:
+					'Inicia sesión en la página de ChatGPT y permite que nolune use tu plan Plus o Pro. Los chats contarán para el uso del plan, como en el propio ChatGPT.',
+				newTab: 'La página de inicio de sesión de ChatGPT se abre en una pestaña nueva.',
+				waiting: 'En cuanto inicies sesión allí, esta página seguirá sola.',
+				starting: 'Preparando la página de inicio de sesión de ChatGPT…',
+				tryAgain: 'Intentarlo de nuevo',
+				otherDevice: '¿Inicias sesión en otro dispositivo?'
+			}
 		},
 		avatar: {
 			title: '¿Quién debo ser?',
@@ -961,20 +1025,30 @@ export const es: Messages = {
 		plan: 'Plan de Claude',
 		plans: 'Planes',
 		plansHint:
-			'Los chats con un preajuste de plan funcionan con la suscripción propia de alguien en lugar de con una clave de API, a través del agente de quien ofrece el plan en este ordenador. nolune lo ejecuta y nunca ve el inicio de sesión. Los límites de los planes suponen el uso normal de una persona, así que deja las automatizaciones intensivas y los subagentes en un preajuste con clave de API.',
+			'Los chats con un preajuste de plan funcionan con la suscripción propia de alguien en lugar de con una clave de API: el plan de Claude a través de Claude Code en este ordenador, que guarda su inicio de sesión; el plan de ChatGPT a través de «Iniciar sesión con ChatGPT», cuyo inicio de sesión guarda nolune en este ordenador. Los límites de los planes suponen el uso normal de una persona, así que deja las automatizaciones intensivas y los subagentes en un preajuste con clave de API.',
 		claudePlanAbout: 'Pro o Max, a través de Claude Code.',
 		chatgptPlan: 'Plan de ChatGPT',
-		chatgptPlanAbout: 'Plus, Pro o Business, a través de Codex de OpenAI.',
-		chatgptInstall:
-			'En una terminal de este ordenador, ejecuta {setup}: instala Codex con npm, preguntando antes, e inicia sesión con ChatGPT. O instálalo tú y luego inicia sesión aquí:',
-		chatgptSignIn: 'Iniciar sesión con ChatGPT',
+		chatgptPlanAbout: 'Plus o Pro, con inicio de sesión de ChatGPT.',
+		chatgptSignIn: 'Continuar con ChatGPT',
+		chatgptContinueAs: (account: string) => `Continuar como ${account}`,
+		chatgptAnotherAccount: 'Usar otra cuenta',
 		chatgptSignInAgain: 'Volver a iniciar sesión',
-		chatgptAsking: 'Preguntando a ChatGPT…',
+		chatgptStarting: 'Iniciando…',
 		signOut: 'Cerrar sesión',
-		chatgptOpen: 'Abre {link} en cualquier dispositivo e inicia sesión en ChatGPT.',
-		chatgptCode: 'Introduce este código: {code}',
-		chatgptCodeHint:
-			'El código sirve durante 15 minutos. Esta página se actualiza en cuanto se introduce.',
+		chatgptOpen: 'Abre {link} e inicia sesión, permitiendo que nolune use tu plan de ChatGPT.',
+		chatgptSignInPage: 'la página de inicio de sesión de ChatGPT',
+		chatgptHere:
+			'En un navegador de este ordenador, no hace falta nada más: esta página se actualiza en cuanto inicies sesión.',
+		chatgptElsewhere:
+			'En otro dispositivo, la página a la que ChatGPT te devuelve no cargará. Copia su dirección (empieza por http://127.0.0.1) y pégala aquí:',
+		chatgptFinish: 'Terminar',
+		chatgptSignedIn:
+			'Sesión iniciada. Los chats con preajustes del plan de ChatGPT ahora usan este plan.',
+		chatgptUsing: 'Los chats con preajustes del plan de ChatGPT usan este plan. {link}',
+		chatgptManageUsage: 'Gestionar el uso',
+		chatgptNobody: 'Nadie ha iniciado sesión con ChatGPT.',
+		chatgptSignedOutLocally:
+			'Sesión cerrada aquí, pero no se pudo avisar a OpenAI: para asegurarte, desconecta nolune en los ajustes de ChatGPT.',
 		chatgptSignOutTitle: '¿Cerrar la sesión de ChatGPT?',
 		chatgptSignOutBody:
 			'Los chats con preajustes del plan de ChatGPT dejarán de funcionar hasta que alguien vuelva a iniciar sesión.',
@@ -1022,12 +1096,14 @@ export const es: Messages = {
 				'custom-anthropic':
 					'Auto usa la ventana que el servidor indica para el modelo, si la indica (vLLM lo hace); si no, queda como desconocida.',
 				'claude-plan': 'Claude Code no la indica: Auto solo conoce sus modelos de 1M de contexto.',
-				'chatgpt-plan': 'Codex no la indica, así que Auto la deja como desconocida.'
+				'chatgpt-plan':
+					'Auto usa la ventana que ChatGPT indica para el modelo, si la indica; si no, queda como desconocida.'
 			},
 			onPlan: 'Funciona con el plan Pro o Max con el que inició sesión Claude Code.',
 			noClaudeCode: 'Claude Code aún no está instalado: consulta «Plan de Claude», arriba.',
-			onChatGptPlan: 'Funciona con el plan de ChatGPT con el que inició sesión Codex.',
-			noCodex: 'Codex aún no está instalado: consulta «Plan de ChatGPT», arriba.',
+			onChatGptPlan:
+				'Funciona con el plan de ChatGPT de quien haya iniciado sesión con ChatGPT, arriba.',
+			noChatGpt: 'Aún nadie ha iniciado sesión con ChatGPT: consulta «Plan de ChatGPT», arriba.',
 			onKey: (provider: string) => `Funciona con la clave de API de ${provider}.`,
 			noKey: (provider: string) =>
 				`Todavía no hay clave de API de ${provider}: añade una en «Claves de API», arriba.`,
@@ -1039,7 +1115,6 @@ export const es: Messages = {
 			couldNotList: (status: number) => `nolune no pudo obtener los modelos (${status}).`,
 			unreachable: 'No se pudo contactar con nolune.',
 			checkingClaude: 'Comprobando Claude Code…',
-			checkingCodex: 'Comprobando Codex…',
 			checkingModel: 'Comprobando el modelo…',
 			saving: 'Guardando…',
 			pick: 'Elige un modelo',

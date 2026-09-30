@@ -15,8 +15,8 @@ import {
 	apiKeyStatuses,
 	checkApiKey,
 	checkCustomProvider,
+	chatGptPlanStatus,
 	claudeExecutable,
-	codexExecutable,
 	configExists,
 	findCustomProvider,
 	createSkill,
@@ -74,12 +74,13 @@ import { CARD_HELP, cardCommand } from './card.ts';
 import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
-import { planCommand, requireChatGptPlan, requireClaudePlan } from './plans.ts';
+import { planCommand, requireClaudePlan } from './plans.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { SOUL_HELP, soulCommand } from './soul.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
+	appManaged,
 	installService,
 	logFile,
 	renderServiceFile,
@@ -108,9 +109,8 @@ Settings (${paths.home})
                                              OpenAI key, else OpenRouter's; the provider is openai,
                                              openrouter or custom-openai (a custom provider's model,
                                              like custom-openai/ollama/nomic-embed-text)
-  nolune config set claude-path <path>          the Claude Code that claude-plan chats run, and the
-  nolune config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
-                                             and in their usual folders otherwise)
+  nolune config set claude-path <path>          the Claude Code that claude-plan chats run (found on
+                                             the PATH and in its usual folders otherwise)
   nolune config set command-mode <auto|unrestricted>
                                              auto (the default): a model checks each command the
                                              agent runs and blocks what could do harm nobody asked
@@ -139,16 +139,17 @@ Custom providers (model servers of your own: Ollama, LM Studio, oMLX, vLLM, llam
 
 Plans (chats on your own subscription instead of an API key)
   claude-plan: a Claude Pro or Max plan, through Claude Code on this computer, signed in to your
-  Claude account. chatgpt-plan: a ChatGPT Plus, Pro or Business plan, through OpenAI's Codex on
-  this computer, signed in with ChatGPT. nolune never sees either sign-in: the agent keeps it.
+  Claude account; Claude Code keeps the sign-in. chatgpt-plan: a ChatGPT Plus or Pro plan, signed
+  in with ChatGPT (Sign in with ChatGPT), which nolune keeps in ~/.nolune/chatgpt.json.
   Plan limits assume one person's ordinary use: keep busy automations and subagents on an API key.
-  nolune <plan> status                          which Claude Code or Codex nolune runs, and who it's
-                                             signed in as
-  nolune <plan> setup                           install it and sign in, where needed. Installing asks
-                                             first, in a terminal; claude-plan signs in there too,
-                                             chatgpt-plan with a link and a code for any device
-  nolune chatgpt-plan logout                    sign Codex out; chats on chatgpt-plan presets stop
-                                             until someone signs in again
+  nolune <plan> status                          who it's signed in as (and which Claude Code runs)
+  nolune claude-plan setup                      install Claude Code and sign in, where needed,
+                                             asking first, in a terminal
+  nolune chatgpt-plan setup [--another-account] sign in with ChatGPT in a browser, where needed; from
+                                             another device, paste the address it ends on. Signs
+                                             in to the account used last unless told otherwise
+  nolune chatgpt-plan logout                    sign out; chats on chatgpt-plan presets stop until
+                                             someone signs in again
   nolune chatgpt-plan models                    the models the plan offers, for \`nolune preset add\`
 
 Users (web sign-up is disabled; this is the only way to add people)
@@ -169,8 +170,8 @@ Model presets (shared by all profiles)
                                              (by its name) lists its models; its model must call
                                              tools too, which shows at its first reply, and
                                              pictures and PDFs reach it as paths. The plans check
-                                             their agent's sign-in instead, and chatgpt-plan the
-                                             models Codex offers
+                                             their sign-in instead, and chatgpt-plan the models
+                                             the plan offers
   nolune preset edit <name|id> [--provider P] [--model M] [--name N]
                  [--context-window TOKENS|auto]
                                              change what's given; a new model is checked like
@@ -352,6 +353,9 @@ function listenAddress() {
 /** macOS keeps background processes out of these folders; elsewhere there's nothing to say. */
 function fullDiskAccessHint(): string {
 	if (process.platform !== 'darwin') return '';
+	if (appManaged()) {
+		return '\n\nTo let the agent reach Documents, Desktop, Downloads, Photos and Mail, turn on nolune in System Settings > Privacy & Security > Full Disk Access.';
+	}
 	return `\n\nTo let the agent reach Documents, Desktop, Downloads, Photos and Mail, give Full Disk Access to
   ${process.execPath}
   in System Settings > Privacy & Security > Full Disk Access (click +, press Cmd+Shift+G, paste the path).
@@ -441,6 +445,7 @@ async function start(io: Io): Promise<void> {
 async function service(io: Io, action: string | undefined, args: string[]): Promise<void> {
 	switch (action) {
 		case 'install': {
+			if (appManaged()) fail('the nolune app runs the gateway while it is open.');
 			requireInit();
 			if (!existsSync(paths.server))
 				fail('no server build. In a source checkout, run `pnpm build` first.');
@@ -463,6 +468,11 @@ It runs with ${process.execPath}; run \`nolune service install\` again after swi
 			return;
 		}
 		case 'uninstall':
+			if (appManaged()) {
+				fail(
+					'the nolune app runs the gateway while it is open. Quit it from the menu bar, and turn it off under System Settings > General > Login Items so it stays closed.'
+				);
+			}
 			uninstallService();
 			io.log('Removed the background service.');
 			return;
@@ -472,7 +482,8 @@ It runs with ${process.execPath}; run \`nolune service install\` again after swi
 			return;
 		case 'status': {
 			const status = serviceStatus();
-			if (!status.installed) io.log('Not installed. Run `nolune service install`.');
+			if (appManaged() && !status.loaded) io.log('Not running. Open the nolune app.');
+			else if (!status.installed) io.log('Not installed. Run `nolune service install`.');
 			else if (!status.loaded) io.log('Installed but not loaded. Run `nolune service install`.');
 			else
 				io.log(
@@ -571,12 +582,12 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						? `Claude Code at ${claude} (nolune claude-plan status checks its sign-in)`
 						: 'no Claude Code found (nolune claude-plan setup installs it)'
 				);
-				const codex = codexExecutable();
+				const chatgpt = await chatGptPlanStatus();
 				row(
-					'codex',
-					codex
-						? `Codex at ${codex} (nolune chatgpt-plan status checks its sign-in)`
-						: 'no Codex found (nolune chatgpt-plan setup installs it)'
+					'chatgpt',
+					chatgpt.signedIn
+						? `${chatgpt.signedIn} (nolune chatgpt-plan status checks it)`
+						: 'not signed in (nolune chatgpt-plan setup signs in)'
 				);
 				const images = imageGenerationStatus();
 				row('images', `${images.model}${images.problem ? ` (${images.problem})` : ''}`);
@@ -587,13 +598,13 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|codex-path|command-mode|safety-model> <value>]'
+					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model> <value>]'
 				);
 			}
 			const key = positional(
 				rest,
 				0,
-				'host|port|origin|image-model|embeddings|claude-path|codex-path|command-mode|safety-model'
+				'host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model'
 			);
 			if (key === 'command-mode' || key === 'safety-model') {
 				// Auto mode guards against the agent itself, so it can't be the one to turn it off.
@@ -648,18 +659,13 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					const { provider, model } = parseImageModel(value, current.provider);
 					c.imageModel = `${provider}/${model}`;
 				} else if (key === 'claude-path') c.claudePath = value;
-				else if (key === 'codex-path') c.codexPath = value;
 				else
 					fail(
-						'you can set host, port, origin, image-model, embeddings, claude-path, codex-path, command-mode or safety-model'
+						'you can set host, port, origin, image-model, embeddings, claude-path, command-mode or safety-model'
 					);
 			});
 			if (key === 'claude-path') {
 				await requireClaudePlan(io);
-				return;
-			}
-			if (key === 'codex-path') {
-				await requireChatGptPlan(io);
 				return;
 			}
 			if (key === 'image-model') {
@@ -733,7 +739,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 
 		case 'claude-plan':
 		case 'chatgpt-plan':
-			return planCommand(io, group, action);
+			return planCommand(io, group, action, rest);
 
 		case 'env': {
 			requireInit();

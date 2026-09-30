@@ -5,6 +5,7 @@ import { buildTranscript, resultStatus } from './transcript';
 const human = (id: number, text: string): DisplayMessage => ({
 	id,
 	kind: 'human',
+	senderId: 'anna',
 	senderName: 'Anna',
 	text,
 	attachments: [],

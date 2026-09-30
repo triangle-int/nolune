@@ -187,7 +187,7 @@
 			<ul class="overflow-hidden rounded-2xl border">
 				{#each data.members as member (member.id)}
 					<li class="flex items-center gap-3 border-b px-4 py-2.5 text-sm last:border-b-0">
-						<UserAvatar name={member.name} />
+						<UserAvatar name={member.name} picture={data.pictures[member.id]} />
 						<div class="min-w-0 flex-1">
 							<p class="truncate">{member.name}</p>
 							<p class="truncate text-xs text-muted-foreground">

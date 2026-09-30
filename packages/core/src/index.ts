@@ -54,15 +54,23 @@ export {
 } from './custom-providers.ts';
 export { getDb, schema, type DB } from './db/index.ts';
 export {
+	MAX_NAME_LENGTH,
+	MAX_PICTURE_BYTES,
 	MIN_PASSWORD_LENGTH,
+	PictureError,
+	UserNameError,
+	clearUserPicture,
 	createUser,
 	deleteUser,
 	findUser,
 	generatePassword,
 	listUsers,
 	passwordProblem,
+	renameUser,
 	setAdmin,
-	setPassword
+	setPassword,
+	setUserPicture,
+	userPictureFile
 } from './users.ts';
 export {
 	addMember,
@@ -172,6 +180,7 @@ export {
 	renameConversation,
 	runningConversationIds,
 	sendMessage,
+	setTyping,
 	stop,
 	subscribe,
 	type BackgroundItem,
@@ -179,7 +188,8 @@ export {
 	type ChatModel,
 	type LiveBlock,
 	type LiveEvent,
-	type Snapshot
+	type Snapshot,
+	type Typist
 } from './runner.ts';
 export { TitleError } from './titles.ts';
 export {
@@ -197,7 +207,9 @@ export {
 	PLANS,
 	PlanError,
 	describePlanAccount,
+	isAgentPlan,
 	isPlan,
+	type AgentPlan,
 	type Plan,
 	type PlanAccount,
 	type PlanStatus
@@ -212,21 +224,22 @@ export {
 	type ClaudePlanStatus
 } from './claude-plan.ts';
 export {
-	CHATGPT_SIGN_IN_HELP,
-	CODEX_INSTALL_COMMAND,
-	cancelChatGptSignIn,
 	chatGptPlanStatus,
-	chatGptSignInState,
 	checkChatGptPlan,
-	codexExecutable,
-	findCodex,
 	listChatGptModels,
+	type ChatGptModel,
+	type ChatGptPlanStatus
+} from './chatgpt-plan.ts';
+export {
+	CHATGPT_SIGN_IN_HELP,
+	CHATGPT_USAGE_URL,
+	cancelChatGptSignIn,
+	chatGptSignInState,
+	finishChatGptSignIn,
 	signOutChatGpt,
 	startChatGptSignIn,
-	type ChatGptModel,
-	type ChatGptPlanStatus,
 	type ChatGptSignIn
-} from './chatgpt-plan.ts';
+} from './chatgpt-sign-in.ts';
 export {
 	createSkill,
 	isValidSkillName,

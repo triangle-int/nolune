@@ -23,6 +23,8 @@
 		textarea?: HTMLTextAreaElement | null;
 		onsubmit: () => void;
 		onstop?: () => void;
+		/** The person changed the text, which is now `value`. */
+		oninput?: (value: string) => void;
 		/** Controls next to the send button, like the model and reasoning menu. */
 		tools?: Snippet;
 		/** Files attached to the message. Without it, nothing can be attached. */
@@ -43,6 +45,7 @@
 		textarea = $bindable(null),
 		onsubmit,
 		onstop,
+		oninput,
 		tools,
 		attachments,
 		class: className
@@ -168,6 +171,7 @@
 		{placeholder}
 		{onkeydown}
 		{onpaste}
+		oninput={(event) => oninput?.(event.currentTarget.value)}
 		{@attach autosize}
 		rows="1"
 		enterkeyhint="enter"

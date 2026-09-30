@@ -77,7 +77,7 @@
 
 			<section class="rounded-3xl border p-4 sm:p-5" aria-label={m.card.title}>
 				<div class="flex items-start gap-3">
-					<UserAvatar name={data.card.owner} class="size-8" />
+					<UserAvatar name={data.card.owner} picture={data.user?.picture} class="size-8" />
 					<div class="min-w-0 flex-1">
 						<h2 class="font-medium">{data.card.owner}</h2>
 						<p class="truncate text-xs text-muted-foreground">

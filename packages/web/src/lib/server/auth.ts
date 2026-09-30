@@ -18,9 +18,12 @@ function createAuth() {
 		},
 		user: {
 			additionalFields: {
-				isAdmin: { type: 'boolean', required: false, defaultValue: false, input: false }
+				isAdmin: { type: 'boolean', required: false, defaultValue: false, input: false },
+				picture: { type: 'string', required: false, input: false }
 			}
 		},
+		// People change their name and picture in Settings (/api/me), which checks them first.
+		disabledPaths: ['/update-user'],
 		rateLimit: {
 			enabled: true,
 			window: 60,

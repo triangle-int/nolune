@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -39,6 +39,7 @@
 	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
 	import { activeStepLabel, buildTranscript, replyText, type Reply } from '$lib/transcript';
+	import { TypingReporter } from '$lib/typing';
 	import { Attachments } from '$lib/uploads.svelte';
 	import { cn } from '$lib/utils';
 	import AssistantAvatar, { type Mood } from './AssistantAvatar.svelte';
@@ -55,6 +56,7 @@
 	import CommandModeMenu from './chat/CommandModeMenu.svelte';
 	import ModelMenu, { shortModelName } from './chat/ModelMenu.svelte';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
+	import TypingIndicator from './chat/TypingIndicator.svelte';
 	import PageHeader from './PageHeader.svelte';
 	import Rich from './Rich.svelte';
 	import TypedText from './TypedText.svelte';
@@ -83,7 +85,10 @@
 		/** The models the chat can switch to. */
 		presets: { id: string; name: string; provider: ChatModel['provider'] }[];
 		defaultPresetId: string;
+		/** Who is looking: their own messages go without a name. */
 		me: string;
+		/** Members' profile pictures by user id. */
+		pictures: Record<string, string>;
 		/** The profile's folders, and the one this chat is in. */
 		folders: FolderItem[];
 		folderId: string | null;
@@ -91,8 +96,17 @@
 		avatar: Avatar;
 	}
 
-	let { conversation, efforts, presets, defaultPresetId, me, folders, folderId, avatar }: Props =
-		$props();
+	let {
+		conversation,
+		efforts,
+		presets,
+		defaultPresetId,
+		me,
+		pictures,
+		folders,
+		folderId,
+		avatar
+	}: Props = $props();
 
 	const prefs = getPreferences();
 	const { m } = getI18n();
@@ -117,6 +131,20 @@
 	let textarea = $state<HTMLTextAreaElement | null>(null);
 
 	$effect(() => chat.connect(conversation.id));
+
+	/** Tells the others in the chat when this person is writing in it. */
+	const typing = new TypingReporter((typing) =>
+		fetch(`/api/c/${conversation.id}/typing`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ typing }),
+			// So that they stopped still gets there when the page closes.
+			keepalive: true
+		})
+	);
+	onDestroy(() => typing.stop());
+	/** The others writing in the chat, shown where their message will land. */
+	const typists = $derived(chat.typing.filter((typist) => typist.id !== page.data.user?.id));
 
 	/** The model and reasoning level: anyone in the profile can change them, which arrives live. */
 	const model: ChatModel = $derived(
@@ -409,7 +437,10 @@
 		if ((!message && !uploads.length) || sending || attachments.uploading) return;
 		sending = true;
 		stickToBottom = true;
+		// A "typing" still on its way would otherwise show them typing again after the message.
+		await typing.settled();
 		if (await post('messages', { text: message, uploads })) {
+			typing.sent();
 			text = '';
 			attachments.clear();
 			continued = true;
@@ -452,12 +483,14 @@
 </script>
 
 {#snippet humanBubble(
-	senderName: string,
+	sender: { id: string | null; name: string },
 	body: string,
 	files: DisplayAttachment[],
 	pending: boolean
 )}
-	{@const mine = senderName === me}
+	{@const senderName = sender.name}
+	<!-- By id: the name is the one it was sent with, which may not be theirs any more. -->
+	{@const mine = sender.id === me}
 	<div class="group/human flex flex-col items-end gap-1">
 		{#if !mine || pending}
 			<div class="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
@@ -465,7 +498,11 @@
 					<ClockIcon class="size-3" />
 					{mine ? m.chat.readsAfterStep : `${senderName} · ${m.chat.readsAfterStep}`}
 				{:else}
-					<UserAvatar name={senderName} class="size-4 text-[9px]" />
+					<UserAvatar
+						name={senderName}
+						picture={sender.id && pictures[sender.id]}
+						class="size-4 text-[9px]"
+					/>
 					{senderName}
 				{/if}
 			</div>
@@ -707,7 +744,7 @@
 			{#each entries as entry (entry.key)}
 				{#if entry.type === 'human'}
 					{@render humanBubble(
-						entry.message.senderName,
+						{ id: entry.message.senderId, name: entry.message.senderName },
 						entry.message.text,
 						entry.message.attachments,
 						false
@@ -795,9 +832,18 @@
 
 			{#each chat.queued as message (message.id)}
 				{#if message.kind === 'human'}
-					{@render humanBubble(message.senderName, message.text, message.attachments, true)}
+					{@render humanBubble(
+						{ id: message.senderId, name: message.senderName },
+						message.text,
+						message.attachments,
+						true
+					)}
 				{/if}
 			{/each}
+
+			{#if typists.length}
+				<TypingIndicator {typists} {pictures} />
+			{/if}
 
 			{#if chat.error || (unanswered && !conversation.subagent)}
 				<div class="relative flex flex-col gap-3">
@@ -863,6 +909,7 @@
 				placeholder={chat.running ? m.chat.placeholderRunning : m.chat.placeholder}
 				onsubmit={send}
 				onstop={() => post('stop')}
+				oninput={(value) => typing.input(value)}
 			>
 				{#snippet tools()}
 					<ModelMenu
@@ -896,6 +943,13 @@
 		{/if}
 	</ComposerDock>
 </div>
+
+<!-- Someone who switched tabs or apps isn't typing, whatever the box still holds. -->
+<svelte:document
+	onvisibilitychange={() => {
+		if (document.visibilityState === 'hidden') typing.stop();
+	}}
+/>
 
 <MediaViewer bind:picture={viewing} />
 

@@ -54,7 +54,7 @@
 		profiles: { slug: string; name: string; avatar: Avatar }[];
 		folders: FolderItem[];
 		conversations: ChatItem[];
-		user: { name: string; email: string; isAdmin: boolean };
+		user: { name: string; email: string; isAdmin: boolean; picture: string | null };
 	}
 
 	let { profile, profiles, folders, conversations, user }: Props = $props();

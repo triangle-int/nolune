@@ -56,7 +56,8 @@ background. Members can also manage the profile and its membership.
   page, a postcard, or a sticker pack. Choose a template or describe an idea, then ask for changes
   in the chat. Image generation needs an OpenAI API key.
 - **Your choice of models.** Use Anthropic, OpenAI, OpenRouter, or your own model server. The project
-  also integrates with Claude Code and Codex sign-ins. Switch models within a conversation while
+  also runs on a Claude plan through Claude Code, or on a ChatGPT plan with Sign in with ChatGPT.
+  Switch models within a conversation while
   keeping its history.
 - **Built for everyday use.** Pick an avatar and personality for each profile. Bring over a summary
   of what another assistant knows about you during onboarding. The interface supports English,
@@ -139,7 +140,9 @@ nolune service restart
 ```
 
 Keep the host awake when the family needs access. On macOS, access to protected folders may
-require Full Disk Access for the Node binary; setup prints its path.
+require Full Disk Access for the Node binary; setup prints its path. The macOS app in
+[`macos/`](macos/README.md) does the setup and Full Disk Access for you, with its own Node, and
+runs nolune while it's open in the menu bar.
 
 See the [documentation](https://nolune.dev/docs/) (its pages are in
 [docs/src/content/docs](docs/src/content/docs)) for model connections, subscription integrations,

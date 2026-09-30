@@ -34,6 +34,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		cards: cards.map((card) => ({
 			path: card.path,
 			owner: card.owner,
+			ownerId: card.userId,
 			mine: card.userId === user.id,
 			file: cardFile.get(card.path) ?? null
 		})),
@@ -48,7 +49,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		core: { path: CORE_NOTE, maxChars: MAX_PINNED_CHARS },
 		// Whose notes are whose: members' come first under People.
 		members: membersWithNotes(profile).flatMap((m) =>
-			m.note ? [{ name: m.name, note: m.note }] : []
+			m.note ? [{ id: m.id, name: m.name, note: m.note }] : []
 		),
 		learnFromChats: profile.learnFromChats
 	};

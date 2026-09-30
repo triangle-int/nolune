@@ -48,8 +48,7 @@ import { hasFileStore, providerFileId } from './provider-files.ts';
  * Files people attach to a message. Each is saved in the profile's `attachments` folder, where
  * the agent can work with it, and shown in the chat through a media row. The model gets pictures
  * and PDFs themselves when it takes them, through the provider's Files API (the plans have none:
- * pictures go inline, and PDFs inline on the Claude plan and as their path on the ChatGPT plan),
- * and every other file as its name and path. What the model got is written into the message's
+ * pictures and PDFs go inline), and every other file as its name and path. What the model got is written into the message's
  * `content` (nolune's format, with the provider's file ids); `message.attachments` keeps a record of
  * the files themselves.
  */
@@ -59,8 +58,8 @@ export const MAX_ATTACHMENTS = 10;
 const DOCUMENT_SHARE = 0.25;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 /**
- * Chats on the Claude plan and OpenRouter can't count a PDF's tokens (that takes Anthropic's or
- * OpenAI's API), so they estimate: Anthropic puts a page's text at 1,500 to 3,000 tokens, and
+ * Chats on the plans and OpenRouter can't count a PDF's tokens (that takes Anthropic's or
+ * OpenAI's API with a key), so they estimate: Anthropic puts a page's text at 1,500 to 3,000 tokens, and
  * each page also goes as a picture.
  */
 const TOKENS_PER_PDF_PAGE = 4_000;
@@ -392,7 +391,7 @@ function estimatePdf(
 }
 
 /**
- * A PDF for chats on the Claude plan, which have no Files API: estimated from its pages, and
+ * A PDF for chats on the plans, which have no Files API: estimated from its pages, and
  * counted in the conversation's inline bytes, which every request carries. Kept by reference,
  * like pictures (imageBlock).
  */
@@ -424,8 +423,6 @@ async function pdfBlock(
 	used: ImageUse
 ): Promise<{ block: PdfBlock; tokens: number } | { problem: string }> {
 	const { provider } = conv;
-	// Codex takes text and pictures only.
-	if (provider === 'chatgpt-plan') return { problem: "models on the ChatGPT plan don't take PDFs" };
 	const refused = await modelTakes(conv, 'pdfs');
 	if (refused) return { problem: refused };
 	const data = readFileSync(path);

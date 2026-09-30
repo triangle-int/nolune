@@ -2,7 +2,6 @@ import { error, fail } from '@sveltejs/kit';
 import {
 	ApiKeyError,
 	CLAUDE_INSTALL_COMMAND,
-	CODEX_INSTALL_COMMAND,
 	EXPORT_PROMPT,
 	MAX_EXPORT_CHARS,
 	addPreset,
@@ -76,21 +75,27 @@ export const actions: Actions = {
 		}
 	},
 
-	/** Whether a plan's agent is installed and signed in. Signing in happens on Models & keys. */
+	/**
+	 * Whether a plan is signed in and works. The Claude plan signs in on Models & keys or in a
+	 * terminal; the ChatGPT plan right in the step (/api/chatgpt/sign-in).
+	 */
 	plan: async ({ locals, request }) => {
 		requireAdmin(locals);
 		const plan = (await request.formData()).get('plan')?.toString() ?? '';
 		if (!isPlan(plan)) error(400, 'Unknown plan');
-		const status = plan === 'claude-plan' ? await claudePlanStatus() : await chatGptPlanStatus();
+		const status =
+			plan === 'claude-plan' ? await claudePlanStatus() : await chatGptPlanStatus({ check: true });
 		if (status.signedIn && !status.problem) return { plan, signedIn: status.signedIn };
+		const { m } = translations(locals.locale);
 		return fail(400, {
 			plan,
-			planError: status.problem ?? translations(locals.locale).m.admin.claudeNoAnswer,
-			installCommand: status.installed
-				? null
-				: plan === 'claude-plan'
-					? CLAUDE_INSTALL_COMMAND
-					: CODEX_INSTALL_COMMAND
+			planError:
+				status.problem ?? (plan === 'claude-plan' ? m.admin.claudeNoAnswer : m.admin.chatgptNobody),
+			// Who's signed in anyway: the step says what's wrong with their plan rather than asking
+			// someone to sign in.
+			signedIn: status.signedIn,
+			// Only Claude Code is installed.
+			installCommand: status.installed ? null : CLAUDE_INSTALL_COMMAND
 		});
 	},
 

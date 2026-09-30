@@ -40,7 +40,7 @@
 	let allRecent = $state(false);
 	const recent = $derived(allRecent ? data.recent : data.recent.slice(0, RECENT_SHOWN));
 
-	const whose = $derived(new Map(data.members.map((member) => [member.note, member.name])));
+	const whose = $derived(new Map(data.members.map((member) => [member.note, member])));
 	/**
 	 * By category: a note each, then a folder's notes under its name. Notes from before the
 	 * categories come last, as unsorted.
@@ -60,7 +60,8 @@
 				rank: category
 					? MEMORY_CATEGORIES.indexOf(category) + (folder ? 0.5 : 0)
 					: MEMORY_CATEGORIES.length,
-				member: whose.get(file.path) ?? null,
+				member: whose.get(file.path)?.name ?? null,
+				memberPicture: data.pictures[whose.get(file.path)?.id ?? ''] ?? null,
 				updatedAt: file.updatedAt,
 				facts: file.facts
 			};
@@ -77,6 +78,7 @@
 							group: m.memory.cards.group,
 							rank: 0.5,
 							member: card.owner,
+							memberPicture: data.pictures[card.ownerId] ?? null,
 							updatedAt: card.file.updatedAt,
 							facts: card.file.facts
 						}
@@ -105,6 +107,7 @@
 							group: null,
 							rank: 0,
 							member: null,
+							memberPicture: null,
 							updatedAt: 0,
 							facts: []
 						},
@@ -309,7 +312,7 @@
 					onpointerleave={() => (focus = null)}
 				>
 					<div class="flex items-start gap-3">
-						<UserAvatar name={card.owner} class="size-8" />
+						<UserAvatar name={card.owner} picture={data.pictures[card.ownerId]} class="size-8" />
 						<div class="min-w-0 flex-1">
 							<h3 class="flex items-center gap-1.5 font-medium">
 								<PinIcon class="size-3.5 text-muted-foreground" />

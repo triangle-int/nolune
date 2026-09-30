@@ -5,6 +5,9 @@ import type { Messages } from './en';
 const p = plural('de');
 const list = listOf('de');
 
+/** ", Anna" to finish a greeting with, or nothing when there's no name. */
+const to = (name: string) => (name ? `, ${name}` : '');
+
 /** By JavaScript's numbers: 0 is Sunday. */
 const WEEKDAYS = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 const MONTHS = [
@@ -139,7 +142,7 @@ export const de: Messages = {
 
 	settings: {
 		title: 'Einstellungen',
-		description: 'Wie nolune auf diesem Gerät aussieht.',
+		description: 'Dein Name und Bild, und wie nolune auf diesem Gerät aussieht.',
 		theme: 'Design',
 		system: 'System',
 		light: 'Hell',
@@ -159,6 +162,24 @@ export const de: Messages = {
 			'Leise Töne, wo sich nolune von selbst bewegt, etwa bei der Begrüßung eines neuen Profils.',
 		logOut: 'Abmelden',
 		deviceOnly: 'Diese Einstellungen werden nur auf diesem Gerät gespeichert.'
+	},
+
+	account: {
+		name: 'Dein Name',
+		hint: 'Alle in deinen Profilen sehen deinen Namen und dein Bild, und nolune liest deinen Namen mit jeder Nachricht, die du schickst.',
+		addPicture: 'Bild hinzufügen',
+		changePicture: 'Bild ändern',
+		removePicture: 'Bild entfernen',
+		cropHint: 'Zieh das Bild, um es im Kreis zu platzieren.',
+		zoom: 'Zoom',
+		usePicture: 'Dieses Bild verwenden',
+		cantOpen: 'Das Bild ließ sich nicht öffnen. Versuch es mit JPEG oder PNG.',
+		nameRequired: 'Gib einen Namen ein.',
+		nameTooLong: (max: number) => `Ein Name darf höchstens ${max} Zeichen haben.`,
+		nameHasAt: 'Ein Name darf kein @ enthalten.',
+		nameTaken: (name: string) => `Es heißt schon jemand ${name}.`,
+		notPicture: 'Mit diesem Bild kann nolune nichts anfangen.',
+		pictureTooLarge: 'Das Bild ist zu groß.'
 	},
 
 	userMenu: {
@@ -224,6 +245,8 @@ export const de: Messages = {
 		reconnecting: 'Verbindung wird wiederhergestellt…',
 		empty: 'Bitte um etwas, um loszulegen.',
 		readsAfterStep: 'nolune liest das nach seinem aktuellen Schritt',
+		typing: (names: string[]) =>
+			`${list(names)} ${names.length === 1 ? 'schreibt' : 'schreiben'} gerade`,
 		working: 'nolune arbeitet',
 		thinking: 'Denkt nach',
 		writing: 'Schreibt',
@@ -341,8 +364,38 @@ export const de: Messages = {
 	},
 
 	newChat: {
-		greeting: (name: string) => `Wobei kann ich helfen, ${name}?`,
-		greetingNoName: 'Wobei kann ich helfen?',
+		greetings: {
+			morning: [
+				(name: string) => `Guten Morgen${to(name)}!`,
+				(name: string) => `Guten Morgen${to(name)}. Womit fangen wir heute an?`,
+				(name: string) => `Erst Kaffee oder gleich los${to(name)}?`,
+				(name: string) => `Moin${to(name)}! Was steht heute an?`
+			],
+			afternoon: [
+				(name: string) => `Guten Tag${to(name)}!`,
+				(name: string) => `Hallo${to(name)}! Wie läuft dein Tag?`,
+				(name: string) => `Kann ich dir heute Nachmittag etwas abnehmen${to(name)}?`,
+				(name: string) => `Brauchst du heute Nachmittag Hilfe${to(name)}?`
+			],
+			evening: [
+				(name: string) => `Guten Abend${to(name)}!`,
+				(name: string) => `Guten Abend${to(name)}. Wie war dein Tag?`,
+				(name: string) => `Steht heute noch etwas an${to(name)}?`,
+				(name: string) => `Was hast du heute Abend vor${to(name)}?`
+			],
+			night: [
+				(name: string) => `Noch wach${to(name)}?`,
+				(name: string) => `So spät noch auf den Beinen${to(name)}?`,
+				(name: string) => `Kannst du nicht schlafen${to(name)}? Ich bin da.`,
+				(name: string) => `Es ist schon spät${to(name)}. Was brauchst du?`
+			],
+			anytime: [
+				(name: string) => `Wobei kann ich helfen${to(name)}?`,
+				(name: string) => `Was geht dir durch den Kopf${to(name)}?`,
+				(name: string) => `Woran arbeiten wir${to(name)}?`,
+				(name: string) => `Schön, dich zu sehen${to(name)}. Was gibt es Neues?`
+			]
+		},
 		noModels:
 			'Es sind noch keine Modelle eingerichtet. Ein Admin kann eines auf der Seite „Modelle & Schlüssel“ oder mit {command} hinzufügen.',
 		couldNotStart: 'Der Chat konnte nicht gestartet werden.',
@@ -826,7 +879,7 @@ export const de: Messages = {
 				},
 				'chatgpt-plan': {
 					title: 'ChatGPT-Abo',
-					about: 'Ein Plus-, Pro- oder Business-Abo, über Codex auf diesem Computer'
+					about: 'Ein Plus- oder Pro-Abo, angemeldet mit ChatGPT'
 				},
 				anthropic: {
 					title: 'Anthropic-API-Schlüssel',
@@ -846,7 +899,18 @@ export const de: Messages = {
 			checkAgain: 'Noch einmal prüfen',
 			pickModel: 'Mit welchem Modell sollen neue Chats beginnen?',
 			asking: 'Frage nach den Modellen…',
-			modelId: 'Modell-ID'
+			modelId: 'Modell-ID',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Mit ChatGPT anmelden',
+				about:
+					'Melde dich auf der Seite von ChatGPT an und erlaube nolune, dein Plus- oder Pro-Abo zu nutzen. Chats zählen dann zur Nutzung des Abos, wie bei ChatGPT selbst.',
+				newTab: 'Die Anmeldeseite von ChatGPT öffnet sich in einem neuen Tab.',
+				waiting: 'Sobald du dort angemeldet bist, geht es hier von selbst weiter.',
+				starting: 'Die Anmeldeseite von ChatGPT wird vorbereitet…',
+				tryAgain: 'Erneut versuchen',
+				otherDevice: 'Meldest du dich auf einem anderen Gerät an?'
+			}
 		},
 		avatar: {
 			title: 'Wer soll ich sein?',
@@ -948,20 +1012,30 @@ export const de: Messages = {
 		plan: 'Claude-Abo',
 		plans: 'Abos',
 		plansHint:
-			'Chats mit einer Abo-Voreinstellung laufen über das eigene Abo von jemandem statt über einen API-Schlüssel, mit dem Agenten des Anbieters auf diesem Computer. nolune startet ihn und sieht die Anmeldung nie. Die Abo-Limits gehen von der normalen Nutzung durch eine Person aus, also lass viel beschäftigte Automationen und Subagenten auf einer Voreinstellung mit API-Schlüssel.',
+			'Chats mit einer Abo-Voreinstellung laufen über das eigene Abo von jemandem statt über einen API-Schlüssel: das Claude-Abo über Claude Code auf diesem Computer, das die Anmeldung selbst verwahrt; das ChatGPT-Abo über „Mit ChatGPT anmelden“, dessen Anmeldung nolune auf diesem Computer verwahrt. Die Abo-Limits gehen von der normalen Nutzung durch eine Person aus, also lass viel beschäftigte Automationen und Subagenten auf einer Voreinstellung mit API-Schlüssel.',
 		claudePlanAbout: 'Pro oder Max, über Claude Code.',
 		chatgptPlan: 'ChatGPT-Abo',
-		chatgptPlanAbout: 'Plus, Pro oder Business, über Codex von OpenAI.',
-		chatgptInstall:
-			'Führe in einem Terminal auf diesem Computer {setup} aus: Es installiert Codex mit npm (nach Rückfrage) und meldet es bei ChatGPT an. Oder installiere es selbst und melde dich dann hier an:',
-		chatgptSignIn: 'Mit ChatGPT anmelden',
+		chatgptPlanAbout: 'Plus oder Pro, angemeldet mit ChatGPT.',
+		chatgptSignIn: 'Weiter mit ChatGPT',
+		chatgptContinueAs: (account: string) => `Weiter als ${account}`,
+		chatgptAnotherAccount: 'Anderes Konto',
 		chatgptSignInAgain: 'Erneut anmelden',
-		chatgptAsking: 'ChatGPT wird gefragt…',
+		chatgptStarting: 'Wird gestartet…',
 		signOut: 'Abmelden',
-		chatgptOpen: 'Öffne {link} auf einem beliebigen Gerät und melde dich bei ChatGPT an.',
-		chatgptCode: 'Gib diesen Code ein: {code}',
-		chatgptCodeHint:
-			'Der Code gilt 15 Minuten. Diese Seite aktualisiert sich, sobald er eingegeben ist.',
+		chatgptOpen:
+			'Öffne {link} und melde dich an; erlaube nolune dabei, dein ChatGPT-Abo zu nutzen.',
+		chatgptSignInPage: 'die Anmeldeseite von ChatGPT',
+		chatgptHere:
+			'In einem Browser auf diesem Computer war’s das: Diese Seite aktualisiert sich, sobald du angemeldet bist.',
+		chatgptElsewhere:
+			'Auf einem anderen Gerät lädt die Seite nicht, zu der ChatGPT dich zurückschickt. Kopiere ihre Adresse (sie beginnt mit http://127.0.0.1) und füge sie hier ein:',
+		chatgptFinish: 'Fertig',
+		chatgptSignedIn: 'Angemeldet. Chats mit ChatGPT-Abo-Voreinstellungen nutzen jetzt dieses Abo.',
+		chatgptUsing: 'Chats mit ChatGPT-Abo-Voreinstellungen nutzen dieses Abo. {link}',
+		chatgptManageUsage: 'Nutzung verwalten',
+		chatgptNobody: 'Niemand ist mit ChatGPT angemeldet.',
+		chatgptSignedOutLocally:
+			'Hier abgemeldet, aber OpenAI konnte nicht benachrichtigt werden: Trenne nolune zur Sicherheit in den Einstellungen von ChatGPT.',
 		chatgptSignOutTitle: 'Von ChatGPT abmelden?',
 		chatgptSignOutBody:
 			'Chats mit ChatGPT-Abo-Voreinstellungen funktionieren erst wieder, wenn sich jemand erneut anmeldet.',
@@ -1008,12 +1082,13 @@ export const de: Messages = {
 				'custom-anthropic':
 					'Auto verwendet das Fenster, das der Server für das Modell angibt, falls er eines angibt (vLLM tut es); sonst bleibt es offen.',
 				'claude-plan': 'Claude Code meldet es nicht: Auto kennt nur seine Modelle mit 1M Kontext.',
-				'chatgpt-plan': 'Codex meldet es nicht, also lässt Auto es offen.'
+				'chatgpt-plan':
+					'Auto nutzt das Fenster, das ChatGPT für das Modell angibt, falls es eines angibt; sonst bleibt es offen.'
 			},
 			onPlan: 'Läuft über das Pro- oder Max-Abo, mit dem Claude Code angemeldet ist.',
 			noClaudeCode: 'Claude Code ist noch nicht installiert: siehe „Claude-Abo“ oben.',
-			onChatGptPlan: 'Läuft über das ChatGPT-Abo, mit dem Codex angemeldet ist.',
-			noCodex: 'Codex ist noch nicht installiert: siehe „ChatGPT-Abo“ oben.',
+			onChatGptPlan: 'Läuft über das ChatGPT-Abo der Person, die oben mit ChatGPT angemeldet ist.',
+			noChatGpt: 'Noch ist niemand mit ChatGPT angemeldet: siehe „ChatGPT-Abo“ oben.',
 			onKey: (provider: string) => `Läuft über den ${provider}-API-Schlüssel.`,
 			noKey: (provider: string) =>
 				`Noch kein ${provider}-API-Schlüssel: Füge oben unter „API-Schlüssel“ einen hinzu.`,
@@ -1025,7 +1100,6 @@ export const de: Messages = {
 			couldNotList: (status: number) => `nolune konnte die Modelle nicht abrufen (${status}).`,
 			unreachable: 'nolune ist nicht erreichbar.',
 			checkingClaude: 'Claude Code wird geprüft…',
-			checkingCodex: 'Codex wird geprüft…',
 			checkingModel: 'Modell wird geprüft…',
 			saving: 'Wird gespeichert…',
 			pick: 'Modell wählen',

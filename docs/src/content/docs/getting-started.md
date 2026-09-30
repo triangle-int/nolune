@@ -13,8 +13,7 @@ description: Install nolune, connect a model and add the family.
     models, or on any model OpenRouter serves that can call tools; you can have all three;
   - a model server of your own (Ollama, LM Studio, oMLX, vLLM...) with a model that can call tools;
   - a Claude Pro or Max plan signed in to [Claude Code](https://claude.com/claude-code) on the same
-    computer, or a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
-    [Codex](https://developers.openai.com/codex/cli) there.
+    computer, or a ChatGPT Plus or Pro plan, signed in with ChatGPT.
 
 [Models and keys](/docs/guides/models/) explains each of them.
 
@@ -38,7 +37,9 @@ ChatGPT, and add models on the web, under **Models & keys** in your account menu
 
 **Files in Documents, Desktop, Photos, Mail.** macOS blocks background processes from these until
 you give the `node` binary Full Disk Access (System Settings > Privacy & Security > Full Disk
-Access). `nolune setup` prints the exact path.
+Access). `nolune setup` prints the exact path. The macOS app
+([`macos/`](https://github.com/triangle-int/nolune/tree/main/macos)) walks you through this
+instead, and its switch is named nolune and covers only nolune.
 
 **Keep the Mac awake** if people should reach it at any time (System Settings > Energy).
 

@@ -1,7 +1,7 @@
 import { error, fail } from '@sveltejs/kit';
 import {
+	CHATGPT_USAGE_URL,
 	CLAUDE_INSTALL_COMMAND,
-	CODEX_INSTALL_COMMAND,
 	ApiKeyError,
 	CustomProviderError,
 	DEFAULT_EMBEDDING_MODELS,
@@ -24,7 +24,7 @@ import {
 	embeddingProblem,
 	embeddingState,
 	findClaudeCode,
-	findCodex,
+	finishChatGptSignIn,
 	getDefaultPreset,
 	getPreset,
 	isApiKeyProvider,
@@ -61,10 +61,9 @@ import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, depends }) => {
 	requireAdmin(locals);
-	// The page asks again while a ChatGPT sign-in waits for its code.
+	// The page asks again while a ChatGPT sign-in waits for the browser to come back.
 	depends('nolune:chatgpt-plan');
 	const defaultId = getDefaultPreset()?.id;
-	const codex = findCodex();
 	const signIn = chatGptSignInState();
 	return {
 		// Where each key comes from and its last four characters; never the keys themselves.
@@ -78,13 +77,12 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 		})),
 		// Where Claude Code is; whether it's signed in takes starting it, so that's a button.
 		claude: { ...findClaudeCode(), installCommand: CLAUDE_INSTALL_COMMAND },
-		// Where Codex is, who it's signed in as (asking takes starting it, which waits while a
-		// sign-in's code does), and a sign-in's code. Never the sign-in: Codex keeps it.
+		// Who's signed in with ChatGPT, from what nolune keeps (asking OpenAI is Check sign-in's),
+		// and a sign-in under way. Never the tokens.
 		chatgpt: {
-			...codex,
 			...signIn,
-			installCommand: CODEX_INSTALL_COMMAND,
-			status: codex.installed && !signIn.pending ? await chatGptPlanStatus() : null
+			usageUrl: CHATGPT_USAGE_URL,
+			status: await chatGptPlanStatus()
 		},
 		// What memory search finds meaning with.
 		embeddings: embeddingState(),
@@ -133,7 +131,11 @@ function shownAs(provider: string, model: string) {
 function planResult(plan: Plan, status: PlanStatus, locale: App.Locals['locale']) {
 	if (status.problem || !status.signedIn) {
 		const { m } = translations(locale);
-		return fail(400, { plan, planError: status.problem ?? m.admin.claudeNoAnswer });
+		return fail(400, {
+			plan,
+			planError:
+				status.problem ?? (plan === 'claude-plan' ? m.admin.claudeNoAnswer : m.admin.chatgptNobody)
+		});
 	}
 	const { signedIn } = status;
 	return { plan, planMessage: `${signedIn[0].toUpperCase()}${signedIn.slice(1)}.` };
@@ -229,15 +231,35 @@ export const actions: Actions = {
 		removeApiKey(provider);
 		return { provider, keyMessage: translations(locals.locale).m.admin.removed };
 	},
-	chatgptSignIn: async ({ locals }) => {
+	chatgptSignIn: async ({ locals, request }) => {
 		requireAdmin(locals);
+		const anotherAccount = (await request.formData()).get('account')?.toString() === 'another';
 		try {
-			// Waits for the code, not for it to be entered: that goes on in the background.
-			await startChatGptSignIn();
+			// Waits for the browser to come back in the background.
+			await startChatGptSignIn({ anotherAccount });
 		} catch (err) {
 			if (!(err instanceof PlanError)) throw err;
 			return fail(400, { plan: 'chatgpt-plan' as const, planError: err.message });
 		}
+	},
+	/** A sign-in finished in a browser on another device: the address it ended on. */
+	chatgptFinish: async ({ locals, request }) => {
+		requireAdmin(locals);
+		const address = (await request.formData()).get('address')?.toString() ?? '';
+		try {
+			await finishChatGptSignIn(address);
+		} catch (err) {
+			if (!(err instanceof PlanError)) throw err;
+			return fail(400, { plan: 'chatgpt-plan' as const, planError: err.message });
+		}
+		return {
+			plan: 'chatgpt-plan' as const,
+			planMessage: translations(locals.locale).m.admin.chatgptSignedIn
+		};
+	},
+	chatgptCheck: async ({ locals }) => {
+		requireAdmin(locals);
+		return planResult('chatgpt-plan', await chatGptPlanStatus({ check: true }), locals.locale);
 	},
 	chatgptCancel: ({ locals }) => {
 		requireAdmin(locals);
@@ -245,15 +267,17 @@ export const actions: Actions = {
 	},
 	chatgptSignOut: async ({ locals }) => {
 		requireAdmin(locals);
+		const { m } = translations(locals.locale);
+		let told: boolean;
 		try {
-			await signOutChatGpt();
+			told = await signOutChatGpt();
 		} catch (err) {
 			if (!(err instanceof PlanError)) throw err;
 			return fail(400, { plan: 'chatgpt-plan' as const, planError: err.message });
 		}
 		return {
 			plan: 'chatgpt-plan' as const,
-			planMessage: translations(locals.locale).m.admin.signedOut
+			planMessage: told ? m.admin.signedOut : m.admin.chatgptSignedOutLocally
 		};
 	},
 	add: async ({ locals, request }) => {

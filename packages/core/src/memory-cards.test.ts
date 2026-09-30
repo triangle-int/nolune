@@ -38,7 +38,7 @@ import { CARDS, paths } from './paths.ts';
 import { addMember, createProfile, type Profile } from './profiles.ts';
 import { buildSystemPrompt } from './prompt.ts';
 import { makePreset, makeUser } from './test/fixtures.ts';
-import { deleteUser } from './users.ts';
+import { deleteUser, renameUser } from './users.ts';
 
 vi.mock('./models.ts', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./models.ts')>()),
@@ -121,6 +121,14 @@ describe('a card', () => {
 		);
 		expect(cardProfiles(anna.id).map((p) => p.name)).toEqual(['Anna', 'Family', "Zoe's party"]);
 		expect(cardProfiles(ben.id).map((p) => p.name)).toEqual(['Family']);
+	});
+
+	it("is titled with its owner's name, when they change it too", () => {
+		const anna = makeUser('Anna');
+		addToCard(cardOf(anna.id), 'Vegetarian');
+		renameUser(anna.id, 'Anna Lee');
+		expect(cardOf(anna.id)).toMatchObject({ name: 'anna', owner: 'Anna Lee' });
+		expect(readCard(cardOf(anna.id))?.text).toBe('# Anna Lee\n\n- Vegetarian\n');
 	});
 
 	it('holds at most 2,000 characters, and keeps its name', () => {

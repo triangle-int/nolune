@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, rmSync } from 'node:fs';
-import { isPlan, type Plan } from './plans.ts';
+import { isAgentPlan, type AgentPlan } from './plans.ts';
 import {
 	describeApiError,
 	isAbortError,
@@ -88,7 +88,7 @@ import { profileCards } from './memory-cards.ts';
 import { memberWords } from './memory-people.ts';
 import { recallFor } from './memory-search.ts';
 import { profileDir } from './paths.ts';
-import { resolveFiles } from './provider-files.ts';
+import { hasFileStore, resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
 import {
 	RUN_COMMAND_TOOL,
@@ -123,7 +123,23 @@ export type LiveEvent =
 	| { type: 'commands'; commands: ChatCommands }
 	| { type: 'background'; background: BackgroundItem[] }
 	/** What the note-taker saved from the chat (memory-changes.ts), all of it. */
-	| { type: 'memory'; memory: DisplayMemoryLook[] };
+	| { type: 'memory'; memory: DisplayMemoryLook[] }
+	/** Everyone writing in the chat's composer right now, in the order they started. */
+	| { type: 'typing'; typing: Typist[] };
+
+/** Someone writing a message in a chat, which the others who have it open see. */
+export interface Typist {
+	/** Their user id. */
+	id: string;
+	name: string;
+}
+
+/**
+ * How long someone counts as typing after their page last said so. While they type it says so
+ * again every few seconds, and that they stopped when they do; this is for a page that closed or
+ * lost its connection first.
+ */
+export const TYPING_TTL_MS = 8_000;
 
 /** The model and reasoning level a conversation's next model call uses. */
 export interface ChatModel {
@@ -187,6 +203,8 @@ export interface Snapshot {
 	background: BackgroundItem[];
 	/** What the note-taker saved from it. */
 	memory: DisplayMemoryLook[];
+	/** Who is writing in it right now, the person looking at it included. */
+	typing: Typist[];
 }
 
 /**
@@ -215,6 +233,8 @@ interface State {
 	live: (LiveBlock | null)[];
 	toolOutput: { id: string; text: string } | null;
 	safety: SafetyTally;
+	/** Who is typing, by user id, each until their TYPING_TTL_MS runs out. */
+	typing: Map<string, { name: string; expiry: NodeJS.Timeout }>;
 	emitter: EventEmitter;
 }
 
@@ -288,6 +308,7 @@ function stateFor(conversationId: string): State {
 			live: [],
 			toolOutput: null,
 			safety: freshTally(),
+			typing: new Map(),
 			emitter: new EventEmitter()
 		};
 		st.emitter.setMaxListeners(100);
@@ -324,8 +345,34 @@ export function getSnapshot(conversationId: string): Snapshot {
 		live: st.live,
 		toolOutput: st.toolOutput,
 		background: backgroundItems(conversationId),
-		memory: memoryLooks(conversationId)
+		memory: memoryLooks(conversationId),
+		typing: typists(st)
 	};
+}
+
+function typists(st: State): Typist[] {
+	return [...st.typing].map(([id, { name }]) => ({ id, name }));
+}
+
+/**
+ * Whether `person` is writing in the chat, for everyone who has it open. Someone typing is told
+ * again every few seconds; that only tells the others when their name changed. They stop by
+ * saying so, by sending their message, or TYPING_TTL_MS after they last said they were typing.
+ */
+export function setTyping(conversationId: string, person: Typist, typing: boolean): void {
+	const st = stateFor(conversationId);
+	const known = st.typing.get(person.id);
+	if (known) clearTimeout(known.expiry);
+	if (typing) {
+		const expiry = setTimeout(() => setTyping(conversationId, person, false), TYPING_TTL_MS);
+		expiry.unref();
+		st.typing.set(person.id, { name: person.name, expiry });
+		if (known?.name === person.name) return;
+	} else {
+		if (!known) return;
+		st.typing.delete(person.id);
+	}
+	emit(conversationId, { type: 'typing', typing: typists(st) });
 }
 
 /** The subagents a command waits for with `nolune agent watch`, if it does. */
@@ -487,6 +534,8 @@ async function queueMessage(
 	const placeholder = conv.title ? undefined : opening.slice(0, TITLE_LIMIT);
 	touchConversation(conversationId, placeholder);
 	emitQueued(conversationId);
+	// After the message shows, so the chat doesn't shrink for a moment in between.
+	setTyping(conversationId, sender, false);
 	kick(conversationId);
 	if (placeholder !== undefined) nameConversation(conv, opening, placeholder);
 }
@@ -933,7 +982,7 @@ function isPlanInput(row: MessageRow): boolean {
  * chat switched away from the plan and back. That session never saw those replies, so the chat
  * starts a new one.
  */
-function missedReplies(session: { sentSeq: number }, rows: MessageRow[], plan: Plan): boolean {
+function missedReplies(session: { sentSeq: number }, rows: MessageRow[], plan: AgentPlan): boolean {
 	return rows.some(
 		(row) =>
 			(row.seq ?? 0) > session.sentSeq &&
@@ -950,14 +999,14 @@ function missedReplies(session: { sentSeq: number }, rows: MessageRow[], plan: P
  * chat used before): those go along as a transcript, in a new session.
  */
 function planInput(
-	conv: Conversation & { provider: Plan },
+	conv: Conversation & { provider: AgentPlan },
 	rows: MessageRow[],
 	newSessionId = conv.id
 ) {
 	const sentSeq = rows.at(-1)?.seq ?? 0;
 	const content = (row: MessageRow) => readRow(row).blocks;
 	const kept = conv.providerSession;
-	// The other plan's agent can't open it.
+	// Codex's, from when it ran the ChatGPT plan, can't be opened.
 	const ours = kept && (kept.provider ?? 'claude-plan') === conv.provider ? kept : null;
 	const session = ours && !missedReplies(ours, rows, conv.provider) ? ours : null;
 	// The chat's first session has its id.
@@ -999,7 +1048,7 @@ function planInput(
  * when the loop should end: stopped, or failed with `st.error`.
  */
 async function planTurn(
-	conv: Conversation & { provider: Plan },
+	conv: Conversation & { provider: AgentPlan },
 	rows: MessageRow[],
 	st: State,
 	abort: AbortController
@@ -1012,7 +1061,7 @@ async function planTurn(
 	}
 	const cwd = profileDir(slug);
 	mkdirSync(cwd, { recursive: true });
-	// The plan's agent gets pictures (and PDFs, on the Claude plan) inline, so their bytes count too.
+	// The plan's agent gets pictures and PDFs inline, so their bytes count too.
 	const images = imageUse(rows.map(readRow), true);
 	let next = planInput(conv, rows);
 	for (let retried = false; ; retried = true) {
@@ -1106,7 +1155,7 @@ async function loop(conversationId: string): Promise<void> {
 
 			const abort = new AbortController();
 			st.abort = abort;
-			if (isPlan(conv.provider)) {
+			if (isAgentPlan(conv.provider)) {
 				if (!(await planTurn({ ...conv, provider: conv.provider }, rows, st, abort))) return;
 				// The agent ended its turn: only messages that came meanwhile start another.
 				if (!queuedRows(conversationId).length) return;
@@ -1150,8 +1199,12 @@ async function loop(conversationId: string): Promise<void> {
 			// No tool calls: the turn is over. Loop again in case messages arrived meanwhile.
 			if (calls.length === 0) continue;
 
-			// Queued messages may carry pictures too; they join the history at the next step.
-			const images = imageUse([...messages, ...queuedRows(conversationId).map(readRow)]);
+			// Queued messages may carry pictures too; they join the history at the next step. Without
+			// a Files API (the ChatGPT plan), every request carries them inline.
+			const images = imageUse(
+				[...messages, ...queuedRows(conversationId).map(readRow)],
+				!hasFileStore(conv.provider)
+			);
 			const results: ToolResultBlock[] = [];
 			for (const call of calls) {
 				// A call that throws still gets its result, or the reply would wait for one forever.

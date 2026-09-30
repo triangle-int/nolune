@@ -308,6 +308,28 @@ export function recordAgentCardChanges(
 	});
 }
 
+/**
+ * A card is titled with its owner's name, which they can change in Settings: its `# title`
+ * follows, so search and the note-taker know it by the name they go by now.
+ */
+export function retitleCard(userId: string, name: string): void {
+	const row = getDb()
+		.select({ name: cardTable.name })
+		.from(cardTable)
+		.where(eq(cardTable.userId, userId))
+		.get();
+	if (!row) return;
+	const card = toCard({ userId, owner: name, name: row.name });
+	const note = readCard(card);
+	if (!note) return;
+	const lines = note.text.split('\n');
+	const first = lines.findIndex((line) => line.trim());
+	if (first !== -1 && /^#\s/.test(lines[first].trim())) lines[first] = `# ${name}`;
+	else lines.unshift(`# ${name}`, '');
+	const text = lines.join('\n');
+	if (text !== note.text) writeMemoryNote(CARDS, card.path, text);
+}
+
 /** Moves a deleted user's card to the trash, like a deleted profile's folder. */
 export function trashCard(userId: string): void {
 	const row = getDb()

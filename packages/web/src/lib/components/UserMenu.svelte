@@ -12,7 +12,7 @@
 	import UserAvatar from './UserAvatar.svelte';
 
 	interface Props {
-		user: { name: string; email: string; isAdmin: boolean };
+		user: { name: string; email: string; isAdmin: boolean; picture: string | null };
 		/** `sidebar` shows the name next to the avatar; `compact` is just the avatar. */
 		variant?: 'sidebar' | 'compact';
 	}
@@ -29,7 +29,7 @@
 		{#snippet child({ props })}
 			{#if variant === 'sidebar'}
 				<Sidebar.MenuButton {...props} size="lg" class="h-12 gap-2.5 px-2">
-					<UserAvatar name={user.name} class="size-8" />
+					<UserAvatar name={user.name} picture={user.picture} class="size-8" />
 					<span class="min-w-0 flex-1 truncate text-left font-medium">{user.name}</span>
 				</Sidebar.MenuButton>
 			{:else}
@@ -38,7 +38,7 @@
 					class="flex size-9 items-center justify-center rounded-full hover:bg-muted"
 					aria-label={m.userMenu.account}
 				>
-					<UserAvatar name={user.name} />
+					<UserAvatar name={user.name} picture={user.picture} />
 				</button>
 			{/if}
 		{/snippet}
@@ -49,7 +49,7 @@
 		align={variant === 'sidebar' ? 'start' : 'end'}
 	>
 		<DropdownMenu.Label class="flex items-center gap-2.5 px-3 py-2 font-normal">
-			<UserAvatar name={user.name} class="size-8" />
+			<UserAvatar name={user.name} picture={user.picture} class="size-8" />
 			<span class="min-w-0">
 				<span class="block truncate text-sm font-medium text-foreground">{user.name}</span>
 				<span class="block truncate text-xs text-muted-foreground">{user.email}</span>
