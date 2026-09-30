@@ -1649,6 +1649,14 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
   dashes; the relay keeps the likes of `www` and `login` for itself. The addresses have a domain
   of their own, apart from the site and the relay on `nolune.dev`, so a browser blocklist that
   takes in an abused address, or a cookie an address sets for its domain, can't reach them.
+- **Names nobody uses.** A name whose gateway hasn't connected in 90 days
+  (`RELAY_FORGET_AFTER_DAYS`) is free again, checked when the relay starts and every hour, so a
+  nolune that's gone (reinstalled without `relay disable`, say) doesn't keep it for good; blocked
+  ones stay. The relay counts a gateway as seen when it connects and when it leaves, and each hour
+  while it's connected. A gateway the relay doesn't know (it was away that long, or the relay lost
+  its file) asks for its name again, at most once an hour since that counts as a registration, and
+  keeps the new token in `config.json`. When someone else has the name by then, it removes `relay`
+  from `config.json` and stops using it, so the address, theirs now, isn't opened as this family's.
 - **The connection.** `nolune start` (`connectRelay()` in `packages/cli/src/relay.ts`) opens a
   WebSocket to the relay and says `hello` with the name and token. Once the relay answers `ready`,
   the binary messages carry HTTP/2 with the relay as the client: each request to the address is a

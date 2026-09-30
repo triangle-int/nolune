@@ -39,7 +39,9 @@ import { webSocketStream } from './stream.ts';
  *
  * Anyone may register, so it keeps what one person can take in check: a limit on each address's
  * traffic in a month, on the addresses one network can register (in an hour, and in all), and an
- * operator who can block an address (`admin`, served on a Unix socket, never on the web).
+ * operator who can block an address (`admin`, served on a Unix socket, never on the web). Names
+ * don't stay taken for good: one whose nolune hasn't connected in 90 days is free again (its nolune
+ * asks for it back if it returns, as long as nobody else took it).
  */
 
 export interface RelayOptions {
@@ -67,6 +69,11 @@ export interface RelayOptions {
 	maxGatewaysPerNetwork?: number;
 	/** Bytes each address may pass through the relay in a month (UTC), both ways; 0 for no limit. */
 	monthlyTrafficBytes?: number;
+	/**
+	 * How long a gateway may stay away before its name is free again: checked when the relay starts
+	 * and every hour. Blocked ones are kept. 0 keeps every name.
+	 */
+	forgetAfterMs?: number;
 	/**
 	 * For how long after a gateway leaves (restarting, or changing networks) requests wait for it
 	 * to come back, rather than get the offline page at once.
@@ -106,6 +113,7 @@ interface Connection {
 const HELLO_TIMEOUT_MS = 10_000;
 const HEARTBEAT_MS = 30_000;
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 /** Requests that may wait for one gateway to come back; more get the offline page at once. */
 const MAX_WAITING = 64;
 const MAX_API_BODY_BYTES = 4096;
@@ -175,6 +183,7 @@ export function createRelay(options: RelayOptions): Relay {
 	const maxPerNetwork = options.maxGatewaysPerNetwork ?? 10;
 	const monthlyLimit = options.monthlyTrafficBytes ?? 30 * 1024 ** 3;
 	const graceMs = options.reconnectGraceMs ?? 15_000;
+	const forgetAfterMs = options.forgetAfterMs ?? 90 * DAY_MS;
 	const log = options.log ?? (() => {});
 
 	const connections = new Map<string, Connection>();
@@ -228,12 +237,30 @@ export function createRelay(options: RelayOptions): Relay {
 		return monthlyLimit > 0 && store.trafficThisMonth(name) >= monthlyLimit;
 	}
 
+	/** Frees the names of gateways that have been away for longer than forgetAfterMs. */
+	function forgetUnused(): void {
+		if (forgetAfterMs <= 0) return;
+		// One connected all along was last seen when it connected: now counts.
+		for (const name of connections.keys()) store.seen(name);
+		const forgotten = store.forgetUnseen(
+			new Date(Date.now() - forgetAfterMs),
+			(record) => connections.has(record.name) || record.blocked !== undefined
+		);
+		const days = Math.round(forgetAfterMs / DAY_MS);
+		for (const name of forgotten) {
+			leftAt.delete(name);
+			log(`forgot ${name}: not connected in ${days} days`);
+		}
+	}
+
+	forgetUnused();
 	const pruning = setInterval(() => {
 		const now = Date.now();
 		for (const [address, times] of registrations) {
 			if (times.every((at) => now - at >= HOUR_MS)) registrations.delete(address);
 		}
 		for (const [name, at] of leftAt) if (now - at >= graceMs) leftAt.delete(name);
+		forgetUnused();
 	}, HOUR_MS);
 	pruning.unref();
 	// Traffic and when gateways were last seen change all the time: they're written once a minute.
@@ -369,7 +396,10 @@ export function createRelay(options: RelayOptions): Relay {
 			session.destroy();
 			if (connections.get(name) !== connection) return;
 			connections.delete(name);
-			if (store.has(name)) leftAt.set(name, Date.now());
+			if (store.has(name)) {
+				leftAt.set(name, Date.now());
+				store.seen(name);
+			}
 			log(`${name} disconnected`);
 		});
 

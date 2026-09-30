@@ -80,18 +80,19 @@ grows). The relay runs from its TypeScript source on Node 22.18 or later, with o
 `compose.yaml` runs the relay (`Dockerfile`) behind Caddy (`Caddy.Dockerfile`, Caddy with the
 Cloudflare DNS module, and `Caddyfile`). The relay's settings:
 
-| Variable                | Meaning                                                                                                                                     |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RELAY_DOMAIN`          | Gateways get `<name>.<domain>`. Required.                                                                                                   |
-| `RELAY_HOST`            | Where gateways register and connect. The domain itself by default.                                                                          |
-| `RELAY_SITE_URL`        | Where a browser that opens the relay's host, or the domain without a name, goes. `https://nolune.dev` by default; empty for a line of text. |
-| `RELAY_DATA`            | The gateways file. `/data/gateways.json` in the image.                                                                                      |
-| `RELAY_MONTHLY_GB`      | Traffic each address may pass in a month. 30 by default; 0: no limit.                                                                       |
-| `RELAY_MAX_PER_NETWORK` | Addresses one network may have. 10 by default; 0: no limit.                                                                                 |
-| `RELAY_ADMIN_SOCKET`    | The operator's socket. `admin.sock` next to the gateways file.                                                                              |
-| `RELAY_TRUST_PROXY`     | `1`: the client's address is the last in `X-Forwarded-For` (Caddy's).                                                                       |
-| `RELAY_SCHEME`          | `http` to try it without TLS; addresses are `https` otherwise.                                                                              |
-| `HOST`, `PORT`          | Where it listens. `0.0.0.0:8080` by default.                                                                                                |
+| Variable                  | Meaning                                                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RELAY_DOMAIN`            | Gateways get `<name>.<domain>`. Required.                                                                                                   |
+| `RELAY_HOST`              | Where gateways register and connect. The domain itself by default.                                                                          |
+| `RELAY_SITE_URL`          | Where a browser that opens the relay's host, or the domain without a name, goes. `https://nolune.dev` by default; empty for a line of text. |
+| `RELAY_DATA`              | The gateways file. `/data/gateways.json` in the image.                                                                                      |
+| `RELAY_MONTHLY_GB`        | Traffic each address may pass in a month. 30 by default; 0: no limit.                                                                       |
+| `RELAY_MAX_PER_NETWORK`   | Addresses one network may have. 10 by default; 0: no limit.                                                                                 |
+| `RELAY_FORGET_AFTER_DAYS` | Days an address's nolune may stay away before its name is free again. 90 by default; 0: names stay taken.                                   |
+| `RELAY_ADMIN_SOCKET`      | The operator's socket. `admin.sock` next to the gateways file.                                                                              |
+| `RELAY_TRUST_PROXY`       | `1`: the client's address is the last in `X-Forwarded-For` (Caddy's).                                                                       |
+| `RELAY_SCHEME`            | `http` to try it without TLS; addresses are `https` otherwise.                                                                              |
+| `HOST`, `PORT`            | Where it listens. `0.0.0.0:8080` by default.                                                                                                |
 
 To try it on your own computer, without TLS:
 
@@ -116,9 +117,11 @@ first; `docker compose restart caddy` tries at once.
   `docker compose logs -f relay` for addresses coming and going, `docker compose logs -f caddy` for
   certificates, `docker compose logs --since 1h` for the last hour of both.
 
-- **Back up** the gateways file (the `relay-data` volume). Without it, every family would have to
-  run `nolune relay enable` again (it asks for the same name back) and restart nolune; until then
-  their gateways try every 5 minutes, in case the file comes back.
+- **Back up** the gateways file (the `relay-data` volume). Without it, every family's nolune
+  asks for its name again when it next connects, and gets it unless someone took it first.
+- **Names nobody uses** are free again after 90 days without their nolune connecting
+  (`RELAY_FORGET_AFTER_DAYS`); the log says `forgot <name>`. Blocked ones are kept. A nolune that
+  comes back after that asks for its name again, and stops using it if someone else has it.
 - **The operator's commands** talk to the running relay over a Unix socket that only its own user
   can open, never over the web:
 
@@ -133,7 +136,7 @@ first; `docker compose restart caddy` tries at once.
   | `show <name>`              | One address.                                                                                                                                      |
   | `block <name> [reason...]` | Takes an address off the relay: visitors see that it's blocked, and its nolune can't connect. Its owner sees the reason in `nolune relay status`. |
   | `unblock <name>`           | Lets it back.                                                                                                                                     |
-  | `remove <name>`            | Forgets an address, so its name is free again.                                                                                                    |
+  | `remove <name>`            | Forgets an address, so its name is free again. Its nolune, if it's still around, asks for it back when it next connects; `block` keeps it off.    |
 
 - **Families behind one address.** Mobile networks and some home ISPs put many customers behind
   one IPv4 address (CGNAT), and they share its 10 addresses. If people run into it, raise

@@ -5,9 +5,9 @@ import { dirname } from 'node:path';
 /*
  * The gateways the relay knows: a name each, with a hash of its token (never the token itself),
  * the network it was registered from, its traffic this month and whether it's blocked. Kept in
- * one JSON file, written whole: at once for registrations, releases and blocks, and by flush()
- * for what changes all the time (traffic, when each was last seen), which the relay calls every
- * minute. Without a file it lives in memory, for tests.
+ * one JSON file, written whole: at once for registrations, releases, blocks and forgetting, and by
+ * flush() for what changes all the time (traffic, when each was last seen), which the relay calls
+ * every minute. Without a file it lives in memory, for tests.
  */
 
 export interface GatewayRecord {
@@ -15,7 +15,10 @@ export interface GatewayRecord {
 	/** sha256 of the token, hex. */
 	tokenHash: string;
 	createdAt: string;
-	/** When it last connected. */
+	/**
+	 * When it was last connected: when it connected or left, or, while it's connected, within the
+	 * hour (the relay's forgetUnused()).
+	 */
 	lastSeenAt?: string;
 	/** Where it was registered from (network() of the client's address), for the limit on each. */
 	registeredFrom?: string;
@@ -156,6 +159,20 @@ export class GatewayStore {
 		const removed = this.#gateways.delete(name);
 		if (removed) this.#save();
 		return removed;
+	}
+
+	/**
+	 * Forgets the gateways last seen (or, never seen, registered) before `before`, but for those
+	 * `keep` holds on to, and says which it forgot.
+	 */
+	forgetUnseen(before: Date, keep: (record: GatewayRecord) => boolean): string[] {
+		const forgotten = this.list()
+			.filter((record) => Date.parse(record.lastSeenAt ?? record.createdAt) < before.getTime())
+			.filter((record) => !keep(record))
+			.map((record) => record.name);
+		for (const name of forgotten) this.#gateways.delete(name);
+		if (forgotten.length) this.#save();
+		return forgotten;
 	}
 
 	/** Writes what changed since the last write, if anything did. */

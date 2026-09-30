@@ -305,6 +305,55 @@ describe('the operator', () => {
 	});
 });
 
+describe('names nobody uses', () => {
+	const DAY_MS = 24 * 60 * 60 * 1000;
+	const longAgo = () => new Date(Date.now() - 100 * DAY_MS).toISOString();
+
+	it('are free again once their gateway has been away for long, unless blocked', async () => {
+		const store = new GatewayStore();
+		for (const name of ['away', 'blocked', 'never', 'recent']) store.add(name, 'token');
+		store.get('away')!.lastSeenAt = longAgo();
+		store.get('blocked')!.lastSeenAt = longAgo();
+		store.block('blocked', 'phishing');
+		store.get('never')!.createdAt = longAgo();
+		store.seen('recent');
+		const log: string[] = [];
+		await startRelay({ store, log: (message) => log.push(message) });
+
+		expect(store.list().map((record) => record.name)).toEqual(['blocked', 'recent']);
+		expect(log).toEqual([
+			'forgot away: not connected in 90 days',
+			'forgot never: not connected in 90 days'
+		]);
+		expect((await register({ name: 'away' })).status).toBe(201);
+	});
+
+	it('are kept for good with forgetAfterMs 0', async () => {
+		const store = new GatewayStore();
+		store.add('away', 'token');
+		store.get('away')!.lastSeenAt = longAgo();
+		await startRelay({ store, forgetAfterMs: 0 });
+		expect(store.has('away')).toBe(true);
+	});
+
+	it('count a gateway as seen when it leaves, not only when it came', async () => {
+		const store = new GatewayStore();
+		const running = await startRelay({ store });
+		const { name, token } = (await (await register({ name: 'smiths' })).json()) as Registration;
+		const socket = new WebSocket(`${base.replace('http', 'ws')}/api/connect`);
+		socket.addEventListener('open', () =>
+			socket.send(JSON.stringify({ type: 'hello', protocol: RELAY_PROTOCOL, name, token }))
+		);
+		await new Promise((resolve) => socket.addEventListener('message', resolve));
+		store.get('smiths')!.lastSeenAt = longAgo();
+		socket.close();
+		await new Promise((resolve) => socket.addEventListener('close', resolve));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(running.online('smiths')).toBe(false);
+		expect(Date.now() - Date.parse(store.get('smiths')!.lastSeenAt!)).toBeLessThan(60_000);
+	});
+});
+
 describe('the gateways file', () => {
 	it('counts traffic by month, and writes it when flushed', () => {
 		const file = join(mkdtempSync(join(tmpdir(), 'nolune-relay-')), 'gateways.json');
