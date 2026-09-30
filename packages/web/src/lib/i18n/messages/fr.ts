@@ -5,6 +5,9 @@ import type { Messages } from './en';
 const p = plural('fr');
 const list = listOf('fr');
 
+/** ", Anna" to finish a greeting with, or nothing when there's no name. */
+const to = (name: string) => (name ? `, ${name}` : '');
+
 /** By JavaScript's numbers: 0 is Sunday. */
 const WEEKDAYS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
 const MONTHS = [
@@ -355,8 +358,38 @@ export const fr: Messages = {
 	},
 
 	newChat: {
-		greeting: (name: string) => `Comment puis-je vous aider, ${name} ?`,
-		greetingNoName: 'Comment puis-je vous aider ?',
+		greetings: {
+			morning: [
+				(name: string) => `Bonjour${to(name)} !`,
+				(name: string) => `Bonjour${to(name)}. Par quoi commence-t-on aujourd’hui ?`,
+				(name: string) => `Un café d’abord, ou on s’y met tout de suite${to(name)} ?`,
+				(name: string) => `Qu’est-ce qu’on fait aujourd’hui${to(name)} ?`
+			],
+			afternoon: [
+				(name: string) => `Bon après-midi${to(name)} !`,
+				(name: string) => `Bonjour${to(name)}. Comment se passe la journée ?`,
+				(name: string) => `Je vous décharge de quelque chose cet après-midi${to(name)} ?`,
+				(name: string) => `Besoin d’un coup de main cet après-midi${to(name)} ?`
+			],
+			evening: [
+				(name: string) => `Bonsoir${to(name)} !`,
+				(name: string) => `Bonsoir${to(name)}. Comment s’est passée votre journée ?`,
+				(name: string) => `Il reste quelque chose à faire aujourd’hui${to(name)} ?`,
+				(name: string) => `Qu’est-ce qu’on prévoit pour ce soir${to(name)} ?`
+			],
+			night: [
+				(name: string) => `Encore debout${to(name)} ?`,
+				(name: string) => `Pas sommeil${to(name)} ? Je suis là.`,
+				(name: string) => `Une longue nuit${to(name)} ?`,
+				(name: string) => `Il se fait tard${to(name)}. De quoi avez-vous besoin ?`
+			],
+			anytime: [
+				(name: string) => `Comment puis-je vous aider${to(name)} ?`,
+				(name: string) => `À quoi pensez-vous${to(name)} ?`,
+				(name: string) => `Sur quoi travaille-t-on${to(name)} ?`,
+				(name: string) => `Quel plaisir de vous voir${to(name)} ! Quoi de neuf ?`
+			]
+		},
 		noModels:
 			'Aucun modèle n’est encore configuré. Un administrateur peut en ajouter un sur la page « Modèles et clés » ou avec {command}.',
 		couldNotStart: 'Impossible de commencer la discussion.',

@@ -5,6 +5,9 @@ import type { Messages } from './en';
 const p = plural('es');
 const list = listOf('es');
 
+/** ", Anna" to finish a greeting with, or nothing when there's no name. */
+const to = (name: string) => (name ? `, ${name}` : '');
+
 /** By JavaScript's numbers: 0 is Sunday. */
 const WEEKDAYS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 /** "los lunes" */
@@ -362,8 +365,38 @@ export const es: Messages = {
 	},
 
 	newChat: {
-		greeting: (name: string) => `¿En qué te ayudo, ${name}?`,
-		greetingNoName: '¿En qué te ayudo?',
+		greetings: {
+			morning: [
+				(name: string) => `¡Buenos días${to(name)}!`,
+				(name: string) => `Buenos días${to(name)}. ¿Por dónde empezamos hoy?`,
+				(name: string) => `¿Primero un café o vamos al grano${to(name)}?`,
+				(name: string) => `¿Qué hay para hoy${to(name)}?`
+			],
+			afternoon: [
+				(name: string) => `¡Buenas tardes${to(name)}!`,
+				(name: string) => `Buenas tardes${to(name)}. ¿Qué tal va el día?`,
+				(name: string) => `¿Qué te quito de encima esta tarde${to(name)}?`,
+				(name: string) => `¿Te echo una mano esta tarde${to(name)}?`
+			],
+			evening: [
+				(name: string) => `¿Qué tal tu día${to(name)}?`,
+				(name: string) => `¿Queda algo pendiente para hoy${to(name)}?`,
+				(name: string) => `¿Qué planes hay para esta noche${to(name)}?`,
+				(name: string) => `¿En qué te ayudo esta noche${to(name)}?`
+			],
+			night: [
+				(name: string) => `¿Trasnochando${to(name)}?`,
+				(name: string) => `¿No puedes dormir${to(name)}? Aquí estoy.`,
+				(name: string) => `Se está haciendo tarde${to(name)}. ¿Qué necesitas?`,
+				(name: string) => `¿Una noche larga${to(name)}?`
+			],
+			anytime: [
+				(name: string) => `¿En qué te ayudo${to(name)}?`,
+				(name: string) => `¿Qué tienes en mente${to(name)}?`,
+				(name: string) => `¿En qué trabajamos${to(name)}?`,
+				(name: string) => `¡Qué gusto verte${to(name)}! ¿Qué hay de nuevo?`
+			]
+		},
 		noModels:
 			'Todavía no hay modelos configurados. Un administrador puede añadir uno en la página «Modelos y claves» o con {command}.',
 		couldNotStart: 'No se pudo empezar el chat.',
