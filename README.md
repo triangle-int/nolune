@@ -118,8 +118,10 @@ administrator; joining a profile doesn't send an email invitation.
 
 > [!IMPORTANT]
 > nolune is built for people you trust. The agent runs commands with your host account's permissions,
-> without a sandbox or approval step. Profiles organize access in the web app; they do not isolate
-> the agent from files on the computer. Everyone in a shared profile can read its chats and memory.
+> without a sandbox. In auto mode, the default, a model checks each command before it runs and
+> blocks what could do harm nobody asked for; it's a safeguard against mistakes and manipulation,
+> not a sandbox. Profiles organize access in the web app; they do not isolate the agent from files
+> on the computer. Everyone in a shared profile can read its chats and memory.
 
 ## Your computer, your setup
 
@@ -138,7 +140,8 @@ nolune service restart
 Keep the host awake when the family needs access. On macOS, access to protected folders may
 require Full Disk Access for the Node binary; setup prints its path.
 
-See the [setup and usage guide](docs/usage.md) for model connections, subscription integrations,
+See the [documentation](https://nolune.dev/docs/) (its pages are in
+[docs/src/content/docs](docs/src/content/docs)) for model connections, subscription integrations,
 remote access, skills, automations, and everyday commands.
 
 ## Development
@@ -149,7 +152,7 @@ Use pnpm for development:
 ```sh
 pnpm install
 pnpm nolune setup
-cp .env.example .env
+cp packages/web/.env.example packages/web/.env
 pnpm dev
 ```
 
@@ -159,11 +162,11 @@ set `NOLUNE_HOME` for both setup and the dev server if you want a separate insta
 ```sh
 pnpm check     # Svelte and TypeScript checks
 pnpm lint      # Formatting and ESLint
-pnpm test      # Vitest
+pnpm test      # Vitest, in every package
 pnpm build     # Web app and CLI
 ```
 
-The web app lives in `src/`, the agent and storage in `packages/core/`, and the CLI in
+The web app lives in `packages/web/`, the agent and storage in `packages/core/`, and the CLI in
 `packages/cli/`. Database migrations apply automatically. Tests use a temporary data directory.
 
 Read the [design notes](DESIGN.md) for architecture and tradeoffs, or the

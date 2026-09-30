@@ -10,9 +10,14 @@
 		"./serve": "./src/serve.ts"
 	},
 	"scripts": {
-		"check": "tsc -p ."
+		"check": "tsc -p .",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"dependencies": {
 		"@nolune/core": "workspace:*"
+	},
+	"devDependencies": {
+		"vitest": "^5.0.2"
 	}
 }

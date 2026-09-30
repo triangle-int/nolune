@@ -15,7 +15,6 @@ import {
 	startChatGptSignIn,
 	type ChatGptSignIn
 } from './chatgpt-sign-in.ts';
-import { initConfig } from './config.ts';
 import { committedRows, createConversation, getConversation, setEffort } from './conversations.ts';
 import type { Message } from './format.ts';
 import { listModels } from './models.ts';
@@ -24,7 +23,7 @@ import { paths } from './paths.ts';
 import { addPreset } from './presets.ts';
 import { runCommand } from './run-command.ts';
 import { getSnapshot, onLoopEnd, sendMessage } from './runner.ts';
-import { makeFamily, makePreset, pdfWithPages } from './test/fixtures.ts';
+import { makeFamily, makePreset, pdfWithPages, runCommandsUnchecked } from './test/fixtures.ts';
 
 vi.mock('./run-command.ts', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./run-command.ts')>()),
@@ -212,7 +211,8 @@ beforeEach(() => {
 	// The OpenAI key's settings, which the plan's requests never use.
 	vi.stubEnv('OPENAI_BASE_URL', 'http://127.0.0.1:9/v1');
 	vi.stubEnv('OPENAI_ORG_ID', 'org-of-the-key');
-	initConfig();
+	// These are about the plan, not auto mode's checks (command-safety.test.ts).
+	runCommandsUnchecked();
 	seen.length = 0;
 	grants.clear();
 	codes = 0;

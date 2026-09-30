@@ -8,7 +8,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 | Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execution          | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Execution          | Commands run as the gateway's macOS user with full access to the disk. There is no sandbox. The profile folder is only the default working folder. In auto mode (the default) a model checks each command before it runs and blocks what could do harm nobody asked for, in place of a person approving each one; unrestricted runs them unchecked. See [Auto mode](#auto-mode).                                                                                                                                                                                                                                                                                                                                                       |
 | Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -35,7 +35,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 ~/.nolune/                 (override with NOLUNE_HOME)
   config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, custom providers
                               (name, API, address, key), image model,
-                              extra env vars for commands, where Claude Code is if set (mode 600)
+                              extra env vars for commands, where Claude Code is if set, the
+                              command mode and the preset that checks commands (mode 600)
   chatgpt.json                the ChatGPT sign-in for the ChatGPT plan: this computer's host id,
                               each account's registration and the signed-in one's tokens (mode 600)
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
@@ -592,6 +593,61 @@ kick(conversation):                     one loop per conversation at a time
   `nolune agent watch` running there is the same work as the subagent it waits for, so the list shows
   only the subagent. Deleting a chat stops them first.
 
+### Auto mode
+
+The agent runs commands with the owner's account, so a mistake, or a web page or email that talks it
+into something, can do real harm. Auto mode (`command-safety.ts`) has a model check each command
+before it runs, in place of a person approving every one, the way Claude Code's auto mode does.
+`config.commandMode` is `auto` unless an admin picks `unrestricted` (Models & keys, or `nolune config
+set command-mode`), which runs commands unchecked as nolune did before. It applies from the next
+command, to chats, automations and subagents alike, and on the plans too, since their commands run
+through the same `runToolCall`.
+
+- **Per chat.** A shield chip in the composer (new chats too) sets a chat apart from Models & keys:
+  `conversation.command_mode`, null while it goes by Models & keys, so a chat keeps only what
+  differs (`chatCommandChoice`). Anyone in the profile can have a chat's commands checked; only an
+  admin can turn that off for one, since auto mode is there partly so a child can't. The check
+  reads the chat's mode at every command, so a change applies mid-turn, and everyone with the chat
+  open gets it live (a `commands` event). Subagents start with their chat's mode and change with
+  it; automations go by Models & keys until a notification's chat sets its own.
+
+- **Commands that only look run at once** (`read-only-commands.ts`): `ls`, `cat`, `grep`, `find`
+  without `-exec` or `-delete`, `nolune memory search` and the like, joined by pipes, `&&` or `;`,
+  redirected only to `/dev/null`, and nowhere near where secrets live (`.ssh`, `.env`,
+  `config.json`...). The shell is read strictly: a substitution, subshell, brace expansion,
+  unquoted glob or expansion where it could become a flag, a program not on the list, or anything
+  else it can't be sure of goes to the check. A wrong "no" costs a model call; a wrong "yes" would
+  skip the check.
+- **What the check sees.** A fixed system prompt (who can ask for what, how to decide, a block
+  list and its exceptions) and, per command: the computer and profile, whether it's a chat, an
+  automation or a subagent, the folder's instructions, what people asked for (the words they
+  typed and the names of files they attached; an automation's prompt; a subagent's task), the
+  commands run or blocked before, and the command with its working folder. Never what the agent
+  said or thought, what its commands printed, attached files' contents or recalled memory: they
+  can carry text written to steer it, and the agent's own words can argue for anything. Each part
+  is inside tags ending in a random code, so text in a command can't close one.
+- **Who authorizes.** Only people's messages, an automation's prompt, the folder's instructions and
+  a subagent's task (checked when the parent ran `nolune agent run`). A request covers what it
+  plainly means; what the agent chose on its own isn't asked for until someone says so, and a
+  person agreeing in the chat counts.
+- **Two stages on one prompt.** A quick call that answers ALLOW or BLOCK in one word and is told to
+  block when unsure; only a block gets a careful call that reasons it through and ends with
+  `Verdict:` and `Reason:`. Most commands are allowed at the first, and the second shares the
+  first's prefix for providers that cache it. Both are `quickReply`s (low effort, 30 and 60 s) to
+  the preset chosen for checks (`config.safetyPresetId`), else the chat's own model.
+- **Fails closed.** An error, a timeout or an answer without a verdict blocks the command, as does
+  one over 50,000 characters. Stop during a check answers the call like a stopped command.
+- **A blocked command** doesn't run; its result starts `Blocked by auto mode: <reason>` and tells
+  the agent not to work around it but to ask, since a person's yes in the chat lets it through.
+  The chat shows the step as blocked. The runner counts blocks in a loop since the last person's
+  message: at 3 in a row or 20 in all the agent is told to run nothing more and say what it
+  wanted, and a call it makes after that is refused unchecked and ends the loop with an error. A
+  new message from a person starts the count again.
+- **Not from the agent.** `nolune config set command-mode` and `safety-model` refuse to run from the
+  agent's commands (`NOLUNE_CONVERSATION_ID` is set), and the block list covers editing
+  `config.json`. Against a determined agent on an unsandboxed account that's a speed bump, not a
+  wall: auto mode guards against mistakes and manipulation, not against the family.
+
 ### Seeing images: `nolune view`
 
 The agent looks at an image by running `nolune view <file>...`. There is no second tool: the images are
@@ -910,7 +966,7 @@ context, which the family sets on the folder's page (`/p/<slug>/f/<id>`).
 - **Moving chats:** drag a chat onto a folder in the sidebar (its row, or its chats when it's
   open), or onto the Chats list to take it out; or use "Move to folder" in a chat's menu (the
   sidebar's or the chat header's). Moving only sets `conversation.folder_id`.
-- **Dragging** (`src/lib/chat-drag.svelte.ts`) uses pointer events for a mouse or pen and touch
+- **Dragging** (`packages/web/src/lib/chat-drag.svelte.ts`) uses pointer events for a mouse or pen and touch
   events for fingers, not the browser's drag and drop, so it works the same on phones. A mouse
   drags after moving 4px; a finger after a 400 ms long press, and moving earlier scrolls the list
   as usual. The row only moves up and down and stays inside the sidebar's list, which scrolls
@@ -1210,11 +1266,11 @@ It follows the ChatGPT app: a sidebar with chats, a centered column of messages,
 composer. Most of the family doesn't read shell, so the default view hides the machinery.
 
 - **Components** are [shadcn-svelte](https://shadcn-svelte.com) (Luma style, neutral base) in
-  `src/lib/components/ui`, generated by its CLI and owned by the repo; `components.json` records the
-  settings. Colors are CSS variables in `src/routes/layout.css`, with a dark theme
+  `packages/web/src/lib/components/ui`, generated by its CLI and owned by the repo; `components.json` records the
+  settings. Colors are CSS variables in `packages/web/src/routes/layout.css`, with a dark theme
   (`mode-watcher`: system, light or dark). The fonts, Figtree and Fira Mono, are bundled from
   Fontsource and served by the app, so they don't depend on the OS or a font CDN.
-- **Replies** are built by `buildTranscript` (`src/lib/transcript.ts`): text blocks are shown as
+- **Replies** are built by `buildTranscript` (`packages/web/src/lib/transcript.ts`): text blocks are shown as
   Markdown (`marked` + DOMPurify), and every run of thinking and commands between two texts is one
   collapsible group, "Worked for 12s" when done and a live "Thinking" / current step while running.
   Durations come from row timestamps, so they're approximate. The profile's assistant avatar sits at
@@ -1349,7 +1405,7 @@ its cache never depend on someone's settings. nolune already answers in the lang
   request (`locals.locale`), so server-rendered pages, `<html lang>` and form messages match, and the
   sign-in page is in the browser's language too. Picking another language reloads the page, since
   some of what's on it was written by the server.
-- **Messages** are in `src/lib/i18n/messages/<locale>.ts`, one object per language grouped by page.
+- **Messages** are in `packages/web/src/lib/i18n/messages/<locale>.ts`, one object per language grouped by page.
   English is the source: the others are typed as its shape, so a missing key or a wrong parameter
   fails `pnpm check`, and `i18n.test.ts` checks that each has English's `{slots}`. Messages with
   values in them are functions (`workedFor: (duration) => …`), so each language puts the value where
@@ -1375,7 +1431,7 @@ its cache never depend on someone's settings. nolune already answers in the lang
   typing it. The ones nolune makes from memory are in the family's language, like the notes.
 - **Adding a language.** Copy `en.ts` to `<locale>.ts` and translate it, `automations.describe`
   included (`ru.ts` shows one with grammatical cases); add the code to `LOCALES` and its own name to
-  `LANGUAGE_NAMES` in `locales.ts`, and the messages to `MESSAGES` in `src/lib/i18n/index.ts`; give
+  `LANGUAGE_NAMES` in `locales.ts`, and the messages to `MESSAGES` in `packages/web/src/lib/i18n/index.ts`; give
   the emoji picker its data in `EmojiChip.svelte`. TypeScript points at anything left out.
 
 ## Assistant avatars
@@ -1401,7 +1457,7 @@ on a colored circle.
   character select: the pick up close on a starry stage lit in its color, which pops in with a
   squash when it changes, next to the roster, whose tiles take their avatar's color and show its
   working motion on hover.
-- **Tint.** A profile's pages take on its avatar's hue: `src/lib/tint.ts` gives the page, sidebar,
+- **Tint.** A profile's pages take on its avatar's hue: `packages/web/src/lib/tint.ts` gives the page, sidebar,
   bubbles, hover and (in dark) card, menu and composer greys a little OKLCH chroma in the avatar
   color's hue, at each grey's own luminance, so text and avatars keep their contrast. The root
   layout renders it into the head as a `<style>` that outranks `layout.css`, so the first paint and
@@ -1436,7 +1492,7 @@ nothing, and opening the page again runs it again.
   questions. One of those colors
   becomes the assistant. Imported memories fly into the Memory page's dot grid, and the grid
   gathers into the avatar as the new-chat page opens.
-- **Intro** (`Wordmark.svelte`, `IntroSky.svelte` in `src/lib/components/welcome`). Space, after
+- **Intro** (`Wordmark.svelte`, `IntroSky.svelte` in `packages/web/src/lib/components/welcome`). Space, after
   Outer Wilds, timed to a song (`music`): dark whatever the theme, stars coming out over faint
   nebulae and a galaxy band on a canvas, the camera drifting slowly into them, one shooting star.
   At nine seconds a star at the middle of the screen brightens and sweeps across the letters,
@@ -1488,7 +1544,7 @@ nothing, and opening the page again runs it again.
   out around it as planets on faint orbits (behind it on the far side, in front on the near one),
   "A fresh start." comes up on the second bar, and as the phrase turns they spiral into the
   avatar, which glows with each, before the chat opens as after the memories.
-- **Sounds** (`src/lib/welcome/sounds.ts`). A song, and a sound only where the screen moves by
+- **Sounds** (`packages/web/src/lib/welcome/sounds.ts`). A song, and a sound only where the screen moves by
   itself; clicks are silent. The song (`music`) plays the intro, rising out of silence with the
   stars; once the welcome waits it plays on much quieter under the questions (`duck` to `UNDER`),
   going round for as long as they take. When the memories arrive it jumps to its last phrase at
@@ -1498,7 +1554,7 @@ nothing, and opening the page again runs it again.
   (a key or plan check passes), `wash` (the avatar's tint washing in) and `yap`: a small animal's
   shout when an avatar is picked or the big one poked, sped up, on a different note of a pentatonic
   scale (`NOTES`) each click, whichever the avatar. Each sound is a file in
-  `src/lib/assets/sounds/welcome` (`<name>.mp3`), bundled through `import.meta.glob` (where each
+  `packages/web/src/lib/assets/sounds/welcome` (`<name>.mp3`), bundled through `import.meta.glob` (where each
   came from is in `CREDITS.md` next to them); one without its file is silent. The screen waits
   for the song to start, up to a second and a half; one that can't start on time (still loading,
   or the page not allowed sound yet) joins as soon as it can, that far in, and a short sound that
@@ -1546,7 +1602,7 @@ to (issue #42).
 
 ```
 packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_command, background
-                commands, memory notes (search and recall, learning from chats, and
+                commands, auto mode (command-safety.ts, read-only-commands.ts), memory notes (search and recall, learning from chats, and
                 memory-export.ts, memory-import.ts: memories brought over from another
                 assistant), new-chat suggestions, nolune view images, attachments, model
                 calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with
@@ -1571,7 +1627,7 @@ packages/cli    nolune: setup, start, service, config, key, claude-plan, chatgpt
                 protocol.ts), and serve.ts is the gateway's side. setup, start and service stay in a
                 process of their own: they prompt at a terminal, run the gateway or manage its
                 service.
-src/            SvelteKit gateway (adapter-node). @nolune/core is bundled into the server build.
+packages/web    SvelteKit gateway (adapter-node). @nolune/core is bundled into the server build.
                 UI components in src/lib/components (shadcn-svelte primitives in ui/, a new
                 profile's welcome in welcome/, its sounds in src/lib/welcome), the interface's
                 languages in src/lib/i18n.
@@ -1580,14 +1636,14 @@ scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esb
 
 Core finds the package root by walking up to the `package.json` named `nolune`. That works
 from source, from the SvelteKit build and from the bundled CLI, and gives the paths to the
-migrations, `build/index.js` and the CLI entry.
+migrations, `packages/web/build/index.js` and the CLI entry.
 
 ## Distribution
 
 Published to npm as `nolune` from a `v*` tag by `.github/workflows/publish.yml`, with npm trusted
 publishing (see Publishing in the README). `npm install -g nolune` gives the `nolune` command.
 
-- The package ships `build/` (the web app, without its source maps, which Node doesn't load unless
+- The package ships `packages/web/build/` (the web app, without its source maps, which Node doesn't load unless
   asked to and which are most of its size), `dist/cli.js` with its `dist/chunks`,
   `packages/core/drizzle`, the built-in skills in `packages/core/skills` and the built-in image
   templates in `packages/core/image-templates`. Its only runtime dependency is `better-sqlite3` (a
@@ -1598,7 +1654,7 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
 - `nolune setup` is the first-run wizard: config, admin account, public URL. It adds no key or
   model: a new profile's welcome asks the admin for them when there's no preset.
 - `nolune start` reads host, port and origin from `config.json` (default `127.0.0.1:5780`), sets
-  `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`.
+  `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `packages/web/build/index.js`.
 - `nolune service install` writes a LaunchAgent (`~/Library/LaunchAgents/dev.nolune.gateway.plist`)
   that runs `node dist/cli.js start` with `KeepAlive` and logs to `~/.nolune/logs/gateway.log`.
   It's a LaunchAgent, not a LaunchDaemon, so commands run as the user. It records the absolute
@@ -1633,7 +1689,9 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
   Sign in with ChatGPT allows).
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
-- Smart approval mode.
+- Auto mode: house rules an admin writes for the check (Claude Code's environment, block and allow
+  slots), a probe that warns the agent about prompt injection in what its commands print, and a
+  look at everything a subagent did when it hands back its result.
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.

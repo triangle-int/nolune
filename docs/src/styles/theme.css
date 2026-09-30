@@ -1,0 +1,51 @@
+/* The landing page's colors and fonts (site/src/app.css): a night-navy dark theme with cream text
+   and rust accents, and a light one like cream paper printed in navy ink. */
+:root {
+	--sl-font: 'Figtree Variable', ui-sans-serif, -apple-system, system-ui, 'Segoe UI', sans-serif;
+	--sl-font-mono: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+	--sl-color-accent-low: #3d2213;
+	--sl-color-accent: #f07a3c;
+	--sl-color-accent-high: #ffc9a6;
+	--sl-color-white: #f6f0e3;
+	--sl-color-gray-1: #e4e8f0;
+	--sl-color-gray-2: #c9d1de;
+	--sl-color-gray-3: #9eabc2;
+	--sl-color-gray-4: #5d6b86;
+	--sl-color-gray-5: #24345a;
+	--sl-color-gray-6: #0c1b36;
+	--sl-color-black: #08152c;
+	--sl-color-hairline: rgb(151 172 201 / 0.2);
+	--sl-color-hairline-light: rgb(151 172 201 / 0.28);
+	/* Links and the current page in the sidebar in rust, like the landing page's buttons. */
+	--sl-color-text-accent: var(--sl-color-accent);
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #f8dcc8;
+	--sl-color-accent: #b4491a;
+	--sl-color-accent-high: #5e240b;
+	--sl-color-white: #08152c;
+	--sl-color-gray-1: #13233f;
+	--sl-color-gray-2: #2c3c5c;
+	--sl-color-gray-3: #4f5d78;
+	--sl-color-gray-4: #7d889c;
+	--sl-color-gray-5: #cdc6b6;
+	--sl-color-gray-6: #efe8d9;
+	--sl-color-gray-7: #f6f0e4;
+	--sl-color-black: #fbf8f1;
+	--sl-color-hairline: rgb(8 21 44 / 0.1);
+	--sl-color-hairline-light: rgb(8 21 44 / 0.14);
+}
+
+/* Headings in the landing page's heavy Figtree. */
+h1#_top,
+.sl-markdown-content :is(h2, h3) {
+	font-weight: 800;
+	letter-spacing: -0.015em;
+}
+
+.site-title img {
+	height: 1.5rem;
+	width: auto;
+}

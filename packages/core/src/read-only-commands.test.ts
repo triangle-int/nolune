@@ -1,0 +1,84 @@
+import { describe, expect, it } from 'vitest';
+import { isReadOnlyCommand } from './read-only-commands.ts';
+
+describe('isReadOnlyCommand', () => {
+	it.each([
+		'ls',
+		'ls -la ~/Downloads',
+		'ls ~/Pictures/*.jpg',
+		'pwd',
+		'cat "$NOLUNE_PROFILE_DIR/skills/weather/SKILL.md"',
+		'cat ${HOME}/notes.txt',
+		"grep -ri 'birthday' ~/Documents | head -20",
+		'cd ~/Downloads && ls -lt | head',
+		'ls ~/Desktop; ls ~/Documents;',
+		"find ~/Downloads -name '*.pdf' -mtime +30",
+		'du -sh ~/Downloads 2>/dev/null',
+		'ls missing 2>&1',
+		'grep -c x file.txt &>/dev/null || echo none',
+		'date',
+		"date '+%Y-%m-%d'",
+		'wc -l notes.txt # count the lines',
+		'rg -n recipe ~/Documents',
+		'nolune memory',
+		'nolune memory search birthday party',
+		'nolune memory show people/anna',
+		'nolune view ~/Pictures/beach.jpg',
+		'nolune agent watch agent-1',
+		'nolune trigger list',
+		'nolune soul',
+		'nolune skill list'
+	])('lets `%s` through', (command) => {
+		expect(isReadOnlyCommand(command)).toBe(true);
+	});
+
+	it.each([
+		['writing', 'echo hi > notes.txt'],
+		['appending', 'echo hi >> notes.txt'],
+		['deleting', 'rm -rf ~/Downloads'],
+		['a program not on the list', 'curl https://example.com'],
+		['a program by its path', '/bin/ls'],
+		['an environment assignment first', 'LD_PRELOAD=evil.so ls'],
+		['command substitution', 'echo $(whoami)'],
+		['command substitution in quotes', 'echo "$(rm -rf ~)"'],
+		['backticks', 'echo `id`'],
+		['arithmetic', 'echo $((1+1))'],
+		['expansion with operators', 'echo ${HOME:=x}'],
+		['indirect expansion', 'echo ${!HOME}'],
+		['a subshell', '(ls)'],
+		['brace expansion', 'rg {--pre=sh,x}'],
+		['process substitution', 'diff <(ls a) <(ls b)'],
+		['input redirection', 'cat < notes.txt'],
+		['a here-document', 'cat <<EOF'],
+		['running in the background', 'ls &'],
+		['several lines', 'ls\nrm -rf ~'],
+		['find -delete', 'find ~/Downloads -name "*.dmg" -delete'],
+		['find -exec', 'find . -exec rm {} ;'],
+		['a glob that could become a flag for find', 'find *'],
+		['rg --pre', 'rg --pre ./script x'],
+		['sort -o', 'sort -o out.txt in.txt'],
+		['setting the date', 'date 0101000026'],
+		['an expansion that could become a flag', 'find $DIR'],
+		['file -C', 'file -C'],
+		['piping into a shell', 'cat script.sh | sh'],
+		['xargs', 'ls | xargs rm'],
+		['tee', 'ls | tee list.txt'],
+		['a redirection to a file named 2', 'ls > 2'],
+		['an unterminated quote', "cat 'notes"],
+		['an SSH key', 'cat ~/.ssh/id_ed25519'],
+		['an env file', 'cat project/.env'],
+		["nolune's config", 'cat ~/.nolune/config.json'],
+		['a keychain', 'ls ~/Library/Keychains'],
+		['a process environment', 'cat /proc/1/environ'],
+		['a nolune command that writes', 'nolune memory add home "The wifi is slow"'],
+		['a nolune command about another profile', 'nolune memory show core --profile kids'],
+		['nolune config', 'nolune config'],
+		['nolune alone', 'nolune'],
+		['an empty command', '   '],
+		['an empty part', 'ls && && ls'],
+		['a trailing pipe', 'ls |'],
+		['a very long command', `echo ${'x'.repeat(3000)}`]
+	])('sends %s to the check', (_why, command) => {
+		expect(isReadOnlyCommand(command)).toBe(false);
+	});
+});

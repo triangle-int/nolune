@@ -22,7 +22,7 @@ export function getDefaultPreset(): Preset | undefined {
 }
 
 /** By id, or by name as `nolune preset list` shows it. */
-function findPreset(idOrName: string): Preset {
+export function findPreset(idOrName: string): Preset {
 	const preset = getDb()
 		.select()
 		.from(modelPreset)

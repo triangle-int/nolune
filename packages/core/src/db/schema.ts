@@ -295,6 +295,12 @@ export const conversation = sqliteTable(
 			.notNull()
 			.default('1h'),
 		/**
+		 * How this chat's commands run, when it differs from Models & keys (command-safety.ts):
+		 * `auto`, checked first, or `unrestricted`. Null: as Models & keys says. A subagent starts
+		 * with its parent's.
+		 */
+		commandMode: text('command_mode', { enum: ['auto', 'unrestricted'] }),
+		/**
 		 * Background runs started by triggers, and subagents, stay out of the list. A background run
 		 * joins it once someone continues it.
 		 */
