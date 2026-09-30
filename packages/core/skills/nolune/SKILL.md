@@ -59,7 +59,7 @@ nolune preset add gpt-6-astra --provider openai --name "GPT"
 nolune preset add deepseek/deepseek-v4.1-flash --provider openrouter --name "DeepSeek"
 nolune preset add qwen3:32b --provider "GPU box"   # a model of the custom provider "GPU box"
 nolune preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
-nolune preset add gpt-6-astra --provider chatgpt-plan --name "GPT (plan)"
+nolune preset add gpt-6.1-sol --provider chatgpt-plan --name "GPT (plan)"
 nolune preset default Sonnet                       # new chats start with it
 nolune preset rm Sonnet                            # chats that use it keep working
 ```
@@ -91,16 +91,17 @@ preset). When a plan's limit is used up, chats on it stop until the time the err
   starts its own sign-in (or runs `claude` there and uses `/login`). That command asks questions,
   so it doesn't work from your commands. Never ask for, look for or copy a Claude sign-in or its
   tokens.
-- **`chatgpt-plan`** runs chats on a ChatGPT Plus, Pro or Business plan through OpenAI's Codex on
-  this computer: nolune runs Codex, which keeps the sign-in. `nolune chatgpt-plan status` also says which
-  Codex nolune runs; when there's none, the owner runs `nolune chatgpt-plan setup` in a terminal on this
-  computer, which installs it (asking first). Signing in needs someone to enter a one-time code on
-  ChatGPT's site: suggest Models & keys in the account menu, or run `nolune chatgpt-plan setup` in the
-  background and pass on the link and code it prints (it waits up to 15 minutes for them). Never
-  ask for, look for or copy the sign-in Codex keeps. `nolune chatgpt-plan models` lists the models
-  the plan offers. Don't run `nolune chatgpt-plan logout` while presets use it: chats on them stop
-  answering. Its models don't get PDFs, only their path, so open a PDF someone attached with a
-  command.
+- **`chatgpt-plan`** runs chats on the ChatGPT Plus or Pro plan of someone signed in with ChatGPT
+  (Sign in with ChatGPT; nothing to install). Signing in takes a browser: suggest **Continue with
+  ChatGPT** under Models & keys in the account menu, which also takes the address a browser on
+  another device ends on. Or run `nolune chatgpt-plan setup` in the background and pass on the link
+  it prints: in a browser on this computer that's all, while from a phone the page it ends on won't
+  load, and its address goes into Models & keys (the sign-in waits up to 10 minutes).
+  `--another-account` signs in to another ChatGPT account than the last one. Never ask for, look
+  for or copy the sign-in nolune keeps (`~/.nolune/chatgpt.json`). When the plan's limit is
+  reached, point to https://chatgpt.com/settings/usage. `nolune chatgpt-plan models` lists the
+  models the plan offers. Don't run `nolune chatgpt-plan logout` while presets use it: chats on
+  them stop answering.
 
 ## API keys
 

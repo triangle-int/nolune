@@ -35,9 +35,8 @@ No tunnel, port forwarding or domain of your own. See [Remote access](/docs/guid
 - `nolune config set embeddings <auto|off|provider/model>`: what memory search finds meaning with:
   auto uses the OpenAI key, else OpenRouter's; the provider is openai, openrouter or custom-openai
   (a custom provider's model, like custom-openai/ollama/nomic-embed-text)
-- `nolune config set claude-path <path>`, `nolune config set codex-path <path>`: the Claude Code
-  that claude-plan chats run, and the Codex that chatgpt-plan chats run (found on the PATH and in
-  their usual folders otherwise)
+- `nolune config set claude-path <path>`: the Claude Code that claude-plan chats run (found on the
+  PATH and in its usual folders otherwise)
 - `nolune config set command-mode <auto|unrestricted>`: auto (the default): a model checks each
   command the agent runs and blocks what could do harm nobody asked for; unrestricted runs them
   unchecked (not recommended). Not from the agent's own commands
@@ -67,15 +66,18 @@ Model servers of your own: Ollama, LM Studio, oMLX, vLLM, llama.cpp.
 Chats on your own subscription instead of an API key.
 
 claude-plan: a Claude Pro or Max plan, through Claude Code on this computer, signed in to your
-Claude account. chatgpt-plan: a ChatGPT Plus, Pro or Business plan, through OpenAI's Codex on this
-computer, signed in with ChatGPT. nolune never sees either sign-in: the agent keeps it. Plan limits
+Claude account; Claude Code keeps the sign-in. chatgpt-plan: a ChatGPT Plus or Pro plan, signed in
+with ChatGPT (Sign in with ChatGPT), which nolune keeps in `~/.nolune/chatgpt.json`. Plan limits
 assume one person's ordinary use: keep busy automations and subagents on an API key.
 
-- `nolune <plan> status`: which Claude Code or Codex nolune runs, and who it's signed in as
-- `nolune <plan> setup`: install it and sign in, where needed. Installing asks first, in a terminal;
-  claude-plan signs in there too, chatgpt-plan with a link and a code for any device
-- `nolune chatgpt-plan logout`: sign Codex out; chats on chatgpt-plan presets stop until someone
-  signs in again
+- `nolune <plan> status`: who it's signed in as (and which Claude Code runs)
+- `nolune claude-plan setup`: install Claude Code and sign in, where needed, asking first, in a
+  terminal
+- `nolune chatgpt-plan setup [--another-account]`: sign in with ChatGPT in a browser, where needed;
+  from another device, paste the address it ends on. Signs in to the account used last unless told
+  otherwise
+- `nolune chatgpt-plan logout`: sign out; chats on chatgpt-plan presets stop until someone signs in
+  again
 - `nolune chatgpt-plan models`: the models the plan offers, for `nolune preset add`
 
 ## Users
@@ -98,8 +100,8 @@ TOKENS]`: the provider checks the model id first (anthropic unless given); OpenA
   than the flagships need `--context-window`. OpenRouter's ids name their maker
   (anthropic/claude-sonnet-5), and the model must be able to call tools. A custom provider (by its
   name) lists its models; its model must call tools too, which shows at its first reply, and
-  pictures and PDFs reach it as paths. The plans check their agent's sign-in instead, and
-  chatgpt-plan the models Codex offers
+  pictures and PDFs reach it as paths. The plans check their sign-in instead, and chatgpt-plan
+  the models the plan offers
 - `nolune preset edit <name|id> [--provider P] [--model M] [--name N] [--context-window
 TOKENS|auto]`: change what's given; a new model is checked like add's. Chats already on the preset
   keep what they had

@@ -38,7 +38,7 @@
 
 	/** A key that's already set (in the environment, say) is the likely pick. */
 	let choice = $state<Choice>(untrack(() => keys.find((k) => k.set)?.provider ?? 'claude-plan'));
-	let view = $state<'choose' | 'key' | 'plan' | 'models'>('choose');
+	let view = $state<'choose' | 'key' | 'plan' | 'chatgpt' | 'models'>('choose');
 	let busy = $state(false);
 	let problem = $state<string | null>(null);
 	let installCommand = $state<string | null>(null);
@@ -73,6 +73,117 @@
 			listProblem = m.admin.addModel.unreachable;
 		}
 	}
+
+	/** Signing in with ChatGPT right here (/api/chatgpt/sign-in): where it is, and who's signed in. */
+	interface ChatGptState {
+		pending: { url: string; expiresAt: number } | null;
+		error: string | null;
+		previous: string | null;
+		signedIn: string | null;
+		problem: string | null;
+	}
+	let chatgpt = $state<ChatGptState | null>(null);
+	/** What's wrong with the plan of whoever is signed in already, as checking it with OpenAI said. */
+	let chatgptWarning = $state<string | null>(null);
+	/** A sign-in is under way: its end moves on to the models. */
+	let waitingForChatgpt = $state(false);
+	/** ChatGPT's page was opened, in another tab. */
+	let opened = $state(false);
+	let otherDevice = $state(false);
+	let address = $state('');
+
+	const EMPTY_CHATGPT: ChatGptState = {
+		pending: null,
+		error: null,
+		previous: null,
+		signedIn: null,
+		problem: null
+	};
+
+	/** A problem's first sentence: the rest says how to sign in, which this step does. */
+	function firstSentence(text: string): string {
+		return text.split('. ')[0].replace(/\.?$/, '.');
+	}
+
+	/**
+	 * Asks where the sign-in is, or starts, finishes or cancels it, and moves on once it's done.
+	 * Returns what it found, or null when nolune couldn't be asked.
+	 */
+	async function askChatgpt(body?: Record<string, unknown>): Promise<ChatGptState | null> {
+		let next: ChatGptState;
+		try {
+			const res = await fetch(
+				'/api/chatgpt/sign-in',
+				body
+					? {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify(body)
+						}
+					: {}
+			);
+			if (!res.ok && res.status !== 400) throw new Error(String(res.status));
+			next = (await res.json()) as ChatGptState;
+		} catch {
+			chatgpt = { ...(chatgpt ?? EMPTY_CHATGPT), error: m.admin.addModel.unreachable };
+			return null;
+		}
+		// An answer that comes back after someone went back is for nothing.
+		if (view !== 'chatgpt') return next;
+		chatgpt = next;
+		if (next.pending) waitingForChatgpt = true;
+		else if (waitingForChatgpt) {
+			waitingForChatgpt = false;
+			if (!next.error && next.signedIn && !next.problem) {
+				play('confirm');
+				note = next.signedIn;
+				listModels();
+			}
+		}
+		return next;
+	}
+
+	/** The ChatGPT plan isn't signed in, or its plan doesn't work: sign in here. */
+	async function toChatgpt(data: Record<string, unknown> | undefined) {
+		chatgptWarning = data?.signedIn ? firstSentence(String(data.planError ?? '')) : null;
+		chatgpt = null;
+		waitingForChatgpt = false;
+		opened = false;
+		otherDevice = false;
+		address = '';
+		view = 'chatgpt';
+		// A sign-in already under way (from Models & keys, say) is followed as it is.
+		const found = await askChatgpt();
+		if (found && !found.pending && view === 'chatgpt') await startChatgpt();
+	}
+
+	async function startChatgpt(anotherAccount = false) {
+		busy = true;
+		opened = false;
+		await askChatgpt({ action: 'start', anotherAccount });
+		busy = false;
+	}
+
+	async function finishChatgpt(event: SubmitEvent) {
+		event.preventDefault();
+		busy = true;
+		await askChatgpt({ action: 'finish', address });
+		busy = false;
+	}
+
+	function leaveChatgpt() {
+		// Not waiting any more: cancelling mustn't count as signing in.
+		waitingForChatgpt = false;
+		void askChatgpt({ action: 'cancel' });
+		view = 'choose';
+	}
+
+	// The sign-in finishes in another tab, or on another device: ask until it has.
+	$effect(() => {
+		if (view !== 'chatgpt' || !waitingForChatgpt) return;
+		const timer = setInterval(() => askChatgpt(), 2000);
+		return () => clearInterval(timer);
+	});
 
 	/** API keys already set go straight to the models; plans are checked first. */
 	function next() {
@@ -109,6 +220,8 @@
 					play('confirm');
 					note = String(result.data?.signedIn ?? '');
 					listModels();
+				} else if (result.type === 'failure' && choice === 'chatgpt-plan') {
+					toChatgpt(result.data);
 				} else if (result.type === 'failure') {
 					problem = String(result.data?.planError ?? '');
 					installCommand = (result.data?.installCommand as string | null) ?? null;
@@ -287,6 +400,92 @@
 			</Button>
 		</div>
 	</form>
+{:else if view === 'chatgpt'}
+	<div class="space-y-6 text-center">
+		<div class="space-y-3">
+			<h2 class="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+				{m.welcome.model.chatgpt.title}
+			</h2>
+			<p class="mx-auto max-w-md text-muted-foreground">{m.welcome.model.chatgpt.about}</p>
+			{#if chatgptWarning}
+				<p class="mx-auto max-w-md text-sm text-warning" role="alert">{chatgptWarning}</p>
+			{/if}
+		</div>
+		<div class="flex flex-col items-center gap-3" aria-live="polite">
+			{#if chatgpt?.pending}
+				<Button
+					href={chatgpt.pending.url}
+					target="_blank"
+					rel="noreferrer"
+					size="lg"
+					class="h-11 min-w-56 px-8"
+					onclick={() => (opened = true)}
+				>
+					{m.admin.chatgptSignIn}
+				</Button>
+				<p class="text-sm text-muted-foreground">
+					{opened ? m.welcome.model.chatgpt.waiting : m.welcome.model.chatgpt.newTab}
+				</p>
+			{:else if chatgpt?.error}
+				<Button size="lg" class="h-11 min-w-44 px-8" disabled={busy} onclick={() => startChatgpt()}>
+					{m.welcome.model.chatgpt.tryAgain}
+				</Button>
+			{:else}
+				<p class="text-sm text-muted-foreground">{m.welcome.model.chatgpt.starting}</p>
+			{/if}
+			{#if chatgpt?.error}
+				<p class="mx-auto max-w-md text-sm text-destructive" role="alert">{chatgpt.error}</p>
+			{/if}
+		</div>
+		{#if chatgpt?.pending}
+			{#if otherDevice}
+				<form class="mx-auto max-w-md space-y-2 text-left" onsubmit={finishChatgpt}>
+					<label for="chatgpt-address" class="block px-5 text-sm text-muted-foreground">
+						{m.admin.chatgptElsewhere}
+					</label>
+					<div class="flex gap-2">
+						<Input
+							id="chatgpt-address"
+							bind:value={address}
+							required
+							autocomplete="off"
+							spellcheck="false"
+							placeholder="http://127.0.0.1:…/auth/callback?code=…"
+							class="h-11 min-w-0 flex-1 rounded-full px-5 font-mono placeholder:font-sans"
+						/>
+						<Button type="submit" class="h-11 rounded-full px-5" disabled={busy}>
+							{m.admin.chatgptFinish}
+						</Button>
+					</div>
+				</form>
+			{:else}
+				<button
+					type="button"
+					class="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+					onclick={() => (otherDevice = true)}
+				>
+					{m.welcome.model.chatgpt.otherDevice}
+				</button>
+			{/if}
+		{/if}
+		<div class="flex justify-center gap-2">
+			<Button type="button" variant="ghost" size="lg" class="h-11" onclick={leaveChatgpt}>
+				{m.welcome.back}
+			</Button>
+			{#if chatgpt?.previous || chatgptWarning}
+				<Button
+					type="button"
+					variant="ghost"
+					size="lg"
+					class="h-11 text-muted-foreground"
+					disabled={busy}
+					onclick={() => startChatgpt(true)}
+				>
+					{m.admin.chatgptAnotherAccount}
+				</Button>
+			{/if}
+		</div>
+	</div>
 {:else if view === 'models'}
 	<form
 		method="POST"

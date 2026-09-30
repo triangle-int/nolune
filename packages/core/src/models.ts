@@ -7,7 +7,14 @@ import * as custom from './custom-providers.ts';
 import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
 import * as openrouter from './openrouter.ts';
-import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './plans.ts';
+import {
+	PlanError,
+	isAgentPlan,
+	isPlan,
+	isPlanStopped,
+	type AgentPlan,
+	type PlanTurn
+} from './plans.ts';
 
 /*
  * A model call as the rest of nolune sees it, whichever provider runs it. Each provider's module
@@ -16,9 +23,9 @@ import { PlanError, isPlan, isPlanStopped, type Plan, type PlanTurn } from './pl
  * provider's module. The reply's `content` is still the provider's own, and is stored and sent
  * back exactly as it came.
  *
- * The plans are the exception (plans.ts): the maker's own agent runs the agent loop, Claude Code
- * for `claude-plan` and Codex for `chatgpt-plan`, so the runner hands them whole turns
- * (runPlanTurn) rather than calling streamTurn.
+ * The Claude plan is the exception (plans.ts): Claude Code runs the agent loop, so the runner
+ * hands it whole turns (runPlanTurn) rather than calling streamTurn. Chats on the ChatGPT plan
+ * are OpenAI's, with the plan's sign-in instead of a key (chatgpt-plan.ts).
  */
 
 /**
@@ -57,8 +64,8 @@ export type Effort = (typeof EFFORTS)[number];
 
 /**
  * How long a cached prompt lives: an hour for chats people come back to, 5 minutes for
- * subagents. Only Claude takes it (from Anthropic or through OpenRouter); OpenAI (and Codex)
- * caches on its own.
+ * subagents. Only Claude takes it (from Anthropic or through OpenRouter); OpenAI caches on its
+ * own.
  */
 export type CacheTtl = '5m' | '1h';
 
@@ -81,7 +88,7 @@ export interface ModelReply {
 	 * complete and can run), `max_tokens` (cut off) or `refusal`.
 	 */
 	stopReason: string | null;
-	/** Null when it isn't known: on the ChatGPT plan, for replies that ask for commands. */
+	/** Null when it isn't known. */
 	usage: Usage | null;
 	calls: ToolCall[];
 	/** The reply's text, without thinking or calls. */
@@ -113,17 +120,21 @@ export async function streamTurn(opts: {
 	onEvent: (event: StreamEvent) => void;
 }): Promise<ModelReply> {
 	const { provider, cacheKey, ...request } = opts;
-	if (isPlan(provider)) throw new Error('Chats on a plan run whole turns through runPlanTurn');
+	if (isAgentPlan(provider)) {
+		throw new Error('Chats on the Claude plan run whole turns through runPlanTurn');
+	}
 	if (provider === 'openrouter') {
 		const reply = await openrouter.streamTurn({ ...request, cacheKey });
 		return fromContent(reply.content, reply.stopReason, reply.usage);
 	}
-	if (provider === 'openai' || provider === 'custom-openai') {
-		// A custom provider's chats are OpenAI's, with its own client.
+	if (provider === 'openai' || provider === 'custom-openai' || provider === 'chatgpt-plan') {
+		// A custom provider's chats are OpenAI's with its own client, and the plan's with its sign-in.
 		const response =
 			provider === 'openai'
 				? await openai.streamResponse({ ...request, cacheKey })
-				: await custom.streamResponse({ ...request, cacheKey });
+				: provider === 'chatgpt-plan'
+					? await chatgptPlan.streamResponse({ ...request, cacheKey })
+					: await custom.streamResponse({ ...request, cacheKey });
 		return fromContent(
 			response.output ?? [],
 			openai.stopReason(response),
@@ -160,17 +171,22 @@ export async function quickReply(opts: {
 	timeoutMs: number;
 }): Promise<{ text: string | null; usage: Usage }> {
 	if (opts.provider === 'claude-plan') return claudePlan.quickReply(opts);
-	if (opts.provider === 'chatgpt-plan') return chatgptPlan.quickReply(opts);
 	if (opts.provider === 'openrouter') return openrouter.quickReply(opts);
-	if (opts.provider === 'openai' || opts.provider === 'custom-openai') {
+	if (
+		opts.provider === 'openai' ||
+		opts.provider === 'custom-openai' ||
+		opts.provider === 'chatgpt-plan'
+	) {
 		const response =
 			opts.provider === 'openai'
 				? await openai.createResponse(opts)
-				: await custom.createResponse(opts);
+				: opts.provider === 'chatgpt-plan'
+					? await chatgptPlan.createResponse(opts)
+					: await custom.createResponse(opts);
 		const usage = openai.summarizeUsage(response.usage);
 		if (openai.stopReason(response) !== 'end_turn') return { text: null, usage };
 		const text = textOf(response.output ?? []);
-		return { text: opts.provider === 'openai' ? text : custom.withoutThinking(text), usage };
+		return { text: opts.provider === 'custom-openai' ? custom.withoutThinking(text) : text, usage };
 	}
 	const reply =
 		opts.provider === 'custom-anthropic'
@@ -214,9 +230,9 @@ export function countDocumentTokens(
 }
 
 /**
- * What the model can be sent besides text. Every model of Anthropic's, OpenAI's and the Claude
- * plan sees pictures and reads PDFs; OpenRouter says per model; custom providers' models get
- * them as their paths.
+ * What the model can be sent besides text. Every model of Anthropic's, OpenAI's and the plans
+ * sees pictures and reads PDFs; OpenRouter says per model; custom providers' models get them as
+ * their paths.
  */
 export async function modelInputs(
 	provider: Provider,
@@ -245,10 +261,10 @@ export function readableMessages(
 
 /**
  * Throws if the provider doesn't know the model. Null when its window isn't known. For a plan, it
- * checks that its agent is here and signed in to one. Claude Code can't check a model id, so
- * whether it takes the model shows at the chat's first reply; Codex lists the plan's models.
- * On OpenRouter, the model must also be able to call tools. A custom provider is only asked
- * whether it lists the model.
+ * checks that someone is signed in to one: to Claude Code, which can't check a model id, so
+ * whether it takes the model shows at the chat's first reply; or with ChatGPT, whose plan lists
+ * its models. On OpenRouter, the model must also be able to call tools. A custom provider is only
+ * asked whether it lists the model.
  */
 export async function fetchContextWindow(
 	provider: Provider,
@@ -280,7 +296,7 @@ export interface ModelChoice {
 
 /**
  * The models the provider offers, for the admin page to pick from: the newest first, or in the
- * agent's own order for a plan, or as the custom provider `customId` lists them (their ids
+ * plan's own order, or as the custom provider `customId` lists them (their ids
  * `<customId>/<model>`). Throws what describeApiError explains.
  */
 export async function listModels(provider: Provider, customId = ''): Promise<ModelChoice[]> {
@@ -320,14 +336,14 @@ export function isAbortError(err: unknown): boolean {
 }
 
 /**
- * A turn of a chat on a plan, which its agent runs. Throws a PlanError when it fails and a
- * PlanStopped when it was stopped.
+ * A turn of a chat on the Claude plan, which Claude Code runs. Throws a PlanError when it fails
+ * and a PlanStopped when it was stopped.
  */
-export function runPlanTurn(plan: Plan, turn: PlanTurn): Promise<void> {
-	return plan === 'claude-plan' ? claudePlan.runTurn(turn) : chatgptPlan.runTurn(turn);
+export function runPlanTurn(_plan: AgentPlan, turn: PlanTurn): Promise<void> {
+	return claudePlan.runTurn(turn);
 }
 
 /** Whether a plan's turn failed on the chat's session (plans.ts), and how. */
-export function planSessionProblem(plan: Plan, err: unknown) {
-	return plan === 'claude-plan' ? claudePlan.sessionProblem(err) : chatgptPlan.sessionProblem(err);
+export function planSessionProblem(_plan: AgentPlan, err: unknown) {
+	return claudePlan.sessionProblem(err);
 }

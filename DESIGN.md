@@ -6,28 +6,28 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 ## Decisions
 
-| Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execution          | Commands run as the gateway's macOS user with full access to the disk. There is no sandbox. The profile folder is only the default working folder. In auto mode (the default) a model checks each command before it runs and blocks what could do harm nobody asked for, in place of a person approving each one; unrestricted runs them unchecked. See [Auto mode](#auto-mode).                                                                                                                                                                                                                                                                                                                               |
-| Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Exposure           | Public through nolune's relay (`<name>.nolune.family`, see [The relay](#the-relay)) or the family's own tunnel. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. nolune keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to; the plans have none, so pictures go inline, and PDFs too on the Claude plan and as their path on the ChatGPT plan. Every other file goes as its path.                                                                                                                                                                                                                                                                   |
-| Providers          | Anthropic, OpenAI and OpenRouter (API keys), custom providers (your own model servers), and two plans, someone's subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan in Claude Code, and `chatgpt-plan`, a ChatGPT plan in OpenAI's Codex, which nolune runs on this computer. Keys, custom providers and presets are all global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model and an optional window override. One preset is the default (the oldest until an admin picks one): new chats and automations without one use it. See [Model providers](#model-providers). |
-| Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `nolune agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                           |
-| Memory             | Short Markdown notes per profile, in fixed categories (a note each, or one per person or project), that the agent searches, reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                       |
-| Soul               | Who nolune is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `nolune soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                        |
-| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `nolune view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                                                                                                                             |
-| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution          | Commands run as the gateway's macOS user with full access to the disk. There is no sandbox. The profile folder is only the default working folder. In auto mode (the default) a model checks each command before it runs and blocks what could do harm nobody asked for, in place of a person approving each one; unrestricted runs them unchecked. See [Auto mode](#auto-mode).                                                                                                                                                                                                                                                                                                                                                       |
+| Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Exposure           | Public through nolune's relay (`<name>.nolune.family`, see [The relay](#the-relay)) or the family's own tunnel. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. nolune keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to; the plans have none, so pictures and PDFs go inline. Every other file goes as its path.                                                                                                                                                                                                                                                                                                                                                         |
+| Providers          | Anthropic, OpenAI and OpenRouter (API keys), custom providers (your own model servers), and two plans, someone's subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan in Claude Code, which nolune runs on this computer, and `chatgpt-plan`, a ChatGPT Plus or Pro plan, through Sign in with ChatGPT. Keys, custom providers and presets are all global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model and an optional window override. One preset is the default (the oldest until an admin picks one): new chats and automations without one use it. See [Model providers](#model-providers). |
+| Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `nolune agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                                                   |
+| Memory             | Short Markdown notes per profile, in fixed categories (a note each, or one per person or project), that the agent searches, reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                               |
+| Soul               | Who nolune is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `nolune soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                                                |
+| Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `nolune view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                                                                                                                                                     |
+| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ## Files on disk
 
@@ -35,10 +35,10 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 ~/.nolune/                 (override with NOLUNE_HOME)
   config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, custom providers
                               (name, API, address, key), image model,
-                              extra env vars for commands, where Claude Code and Codex are if set,
-                              the command mode and the preset that checks commands (mode 600)
-  codex/                      Codex's home for the ChatGPT plan: its sign-in (which nolune never
-                              reads), and the chats' threads under sessions/
+                              extra env vars for commands, where Claude Code is if set, the
+                              command mode and the preset that checks commands (mode 600)
+  chatgpt.json                the ChatGPT sign-in for the ChatGPT plan: this computer's host id,
+                              each account's registration and the signed-in one's tokens (mode 600)
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
                               notifications, subagents, running background commands
@@ -143,9 +143,9 @@ the model call, the
 chat's title, PDF token counts, model checks and what the model can be sent, and gets back the
 same shape from each (the reply's content, its stop reason in Anthropic's words, usage, tool calls
 and texts). Each API provider brings a `FileStore` for pictures and PDFs (see
-[Attachments](#attachments)). The plans are different: the plan maker's own agent (Claude Code in
-`claude-plan.ts`, Codex in `chatgpt-plan.ts`) runs the agent loop, so the runner hands it whole
-turns (`runPlanTurn`; see [Plans](#plans)).
+[Attachments](#attachments)). The Claude plan is different: Claude Code (`claude-plan.ts`) runs the
+agent loop, so the runner hands it whole turns (`runPlanTurn`; see [Plans](#plans)). The ChatGPT
+plan's chats are OpenAI's, with the plan's sign-in instead of a key (`chatgpt-plan.ts`).
 
 - **What's stored.** What nolune writes itself is in nolune's own format, and replies exactly as their
   provider returned them; each provider's module turns both into its request (see
@@ -274,9 +274,8 @@ is `media` (kept by nolune, which `resolveFiles` turns into each provider's copy
 from before nolune kept its own copies). Each
 provider's module turns messages into its request, leaving out what it can't take:
 `toAnthropicMessages` in `anthropic.ts` (Claude Code on a Claude plan gets the same blocks, from
-`toAnthropicBlocks`), `toResponsesInput` in `openai-chat.ts`, `toChatMessages` in
-`openrouter.ts`, and `toCodexInput` in `chatgpt-plan.ts` (Codex on a ChatGPT plan, which takes
-text and pictures). Nothing else in nolune knows a
+`toAnthropicBlocks`), `toResponsesInput` in `openai-chat.ts` (the ChatGPT plan's too, its calls in
+nolune's namespace) and `toChatMessages` in `openrouter.ts`. Nothing else in nolune knows a
 provider's shapes: the runner, the chat's display, plain-text transcripts and image limits all
 read nolune's format.
 
@@ -299,51 +298,34 @@ read nolune's format.
 ### Plans
 
 `claude-plan` and `chatgpt-plan` run chats on someone's own subscription instead of an API key.
-Neither Anthropic nor OpenAI has other apps sign in to their accounts for this, so nolune doesn't:
-each plan runs its maker's own agent, installed on this computer and unmodified, which signs in,
-keeps the sign-in, bills the plan and runs the agent loop, asking nolune to run each command. The
-two agents speak differently (below); what they share is in `plans.ts` and the runner:
+They get there differently:
 
-- **One kind of turn.** The runner hands the agent a whole turn (`PlanTurn`, through
-  `runPlanTurn` in `models.ts`): the chat's session, what it hasn't seen yet in nolune's format (with
-  `resolve`, which reads nolune's copies of its pictures into it), nolune's system prompt and tools, and
-  callbacks that save each reply before its commands run, run a command and save the results, so
-  the chat gets the same rows and live events as from nolune's own loop. The session is
-  `conversation.provider_session` (its id, the last row it was sent, and the plan whose agent has
-  it), saved once the agent took the turn's input (`onStarted`). Only rows it hasn't been sent go,
-  as one message; a turn that failed after the agent took its input is continued with
-  `[Continue.]`. A chat the agent has never seen that already has replies (a notification opened
-  as a chat, or replies from another model the chat used before) gets them first as a plain-text
-  transcript, in a new session, and so does one whose session the agent lost
-  (`planSessionProblem`). Messages sent while the agent works join after its turn, not at its next
-  step.
-- **Stop** interrupts the agent's turn and kills the running command, as elsewhere (a
-  `PlanStopped`); an agent that hasn't ended the turn 5 seconds later is closed. A reply cut off
-  mid-stream is dropped.
-- **One kind of error.** Both turn whatever fails into a `PlanError` in words for the people in
-  the chat, with the plan's own `kind` (`authentication_failed`, `usageLimitExceeded`...), so
-  `describeApiError` and `shortApiError` know nothing about either.
-- **One status.** `claudePlanStatus()` and `chatGptPlanStatus()` start the agent without sending
-  anything and say where it is (`path`, `installed`), who it's signed in as (`signedIn`: "signed
-  in as anna@example.com (Claude Max)", or "(ChatGPT Plus)", from `describePlanAccount`) and what
-  stops chats on it (`problem`). Adding a preset checks the same, since nothing is billed.
+- **The Claude plan** runs Anthropic's own agent. Anthropic doesn't let other apps sign in to
+  Claude accounts, so nolune doesn't: Claude Code, installed on this computer and unmodified, signs
+  in, keeps the sign-in, bills the plan and runs the agent loop, asking nolune to run each command
+  (below).
+- **The ChatGPT plan** uses OpenAI's Sign in with ChatGPT for open-source, locally hosted apps:
+  nolune registers with the person's ChatGPT account, keeps the sign-in on this computer and makes
+  the Responses API requests itself, in its own loop, counted toward the plan (below).
+
+What they share is in `plans.ts`:
+
+- **One kind of error.** Both turn whatever fails with the plan into a `PlanError` in words for
+  the people in the chat, with the plan's own `kind` (`authentication_failed`,
+  `subscription_sharing_usage_limit_exceeded`...), so `describeApiError` and `shortApiError` know
+  nothing about either.
+- **One status.** `claudePlanStatus()` and `chatGptPlanStatus()` say who a plan is signed in as
+  (`signedIn`: "signed in as anna@example.com (Claude Max)", or "(ChatGPT Plus)", from
+  `describePlanAccount`) and what stops chats on it (`problem`); the Claude plan's also where
+  Claude Code is (`path`, `installed`). Adding a preset checks the same, since nothing is billed.
 - **The same commands and page.** `nolune <plan> status` and `nolune <plan> setup` for both
-  (`packages/cli/src/plans.ts`), printing the same line, and `nolune config set
-claude-path|codex-path` for an agent nolune doesn't find. `chatgpt-plan` adds
-  `logout` and `models`, which Codex has. Models & keys has one Plans list with a row for each.
-- **Finding the agent.** The configured path, else the PATH and its installers' folders, since
-  the gateway may run without a login shell's PATH (as a LaunchAgent or systemd user service).
-  Without one, every one of the above says so and how to install it; at a terminal, setup offers
-  the maker's installer, asking first.
-- **No Files API.** Pictures go inline for both, within the conversation's 20 MB. PDFs go inline
-  on the Claude plan and as their path on the ChatGPT plan, since Codex takes text and pictures
-  only.
-- **What's different.** The context window isn't known before a call, except for Claude Code's
-  1M-context models, whose ids say so (`claude-opus-5-5[1m]`), so the context meter shows "?"
-  (and PDFs get 25% of 200k tokens) unless the preset sets one. Titles are asked for through
-  the agent too, as one exchange without a session. Plan limits assume one person's ordinary use,
-  so the help, the page and the docs suggest keeping busy automations and subagents on an API key
-  preset.
+  (`packages/cli/src/plans.ts`), printing the same line, and `nolune config set claude-path` for a
+  Claude Code nolune doesn't find. `chatgpt-plan` adds `logout` and `models`. Models & keys has one
+  Plans list with a row for each.
+- **No Files API.** Pictures and PDFs go inline for both, within the conversation's 20 MB, and a
+  PDF's tokens are estimated from its pages.
+- **Limits.** Plan limits assume one person's ordinary use, so the help, the page and the docs
+  suggest keeping busy automations and subagents on an API key preset.
 
 ### The Claude plan
 
@@ -357,6 +339,21 @@ the plan's usage limits (a separate monthly Agent SDK credit was announced for J
 paused). Those limits assume one person's ordinary use, which is why the docs suggest keeping busy
 automations and subagents on an API key preset.
 
+- **One kind of turn.** The runner hands Claude Code a whole turn (`PlanTurn`, through
+  `runPlanTurn` in `models.ts`): the chat's session, what it hasn't seen yet in nolune's format (with
+  `resolve`, which reads nolune's copies of its pictures into it), nolune's system prompt and tools,
+  and callbacks that save each reply before its commands run, run a command and save the results,
+  so the chat gets the same rows and live events as from nolune's own loop. The session is
+  `conversation.provider_session` (its id, the last row it was sent, and the plan whose agent has
+  it), saved once Claude Code took the turn's input (`onStarted`). Only rows it hasn't been sent go,
+  as one message; a turn that failed after it took its input is continued with `[Continue.]`. A
+  chat it has never seen that already has replies (a notification opened as a chat, or replies from
+  another model the chat used before) gets them first as a plain-text transcript, in a new session,
+  and so does one whose session Claude Code lost (`planSessionProblem`). Messages sent while it
+  works join after its turn, not at its next step.
+- **Stop** interrupts Claude Code's turn and kills the running command, as elsewhere (a
+  `PlanStopped`); a turn that hasn't ended 5 seconds later is closed. A reply cut off mid-stream
+  is dropped.
 - **Who runs the loop.** Claude Code. Each turn is a `query()` that resumes the chat's Claude Code
   session, whose id nolune picks: at first the chat's own.
 - **What the model gets.** nolune's system prompt and the chat's saved `run_command` definition, as an
@@ -371,6 +368,10 @@ automations and subagents on an API key preset.
   block is complete, so nolune's handler waits until the reply is saved (at `message_stop`, or when a
   reply came whole). Commands run one at a time through `runToolCall`, with live output, `nolune view`
   pictures (inline) and background commands as usual.
+- **Context window.** It isn't known before a call, except for Claude Code's 1M-context models,
+  whose ids say so (`claude-opus-5-5[1m]`), so the context meter shows "?" (and PDFs get 25% of
+  200k tokens) unless the preset sets one. Titles are asked for through Claude Code too, as one
+  exchange without a session.
 - **Environment.** Claude Code gets nolune's environment without `ANTHROPIC_API_KEY` and
   `ANTHROPIC_AUTH_TOKEN`, which it would use (and bill) instead of the plan. A
   `CLAUDE_CODE_OAUTH_TOKEN` there (from `claude setup-token`) reaches Claude Code but, like API
@@ -406,71 +407,77 @@ automations and subagents on an API key preset.
 
 ### The ChatGPT plan
 
-`chatgpt-plan` presets run chats on a ChatGPT plan (Plus, Pro, Business, Enterprise) that
-someone signed in to OpenAI's Codex with, instead of an API key. nolune runs the installed Codex
-(`npm install -g @openai/codex`, or Homebrew's), unmodified, through `codex app-server`: the
-JSON-RPC interface over stdio that Codex's own IDE extension uses and OpenAI documents for
-integrations (`codex-app-server.ts` carries the messages, `chatgpt-plan.ts` says what to ask).
-Codex signs in with ChatGPT, keeps the sign-in fresh and bills the plan's Codex limits itself.
+`chatgpt-plan` presets run chats on the ChatGPT Plus or Pro plan of someone signed in with
+ChatGPT, instead of an API key. It's OpenAI's
+[Sign in with ChatGPT](https://developers.openai.com/siwc) for open-source, locally hosted apps
+(in preview in September 2026; a paid or remotely hosted app would need OpenAI's approval first):
+nolune registers as an app of the person's ChatGPT account, which lets it send Responses API
+requests that count toward their plan's usage, the same allowance as ChatGPT and Codex, not extra.
+The sign-in is in `chatgpt-sign-in.ts`, the requests in `chatgpt-plan.ts`.
 
-- **Codex's home.** nolune gives Codex a home of its own (`CODEX_HOME=~/.nolune/codex`), apart
-  from the owner's `~/.codex`: its sign-in, settings and threads are nolune's alone, and nolune's chats
-  don't show up in the owner's Codex. nolune never reads the sign-in there.
-- **Who runs the loop.** Codex. A chat is a Codex thread, whose id Codex picks: a turn starts one
-  (`thread/start`) or resumes the chat's (`thread/resume`), starts a turn with the new input
-  (`turn/start`) and follows its events until `turn/completed`. A thread Codex no longer has ("no
-  rollout found") is a lost session. Codex runs for one turn and is closed after, like Claude
-  Code. It sets up its home's state database as it starts, which two starting at once trip over,
-  so nolune starts one at a time, and starts again once a Codex that ended while starting.
-- **What the model gets.** nolune's system prompt as Codex's base instructions, and the chat's saved
-  `run_command` as a dynamic tool (`dynamicTools`, in a `nolune` namespace; experimental in Codex, so
-  nolune opts in with `experimentalApi`). Codex's own tools that act on the computer or reach out are
-  off, from its command line so no config.toml turns them back on (`-c features.shell_tool=false`
-  and so on: shell, pictures, image generation, web search, browser and computer use, apps,
-  plugins, skills, goals, sub-agents), AGENTS.md files aren't read (`project_doc_max_bytes=0`),
-  and turns have no execution environment (`environments: []`), which also leaves out
-  `apply_patch`. What's left is Codex's harness: the model calls tools from short scripts
-  (`exec`, and `wait` for a long one), which reach nolune as `item/tool/call` requests. The thread's
-  sandbox is read-only with approvals off, since Codex itself runs nothing. Codex adds notes on
-  permissions and the environment (date, time zone).
-- **The same rows.** nolune saves what Codex streams as OpenAI's output items (`reasoning`
-  summaries, `message`, a `function_call` for each command), which the chat reads as it reads
-  OpenAI's replies. A command's reply is saved when Codex asks to run it, with what the model said
-  since the last one; a script may ask for several at once, but nolune runs them one at a time, each
-  with a reply and results of its own. Results go back as Codex's content items: text, and `nolune
-view` pictures as data URLs. Deltas (`item/agentMessage/delta`, reasoning summaries) are the
-  live reply.
-- **Pictures** go to Codex as data URLs, read from nolune's copies (`resolveFiles`) within the
-  conversation's inline limit, in messages and in command results. A PDF, and a picture from before
-  nolune kept its own copies (held by another provider's Files API), becomes a note saying where its
-  file is, since Codex takes text and pictures only.
-- **Usage.** Codex says what a model call used (`thread/tokenUsage/updated`) only once the
-  commands it asked for have finished, after nolune saved the reply that asked for them. So only the
-  reply that ends a turn has usage, its own call's, and a chat's totals leave out calls that asked
-  for commands. Codex caches prompts itself.
-- **Environment.** Codex gets nolune's environment without `OPENAI_API_KEY` and `CODEX_API_KEY`,
-  which it would use (and bill) instead of the plan. npm's `codex` is a Node script, so the Node
-  that runs nolune goes on its PATH, and its folder is where nolune looks for `codex` too.
-- **Signing in** is Codex's own device code flow through the app server (`account/login/start`
-  with `chatgptDeviceCode`): Codex asks OpenAI for a one-time code, someone signed in to ChatGPT
-  enters it at `auth.openai.com/codex/device` on any device, and Codex saves the sign-in
-  (`account/login/completed`). Nothing redirects back to this computer, so it works through a
-  tunnel, from a phone and from the agent's commands. A sign-in under way is a Codex waiting for
-  its code in the process that started it: the gateway for Models & keys, which asks again every
-  few seconds until the code is entered, or `nolune chatgpt-plan setup`, which prints the link and
-  the code and waits. Signing out is Codex's (`account/logout`). The status is Codex's
-  `account/read`: a ChatGPT account passes, named with its plan (`plus`: "ChatGPT Plus"); an API
-  key doesn't.
-- **Models** are the ones Codex lists (`model/list`, with the ones its picker hides): adding a
-  preset checks the model is there. Codex doesn't say their context windows.
-- **Errors.** A failed turn's error (`codexErrorInfo`: `unauthorized`, `usageLimitExceeded`,
-  `contextWindowExceeded`...) is shown in Codex's words, with how to sign in when that's the
-  problem. Codex retries what can be retried itself.
-- **Onboarding.** At a terminal, `nolune chatgpt-plan setup` offers npm's installer (`npm install -g @openai/codex`), asking first, then sign in. The admin
-  page shows the install command, and signs in itself, since the code is entered on OpenAI's
-  page, never on nolune's.
-- **Its own copy.** Codex keeps each chat's thread under `~/.nolune/codex/sessions`, which
-  deleting the chat in nolune doesn't remove yet.
+- **Signing in** is OAuth with PKCE in a browser (`startChatGptSignIn`). nolune starts a listener
+  on `127.0.0.1` (the only redirect OpenAI takes: `http://127.0.0.1:<port>/auth/callback`) and
+  opens OpenAI's page, where the person signs in and allows nolune to use the plan. The first
+  sign-in of an account registers nolune with it (`client_id=dynamic_agent_client`,
+  `agent_name_hint=nolune`), and OpenAI issues a client id of its own (`oaiapp_…`), which later
+  sign-ins to that account reuse, with the retained ID token as `id_token_hint` so the account
+  isn't asked again. Every request names this computer's host id (`ext_agent_host_id`,
+  `urn:uuid:…`, made once and kept), which tells hosts of the same app apart and identifies
+  nothing else.
+- **From another device.** The browser comes back to `127.0.0.1`, which is this computer only: on
+  a phone, or through a tunnel, that page doesn't load. Its address carries what nolune needs (the
+  code and the sign-in's state), so it can be pasted into Models & keys, or into `nolune
+chatgpt-plan setup` at a terminal (`finishChatGptSignIn`). An address from another sign-in
+  leaves this one waiting. OpenAI's docs don't describe this; its own advice for a remote host is
+  to sign in on a computer with a browser and copy the credentials over.
+- **Checked before it's kept.** The code is exchanged at OpenAI's token endpoint, with the PKCE
+  verifier and the same redirect, and the ID token checked as OpenID Connect says: signed with a
+  key OpenAI lists (RS256, its JWKS), issued by OpenAI, for this client, not expired, and for this
+  sign-in (its `nonce`). Signing in again must be the same account (`sub`); another account is
+  "Use another account", a registration of its own. The plan's scope (`chatgpt.tokens.use.direct`)
+  must be granted, or the sign-in is kept as who someone is, and the plan's status says to sign in
+  again and allow it (with `prompt=consent`).
+- **What's kept** is `~/.nolune/chatgpt.json` (mode 600, written whole and renamed into place):
+  the host id, each account's registration (client id, subject, email, plan name when the ID token
+  says) and the signed-in one's tokens, never shown or logged. The access token lasts an hour and
+  is refreshed 5 minutes before it runs out, or not before OpenAI's `earliest_refresh_at` while it
+  still works. A refresh replaces the refresh token too (30 days, renewed each time), so refreshes
+  run one at a time under a lock file, across the gateway and a `nolune` in a terminal, and each
+  first reads what another may have written. A refresh token that no longer works
+  (`invalid_grant`, `refresh_token_reused`...) ends the sign-in: its tokens are forgotten and chats
+  say to sign in again. Signing out asks OpenAI to revoke the refresh token, then forgets the
+  tokens and keeps the registration for next time; when OpenAI can't be told, it says so, and the
+  app can be disconnected in ChatGPT's settings.
+- **Who runs the loop.** nolune, as with an OpenAI key: `openai-chat.ts` makes the requests with the
+  plan's client (`CHATGPT_PLAN`, a `ResponsesApi`), whose SDK asks for the access token on every
+  request, so a refreshed one is used at once. Its address is always `api.openai.com/v1`: never
+  `OPENAI_BASE_URL`, `OPENAI_ORG_ID` or `OPENAI_PROJECT_ID`, which are the key's.
+- **What the plan asks of a request** (OpenAI's preview limitations): `store: false` and
+  `stream: true`, which nolune's are anyway, with the whole transcript in `input` and no
+  `previous_response_id`; no `max_output_tokens`, `temperature`, `metadata` and the like; function
+  tools in a namespace, so nolune's tools are in `nolune` (the model calls `run_command` with
+  `namespace: "nolune"`, and every call sent back carries it, other models' too); no Files API.
+  Short exchanges (titles, memory, suggestions) are streamed too, and read to their end. The
+  stream's last event (`response.completed`) comes without its output on this route, so the reply
+  is the items the stream finished (`response.output_item.done`) whenever the last event has none.
+  The reply's encrypted reasoning goes back to the plan's model, and its prompt cache key is the
+  chat.
+- **Models** are the plan's catalog, `GET /v1/models` with the plan's token, which answers with
+  `models` (`slug`, `display_name`, `visibility`, supported reasoning levels and a context window
+  when it says): the admin page offers those with `visibility: "list"`, in ChatGPT's order, and
+  adding a preset checks the model is there. A preset's window is the catalog's, or unknown: the
+  API's windows may not be the plan's. A chat's effort goes as it is, or as the nearest below it
+  the model takes.
+- **Errors.** What the plan says goes wrong is said in words (`describeFailure`): its usage limit
+  (the plan's own or the weekly one set for nolune, linking to ChatGPT's usage settings), an
+  account that can't use its plan in other apps (it takes Plus or Pro), a check that couldn't be
+  made just now, something the plan doesn't take, a sign-in ChatGPT no longer accepts (401), and a
+  request a policy stopped (403, where this computer is, say). OpenAI never switches a request to
+  another way of paying.
+- **Replies from before.** When Codex ran the plan, its replies were saved as OpenAI's items:
+  their reasoning has no encrypted content (left out, as always), their messages carry ids of
+  Codex's own (sent as their text), and their calls no namespace (sent with nolune's). Codex's
+  threads in `~/.nolune/codex` aren't used any more; nolune leaves the folder to be deleted.
 
 ### Switching models
 
@@ -498,8 +505,8 @@ has the chat open gets the change as a live `model` event (also in the snapshot)
   - Replies from another provider go as their text and tool calls (`portableReply`), without
     reasoning. So do replies from another OpenAI model or another model on OpenRouter (reasoning
     goes back only to the model that wrote it, and items without their reasoning lose their ids)
-    and a plan's replies (a Claude plan's thinking was signed for another account, and Codex keeps
-    a ChatGPT plan's reasoning to itself). Anthropic accepts
+    and a plan's replies (a Claude plan's thinking was signed for another account, and a ChatGPT
+    plan's encrypted reasoning goes back only to the plan's model). Anthropic accepts
     tool calls without thinking in the middle of a turn, so a switch can happen there.
   - Pictures and PDFs go along: nolune keeps them and each provider gets its own copy (see
     [Attachments](#attachments)). Only those from before nolune kept its own, stored as another
@@ -722,8 +729,8 @@ kind of file, up to 100 MB each (the same as pictures in replies) and 10 per mes
 - **Other providers.** `message.attachments` is the provider-neutral record (saved path, type,
   what the model got). `content` holds nolune's blocks (see [nolune's format](#nolunes-format)), and each
   provider's module turns them into its request. A provider brings a `FileStore`
-  (`provider-files.ts`); one without a files API sends pictures inline (PDFs too on the Claude
-  plan, and as their path on the ChatGPT plan). OpenAI's is its
+  (`provider-files.ts`); one without a files API (the plans) sends pictures and PDFs inline.
+  OpenAI's is its
   Files API: pictures are uploaded for `vision` and PDFs as `user_data`, and a PDF's cost is
   counted with `POST /v1/responses/input_tokens`, which also fails for a PDF it can't read.
 - **OpenRouter's** is its Files API (in beta), which takes pictures and PDFs alike and keeps them
@@ -1361,10 +1368,13 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   or Anthropic), an address and a key. Saving asks the server for its models and says how many it
   serves, or what went wrong; `nolune provider add <name> <url> [--api A] [--key K]` does the same,
   asking for a key at a terminal when the server wants one. Under the keys, **Plans** lists both plans alike (what each is, who it's signed in as,
-  what to do next): the Claude plan's row shows where Claude Code is and checks its sign-in; the
-  ChatGPT plan's shows where Codex is and who it's signed in as, signs it in with ChatGPT, showing
-  the link and the one-time code, updates by itself once the code is entered, and then offers Sign
-  in again and Sign out. Without the agent, a row shows how to install it. Under the presets, **Add
+  what to do next): the Claude plan's row shows where Claude Code is and checks its sign-in, and
+  without Claude Code shows how to install it; the ChatGPT plan's shows who's signed in with
+  ChatGPT, from what nolune keeps. **Continue with ChatGPT** (or "Continue as anna@example.com" for
+  the account signed in last, beside "Use another account") shows the link to OpenAI's sign-in page
+  and a field for the address a browser on another device ends on, and updates by itself once the
+  browser comes back; then it offers Check sign-in (which asks OpenAI), Sign in again, Sign out and
+  a Manage usage link to ChatGPT's usage settings. Under the presets, **Add
   a model** opens the form (open from the start while there are none), in the order the choices are
   made: the provider, each custom provider a chip of its own by its name, saying which key, plan or
   server it runs on; the model, picked from the provider's
@@ -1378,7 +1388,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   its names and the window a preset gets; a custom provider's, as it lists them (`<id>/<model>`);
   Claude Code's own list for the Claude plan, by full id
   (`claude-opus-5-5`, not `opus`, which would move a chat to a newer model when Claude Code
-  updates); and what Codex's own picker offers for the ChatGPT plan. It's asked for again when the
+  updates); and the ChatGPT plan's catalog, the models ChatGPT offers in its pickers, with their
+  windows when it lists them. It's asked for again when the
   provider's key changes. The context window is a row of chips: Auto (what the provider reports, if
   anything), 128K, 200K, 1M, or Custom, typed as `272k`, `1.5m` or `272000`. The provider checks the
   model id before the preset is saved.
@@ -1508,9 +1519,14 @@ nothing, and opening the page again runs it again.
   comes up. A click or Esc skips it, and with reduced motion it opens on the welcome.
 - **A model, only when there is none** (`ModelStep.svelte`). Five cards: the Claude plan, the
   ChatGPT plan, and an Anthropic, OpenAI or OpenRouter key. A key is checked and saved as on Models
-  & keys (a key already set skips pasting); a plan's sign-in is checked, and when its agent isn't
-  installed or signed in the step says what's wrong and points to Models & keys, where the sign-in
-  lives. Then chips with the provider's first six models (or a typed id) make the first preset,
+  & keys (a key already set skips pasting); a plan's sign-in is checked. The Claude plan, when
+  Claude Code isn't installed or signed in, says what's wrong and points to Models & keys. The
+  ChatGPT plan signs in right in the step, through `/api/chatgpt/sign-in`: it starts a sign-in (or
+  follows one already under way), and **Continue with ChatGPT** opens OpenAI's page in a new tab.
+  The step asks every 2 seconds until the sign-in ends and then moves on by itself. The address a
+  browser on another device ends on can be pasted there too, and "Use another account" is offered
+  after a sign-out, or when the account signed in can't use its plan. Then chips with the
+  provider's first six models (or a typed id) make the first preset,
   which becomes the default. Only admins can add one; anyone else is told to ask and carries on.
 - **The avatar.** `AvatarPicker` in its big layout, starting on the avatar the slug picked. A
   tile only previews; "This one" saves it. The page then takes on the avatar's tint, which grows
@@ -1660,9 +1676,9 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with
                 its Files API and the function that turns nolune's format, format.ts, into its
                 request, and custom-providers.ts, your own servers in either API),
-                plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts, the
-                ChatGPT plan's through Codex's app server in chatgpt-plan.ts and
-                codex-app-server.ts), provider
+                plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts; the
+                ChatGPT plan's requests in chatgpt-plan.ts, signed in with Sign in with ChatGPT in
+                chatgpt-sign-in.ts), provider
                 file cache, runner, media, users/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
@@ -1743,6 +1759,9 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
 - The Claude plan: deleting a chat's Claude Code session with the chat (the SDK has
   `deleteSession`); messages sent mid-turn joining at Claude Code's next step (its input stream
   takes them) rather than after the turn.
+- The ChatGPT plan: "Using ChatGPT plan" with a Manage usage link by the composer, as OpenAI's UI
+  guidelines ask; a ChatGPT account per profile (each would be a registration of its own, which
+  Sign in with ChatGPT allows).
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
 - Auto mode: house rules an admin writes for the check (Claude Code's environment, block and allow

@@ -19,7 +19,8 @@ import { openaiBaseUrl } from './openai.ts';
  * Chats on OpenAI's models, through the Responses API and OpenAI's SDK, and its Files API for
  * pictures and PDFs. The rest of nolune calls it through models.ts. A custom provider
  * (custom-providers.ts) can speak the same API, so its chats go through the same code with its
- * own client (a `ResponsesApi`), leaving out what only OpenAI has.
+ * own client (a `ResponsesApi`), leaving out what only OpenAI has; so do chats on the ChatGPT
+ * plan (chatgpt-plan.ts), with the plan's token and what the plan asks of a request.
  *
  * Requests are stateless (`store: false`): like Anthropic's, every call sends the whole
  * transcript, so nothing depends on OpenAI keeping a conversation. A reply is stored as the
@@ -73,7 +74,14 @@ class MissingApiKeyError extends Error {
 }
 
 /** A reply that failed or broke off after the request itself went through. */
-class ReplyError extends Error {}
+class ReplyError extends Error {
+	/** The failure's code, when the response said (`subscription_sharing_usage_limit_exceeded`...). */
+	readonly code: string | null;
+	constructor(message: string, code: string | null = null) {
+		super(message);
+		this.code = code;
+	}
+}
 
 export function isOpenAIError(err: unknown): boolean {
 	return (
@@ -99,12 +107,13 @@ async function getClient(): Promise<OpenAI> {
 }
 
 /**
- * Where Responses API calls go: OpenAI, or a custom provider (custom-providers.ts). A custom
- * provider gets the same requests without what only OpenAI has: encrypted reasoning, its prompt
- * cache key and reasoning levels above `high`.
+ * Where Responses API calls go: OpenAI, a custom provider (custom-providers.ts), or OpenAI on the
+ * ChatGPT plan (chatgpt-plan.ts). A custom provider gets the same requests without what only
+ * OpenAI has: encrypted reasoning, its prompt cache key and reasoning levels above `high`. The
+ * plan gets its tools in nolune's namespace, and its short exchanges streamed.
  */
 export interface ResponsesApi {
-	provider: 'openai' | 'custom-openai';
+	provider: 'openai' | 'custom-openai' | 'chatgpt-plan';
 	client(): Promise<OpenAI>;
 	/** Whose calls these are, for what's learned from refusals: a hash or an address, never a key. */
 	account(): string;
@@ -237,7 +246,35 @@ export function toResponsesInput(
 		}
 		flush();
 	}
-	return input;
+	return provider === 'chatgpt-plan' ? input.map(forPlan) : input;
+}
+
+/** The namespace nolune's tools are in on the ChatGPT plan, which wants function tools in one. */
+export const TOOL_NAMESPACE = 'nolune';
+
+/**
+ * An input item as the ChatGPT plan takes it: calls in nolune's namespace, as its tools are, also
+ * those of replies from another model or from before (when Codex ran the plan, whose replies'
+ * messages carry ids of Codex's own, which go as their text).
+ */
+function forPlan(item: InputItem): InputItem {
+	const stored = item as Stored;
+	if (stored.type === 'function_call' && !stored.namespace) {
+		return { ...item, namespace: TOOL_NAMESPACE } as InputItem;
+	}
+	if (
+		stored.type === 'message' &&
+		stored.role === 'assistant' &&
+		!(typeof stored.id === 'string' && stored.id.startsWith('msg_'))
+	) {
+		const parts = (Array.isArray(stored.content) ? stored.content : []) as Stored[];
+		const text = parts
+			.map((part) => (part.type === 'refusal' ? part.refusal : part.text))
+			.filter((t): t is string => typeof t === 'string')
+			.join('');
+		return { role: 'assistant', content: text };
+	}
+	return item;
 }
 
 /** A tool as nolune saves it (Anthropic's format) as a function tool. Not strict: `cwd` is optional. */
@@ -249,6 +286,20 @@ function functionTool(tool: Anthropic.Tool): OpenAI.Responses.FunctionTool {
 		parameters: tool.input_schema,
 		strict: false
 	};
+}
+
+/** nolune's tools as `api` takes them: in nolune's namespace on the ChatGPT plan. */
+function toolsFor(api: ResponsesApi, tools: Anthropic.Tool[]): OpenAI.Responses.Tool[] {
+	if (api.provider !== 'chatgpt-plan') return tools.map(functionTool);
+	if (!tools.length) return [];
+	return [
+		{
+			type: 'namespace',
+			name: TOOL_NAMESPACE,
+			description: "nolune's tools.",
+			tools: tools.map(functionTool)
+		}
+	];
 }
 
 /** GPT-4 models, and the chat-tuned ones ChatGPT uses, take no reasoning settings. */
@@ -310,7 +361,7 @@ async function withRefusals<T>(
 		return await request(takes());
 	} catch (err) {
 		if (!noSummaries.has(account) && refusesSummaries(err)) noSummaries.add(account);
-		else if (api.provider !== 'openai' && takes().reasoning && refusesReasoning(err)) {
+		else if (api.provider === 'custom-openai' && takes().reasoning && refusesReasoning(err)) {
 			noReasoning.add(`${account} ${model}`);
 		} else throw err;
 		return request(takes());
@@ -319,14 +370,19 @@ async function withRefusals<T>(
 
 /** OpenAI's levels above `high` are its own; a custom provider gets `high` for them. */
 function effortFor(api: ResponsesApi, effort: Effort): Effort {
-	return api.provider === 'openai' || !['xhigh', 'max'].includes(effort) ? effort : 'high';
+	return api.provider !== 'custom-openai' || !['xhigh', 'max'].includes(effort) ? effort : 'high';
 }
 
-/** Reads the stream, telling `onEvent` about each block as it grows, and returns the response. */
+/**
+ * Reads the stream, telling `onEvent` about each block as it grows, and returns the response. Its
+ * output is the last event's, or, when that leaves it out (the ChatGPT plan's route does), the
+ * items the stream finished one by one.
+ */
 async function readStream(
 	stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
 	onEvent: (event: StreamEvent) => void
 ): Promise<OpenAI.Responses.Response> {
+	const finished: OpenAI.Responses.ResponseOutputItem[] = [];
 	for await (const event of stream) {
 		switch (event.type) {
 			case 'response.output_item.added': {
@@ -353,12 +409,21 @@ async function readStream(
 					onEvent({ type: 'delta', index: event.output_index, text: '\n\n' });
 				}
 				break;
+			case 'response.output_item.done':
+				finished[event.output_index] = event.item;
+				break;
 			case 'response.completed':
-			case 'response.incomplete':
+			case 'response.incomplete': {
+				const { response } = event;
+				if (!response.output?.length) response.output = finished.filter(Boolean);
 				// Leaving the loop closes the stream.
-				return event.response;
+				return response;
+			}
 			case 'response.failed':
-				throw new ReplyError(event.response.error?.message || 'The reply failed.');
+				throw new ReplyError(
+					event.response.error?.message || 'The reply failed.',
+					event.response.error?.code ?? null
+				);
 		}
 	}
 	throw new ReplyError('The reply ended before it was complete.');
@@ -382,14 +447,15 @@ export async function streamResponse(
 	api: ResponsesApi = OPENAI
 ): Promise<OpenAI.Responses.Response> {
 	const client = await api.client();
-	const openai = api.provider === 'openai';
+	// OpenAI's own, with a key or on the ChatGPT plan.
+	const openai = api.provider !== 'custom-openai';
 	const stream = await withRefusals(api, opts.model, (takes) =>
 		client.responses.create(
 			{
 				model: api.modelName(opts.model),
 				instructions: opts.system,
 				input: toResponsesInput(opts.messages, opts.model, api.provider),
-				tools: opts.tools.map(functionTool),
+				tools: toolsFor(api, opts.tools),
 				store: false,
 				stream: true,
 				...(takes.reasoning
@@ -409,7 +475,11 @@ export async function streamResponse(
 	return readStream(stream, opts.onEvent);
 }
 
-/** One short exchange, not streamed, at low effort (see models.ts). */
+/**
+ * One short exchange, not streamed, at low effort (see models.ts). The ChatGPT plan takes only
+ * streamed requests, without `max_output_tokens`, and its input as a list: it gets one of those,
+ * read to its end.
+ */
 export async function createResponse(
 	opts: {
 		model: string;
@@ -421,6 +491,23 @@ export async function createResponse(
 	api: ResponsesApi = OPENAI
 ): Promise<OpenAI.Responses.Response> {
 	const client = await api.client();
+	if (api.provider === 'chatgpt-plan') {
+		const signal = AbortSignal.timeout(opts.timeoutMs);
+		const stream = await withRefusals(api, opts.model, (takes) =>
+			client.responses.create(
+				{
+					model: api.modelName(opts.model),
+					instructions: opts.system,
+					input: [{ role: 'user', content: opts.input }],
+					store: false,
+					stream: true,
+					...(takes.reasoning ? { reasoning: { effort: 'low' as const } } : {})
+				},
+				{ signal }
+			)
+		);
+		return readStream(stream, () => {});
+	}
 	return withRefusals(api, opts.model, (takes) =>
 		client.responses.create(
 			{
@@ -622,6 +709,31 @@ export function describeApiError(err: unknown): string {
 		return `OpenAI API error ${err.status}: ${shortApiError(err)}`;
 	}
 	return `OpenAI: ${shortApiError(err)}`;
+}
+
+/**
+ * A failed request's status, code and message, for chatgpt-plan.ts to say in its words. Null for
+ * what isn't a failure the API answered with (aborts, connection problems, other errors).
+ */
+export function failureOf(
+	err: unknown
+): { status: number | null; code: string | null; param: string | null; message: string } | null {
+	if (err instanceof ReplyError) {
+		return { status: null, code: err.code, param: null, message: err.message };
+	}
+	if (
+		!isSdkError(err, 'APIError') ||
+		isSdkError(err, 'APIUserAbortError') ||
+		isSdkError(err, 'APIConnectionError')
+	) {
+		return null;
+	}
+	return {
+		status: err.status ?? null,
+		code: typeof err.code === 'string' ? err.code : null,
+		param: typeof err.param === 'string' ? err.param : null,
+		message: shortApiError(err)
+	};
 }
 
 /** OpenAI's own message, without the status and JSON around it: for notes shown to the model. */

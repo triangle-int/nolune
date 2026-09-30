@@ -3,6 +3,7 @@
 	import { invalidate } from '$app/navigation';
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import StarIcon from '@lucide/svelte/icons/star';
@@ -36,18 +37,23 @@
 	/** The preset being edited. */
 	let editingPreset = $state<string | null>(null);
 
-	/** A ChatGPT sign-in being started, and one about to be signed out. */
+	/**
+	 * A ChatGPT sign-in being started, finished with a pasted address, and signed out; and the
+	 * sign-in being checked with OpenAI.
+	 */
 	let signingIn = $state(false);
+	let finishing = $state(false);
 	let signingOut = $state(false);
+	let checkingChatgpt = $state(false);
 	const chatgpt = $derived(data.chatgpt);
-	/** Who Codex is signed in as; null while a sign-in waits for its code, or when it isn't. */
+	/** Who's signed in with ChatGPT; null when nobody is. */
 	const chatgptSignedIn = $derived(chatgpt.status?.signedIn ?? null);
 	/** What the last plan action said, for the row of the plan it was about. */
 	const claudeResult = $derived(form?.plan === 'claude-plan' ? form : null);
 	const chatgptResult = $derived(form?.plan === 'chatgpt-plan' ? form : null);
 	const chatgptError = $derived(chatgptResult?.planError ?? chatgpt.signInError);
 
-	// The code is entered on another page, often another device: ask until it has been.
+	// The sign-in finishes in a browser, on this computer or another device: ask until it has.
 	$effect(() => {
 		if (!chatgpt.pending) return;
 		const timer = setInterval(() => invalidate('nolune:chatgpt-plan'), 3000);
@@ -300,121 +306,162 @@
 									chatgptSignedIn ? 'text-foreground' : 'text-muted-foreground'
 								)}
 							>
-								<TerminalIcon class="size-4" />
+								<MessageCircleIcon class="size-4" />
 							</span>
 							<div class="min-w-0 flex-1">
 								<div class="font-medium">{m.admin.chatgptPlan}</div>
 								<div class="text-muted-foreground">{m.admin.chatgptPlanAbout}</div>
-								{#if chatgpt.installed}
-									<div class="truncate font-mono text-muted-foreground">{chatgpt.path}</div>
-									{#if chatgptSignedIn}
-										<div class="break-words text-muted-foreground">{sentence(chatgptSignedIn)}</div>
-									{:else if chatgpt.status?.problem}
-										<div class="text-warning">{firstSentence(chatgpt.status.problem)}</div>
-									{/if}
-								{:else if chatgpt.path}
-									<div class="text-warning">
-										<Rich text={m.admin.notAt}>
-											{#snippet path()}<span class="font-mono">{chatgpt.path}</span>{/snippet}
-											{#snippet command()}<code>nolune config set codex-path</code>{/snippet}
-										</Rich>
-									</div>
-								{:else}
-									<div class="text-warning">{m.admin.notInstalled}</div>
+								{#if chatgptSignedIn}
+									<div class="break-words text-muted-foreground">{sentence(chatgptSignedIn)}</div>
+								{:else if chatgpt.status?.problem}
+									<div class="text-warning">{firstSentence(chatgpt.status.problem)}</div>
 								{/if}
 							</div>
-							{#if chatgpt.installed}
-								<div class="flex gap-1 max-sm:basis-full max-sm:pl-9">
-									{#if chatgpt.pending}
-										<form method="POST" action="?/chatgptCancel" use:enhance>
-											<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
-												{m.common.cancel}
-											</Button>
-										</form>
-									{:else}
+							<div class="flex flex-wrap gap-1 max-sm:basis-full max-sm:pl-9">
+								{#if chatgpt.pending}
+									<form method="POST" action="?/chatgptCancel" use:enhance>
+										<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
+											{m.common.cancel}
+										</Button>
+									</form>
+								{:else}
+									{#if chatgptSignedIn}
 										<form
 											method="POST"
-											action="?/chatgptSignIn"
+											action="?/chatgptCheck"
 											use:enhance={() => {
-												signingIn = true;
+												checkingChatgpt = true;
 												return async ({ update }) => {
 													await update();
-													signingIn = false;
+													checkingChatgpt = false;
 												};
 											}}
 										>
 											<Button
 												type="submit"
-												variant={chatgptSignedIn ? 'ghost' : 'default'}
-												size="sm"
-												disabled={signingIn}
-												class={cn(chatgptSignedIn && 'text-muted-foreground')}
-											>
-												{signingIn
-													? m.admin.chatgptAsking
-													: chatgptSignedIn
-														? m.admin.chatgptSignInAgain
-														: m.admin.chatgptSignIn}
-											</Button>
-										</form>
-										{#if chatgptSignedIn}
-											<Button
 												variant="ghost"
 												size="sm"
 												class="text-muted-foreground"
-												onclick={() => (signingOut = true)}
+												disabled={checkingChatgpt}
 											>
-												{m.admin.signOut}
+												{checkingChatgpt ? m.common.checking : m.admin.checkSignIn}
 											</Button>
-										{/if}
+										</form>
 									{/if}
-								</div>
-							{/if}
+									<form
+										method="POST"
+										action="?/chatgptSignIn"
+										use:enhance={() => {
+											signingIn = true;
+											return async ({ update }) => {
+												await update();
+												signingIn = false;
+											};
+										}}
+									>
+										<Button
+											type="submit"
+											variant={chatgptSignedIn ? 'ghost' : 'default'}
+											size="sm"
+											disabled={signingIn}
+											class={cn(chatgptSignedIn && 'text-muted-foreground')}
+										>
+											{signingIn
+												? m.admin.chatgptStarting
+												: chatgptSignedIn
+													? m.admin.chatgptSignInAgain
+													: chatgpt.previous
+														? m.admin.chatgptContinueAs(chatgpt.previous)
+														: m.admin.chatgptSignIn}
+										</Button>
+									</form>
+									{#if chatgptSignedIn}
+										<Button
+											variant="ghost"
+											size="sm"
+											class="text-muted-foreground"
+											onclick={() => (signingOut = true)}
+										>
+											{m.admin.signOut}
+										</Button>
+									{:else if chatgpt.previous}
+										<form method="POST" action="?/chatgptSignIn" use:enhance>
+											<input type="hidden" name="account" value="another" />
+											<Button type="submit" variant="ghost" size="sm" class="text-muted-foreground">
+												{m.admin.chatgptAnotherAccount}
+											</Button>
+										</form>
+									{/if}
+								{/if}
+							</div>
 						</div>
 
 						{#if chatgpt.pending}
-							{@const url = new URL(chatgpt.pending.verificationUrl)}
 							<ol class="list-inside list-decimal space-y-2 sm:pl-12" aria-live="polite">
 								<li>
+									<!-- eslint-disable svelte/no-navigation-without-resolve -- OpenAI's sign-in page -->
 									<Rich text={m.admin.chatgptOpen}>
 										{#snippet link()}<a
-												href={chatgpt.pending?.verificationUrl}
+												href={chatgpt.pending?.url}
 												target="_blank"
 												rel="noreferrer"
-												class="underline">{url.host}{url.pathname}</a
+												class="underline">{m.admin.chatgptSignInPage}</a
 											>{/snippet}
 									</Rich>
+									<!-- eslint-enable svelte/no-navigation-without-resolve -->
 								</li>
-								<li>
-									<Rich text={m.admin.chatgptCode}>
-										{#snippet code()}<span
-												class="ml-1 font-mono text-lg font-medium tracking-widest select-all"
-												>{chatgpt.pending?.userCode}</span
-											>{/snippet}
-									</Rich>
-								</li>
+								<li>{m.admin.chatgptHere}</li>
 							</ol>
-							<p class="text-muted-foreground sm:pl-12">{m.admin.chatgptCodeHint}</p>
+							<form
+								method="POST"
+								action="?/chatgptFinish"
+								class="space-y-2 sm:pl-12"
+								use:enhance={() => {
+									finishing = true;
+									return async ({ update }) => {
+										await update();
+										finishing = false;
+									};
+								}}
+							>
+								<label for="chatgpt-address" class="block text-muted-foreground">
+									{m.admin.chatgptElsewhere}
+								</label>
+								<div class="flex gap-2">
+									<Input
+										id="chatgpt-address"
+										name="address"
+										required
+										autocomplete="off"
+										spellcheck="false"
+										placeholder="http://127.0.0.1:…/auth/callback?code=…"
+										class="min-w-0 flex-1 font-mono placeholder:font-sans"
+									/>
+									<Button type="submit" disabled={finishing}>{m.admin.chatgptFinish}</Button>
+								</div>
+							</form>
+							{#if chatgptError}
+								<p class="text-destructive sm:pl-12" role="alert">{chatgptError}</p>
+							{/if}
 						{:else if chatgptError}
 							<p class="text-destructive sm:pl-12" role="alert">{chatgptError}</p>
 						{:else if chatgptResult?.planMessage}
 							<p class="text-muted-foreground sm:pl-12" role="status">
 								{chatgptResult.planMessage}
 							</p>
-						{:else if !chatgpt.installed}
-							<div class="space-y-2 text-muted-foreground sm:pl-12">
-								<p>
-									<Rich text={m.admin.chatgptInstall}>
-										{#snippet setup()}<code>nolune chatgpt-plan setup</code>{/snippet}
-									</Rich>
-								</p>
-								<div class="flex items-center gap-1 rounded-xl bg-muted py-1 pr-1 pl-3">
-									<code class="min-w-0 flex-1 truncate font-mono text-foreground"
-										>{chatgpt.installCommand}</code
-									>
-									<CopyButton text={chatgpt.installCommand} label={m.admin.copyCommand} />
-								</div>
-							</div>
+						{:else if chatgptSignedIn}
+							<p class="text-muted-foreground sm:pl-12">
+								<!-- eslint-disable svelte/no-navigation-without-resolve -- ChatGPT's settings -->
+								<Rich text={m.admin.chatgptUsing}>
+									{#snippet link()}<a
+											href={chatgpt.usageUrl}
+											target="_blank"
+											rel="noreferrer"
+											class="underline">{m.admin.chatgptManageUsage}</a
+										>{/snippet}
+								</Rich>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
+							</p>
 						{/if}
 					</li>
 				</ul>
@@ -498,7 +545,7 @@
 									keys={data.keys}
 									customProviders={data.customProviders}
 									claudeInstalled={data.claude.installed}
-									codexInstalled={data.chatgpt.installed}
+									chatgptSignedIn={!!chatgptSignedIn}
 									{preset}
 									problem={form?.editId === preset.id ? form.editError : null}
 									class="pt-4 sm:pl-12"
@@ -516,7 +563,7 @@
 					keys={data.keys}
 					customProviders={data.customProviders}
 					claudeInstalled={data.claude.installed}
-					codexInstalled={data.chatgpt.installed}
+					chatgptSignedIn={!!chatgptSignedIn}
 					problem={form?.addError}
 					startOpen={data.presets.length === 0}
 				/>

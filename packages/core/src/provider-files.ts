@@ -27,7 +27,7 @@ export interface FileStore {
 	remove(fileId: string): Promise<void>;
 }
 
-/** Chats on the Claude plan and on a ChatGPT plan have none: their pictures go inline. */
+/** Chats on the Claude plan and on the ChatGPT plan have none: their pictures and PDFs go inline. */
 const stores = {
 	anthropic: anthropicFiles,
 	openai: openaiFiles,
@@ -166,7 +166,7 @@ function overLimitNote(block: FileBlock): TextBlock {
 /**
  * The messages with each picture and PDF nolune keeps by reference (`media` sources) as `provider`
  * gets it: its Files API's copy, uploaded the first time a request on it needs one, or inline
- * where it has none (the Claude plan), oldest first up to the conversation's inline limit, the
+ * where it has none (the plans), oldest first up to the conversation's inline limit, the
  * rest as a note. The same rows give the same request every time: a copy is reused for as long as
  * the cache has it (pruneProviderFiles keeps it while a message refers to it). Other messages are
  * returned as they are. Throws when an upload fails: that call fails, and Continue tries again.
