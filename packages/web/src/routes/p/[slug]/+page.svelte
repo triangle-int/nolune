@@ -5,6 +5,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Rich from '$lib/components/Rich.svelte';
 	import NewChatForm from '$lib/components/chat/NewChatForm.svelte';
+	import { greeting } from '$lib/greeting';
 	import { getI18n } from '$lib/i18n';
 
 	let { data } = $props();
@@ -30,6 +31,11 @@
 	});
 
 	const firstName = $derived(data.user?.name.split(/\s+/)[0] ?? '');
+	// By the browser's clock: the server's renders the page, and hydrating fixes the text if the
+	// two are in different time zones.
+	const greetingText = $derived(
+		greeting(m.newChat.greetings, firstName, new Date().getHours(), data.greetingSeed)
+	);
 </script>
 
 <PageHeader>
@@ -67,7 +73,7 @@
 				<AssistantAvatar avatar={data.profile.avatar} mood="idle" size={64} class="block" />
 			</div>
 			<h1 class="mb-8 text-center text-[28px] leading-tight font-normal tracking-tight">
-				{firstName ? m.newChat.greeting(firstName) : m.newChat.greetingNoName}
+				{greetingText}
 			</h1>
 			<div class="flex-1 sm:hidden"></div>
 		{/snippet}

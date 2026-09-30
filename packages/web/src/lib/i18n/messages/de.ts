@@ -5,6 +5,9 @@ import type { Messages } from './en';
 const p = plural('de');
 const list = listOf('de');
 
+/** ", Anna" to finish a greeting with, or nothing when there's no name. */
+const to = (name: string) => (name ? `, ${name}` : '');
+
 /** By JavaScript's numbers: 0 is Sunday. */
 const WEEKDAYS = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 const MONTHS = [
@@ -340,8 +343,38 @@ export const de: Messages = {
 	},
 
 	newChat: {
-		greeting: (name: string) => `Wobei kann ich helfen, ${name}?`,
-		greetingNoName: 'Wobei kann ich helfen?',
+		greetings: {
+			morning: [
+				(name: string) => `Guten Morgen${to(name)}!`,
+				(name: string) => `Guten Morgen${to(name)}. Womit fangen wir heute an?`,
+				(name: string) => `Erst Kaffee oder gleich los${to(name)}?`,
+				(name: string) => `Moin${to(name)}! Was steht heute an?`
+			],
+			afternoon: [
+				(name: string) => `Guten Tag${to(name)}!`,
+				(name: string) => `Hallo${to(name)}! Wie läuft dein Tag?`,
+				(name: string) => `Kann ich dir heute Nachmittag etwas abnehmen${to(name)}?`,
+				(name: string) => `Brauchst du heute Nachmittag Hilfe${to(name)}?`
+			],
+			evening: [
+				(name: string) => `Guten Abend${to(name)}!`,
+				(name: string) => `Guten Abend${to(name)}. Wie war dein Tag?`,
+				(name: string) => `Steht heute noch etwas an${to(name)}?`,
+				(name: string) => `Was hast du heute Abend vor${to(name)}?`
+			],
+			night: [
+				(name: string) => `Noch wach${to(name)}?`,
+				(name: string) => `So spät noch auf den Beinen${to(name)}?`,
+				(name: string) => `Kannst du nicht schlafen${to(name)}? Ich bin da.`,
+				(name: string) => `Es ist schon spät${to(name)}. Was brauchst du?`
+			],
+			anytime: [
+				(name: string) => `Wobei kann ich helfen${to(name)}?`,
+				(name: string) => `Was geht dir durch den Kopf${to(name)}?`,
+				(name: string) => `Woran arbeiten wir${to(name)}?`,
+				(name: string) => `Schön, dich zu sehen${to(name)}. Was gibt es Neues?`
+			]
+		},
 		noModels:
 			'Es sind noch keine Modelle eingerichtet. Ein Admin kann eines auf der Seite „Modelle & Schlüssel“ oder mit {command} hinzufügen.',
 		couldNotStart: 'Der Chat konnte nicht gestartet werden.',

@@ -33,7 +33,9 @@ export const load: PageServerLoad = ({ locals, params, url }) => {
 		defaultPresetId: getDefaultPreset()?.id ?? '',
 		efforts: [...EFFORTS],
 		commandMode: commandMode(),
-		folderId: folderId && getFolder(profile.id, folderId) ? folderId : null
+		folderId: folderId && getFolder(profile.id, folderId) ? folderId : null,
+		// Picks the greeting, so the page the server renders and the browser's show the same one.
+		greetingSeed: Math.random()
 	};
 };
 

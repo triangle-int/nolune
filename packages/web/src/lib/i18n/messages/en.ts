@@ -3,6 +3,9 @@ import { plural } from '../plural';
 
 const p = plural('en');
 
+/** ", Anna" to finish a greeting with, or nothing when there's no name. */
+const to = (name: string) => (name ? `, ${name}` : '');
+
 /**
  * The interface in English, which every other language follows key for key. `{slots}` are filled
  * by the Rich component; see src/lib/i18n/index.ts.
@@ -265,8 +268,43 @@ export const en = {
 	},
 
 	newChat: {
-		greeting: (name: string) => `What can I help with, ${name}?`,
-		greetingNoName: 'What can I help with?',
+		/**
+		 * Above the new chat's message box, one at random: for the part of the day in the
+		 * browser's clock (src/lib/greeting.ts), or for any time. `name` is the person's first
+		 * name, or empty when there's none.
+		 */
+		greetings: {
+			morning: [
+				(name: string) => `Good morning${to(name)}!`,
+				(name: string) => `Good morning${to(name)}. Where do we start today?`,
+				(name: string) => `Coffee first, or straight to it${to(name)}?`,
+				(name: string) => `Rise and shine${to(name)}! What’s on today’s list?`
+			],
+			afternoon: [
+				(name: string) => `Good afternoon${to(name)}!`,
+				(name: string) => `Good afternoon${to(name)}. How’s the day going?`,
+				(name: string) => `What can I take off your plate this afternoon${to(name)}?`,
+				(name: string) => `Need a hand this afternoon${to(name)}?`
+			],
+			evening: [
+				(name: string) => `Good evening${to(name)}!`,
+				(name: string) => `Good evening${to(name)}. How was your day?`,
+				(name: string) => `Anything left for today${to(name)}?`,
+				(name: string) => `What’s the plan for tonight${to(name)}?`
+			],
+			night: [
+				(name: string) => `Up late${to(name)}?`,
+				(name: string) => `Burning the midnight oil${to(name)}?`,
+				(name: string) => `Can’t sleep${to(name)}? I’m here.`,
+				(name: string) => `It’s getting late${to(name)}. What do you need?`
+			],
+			anytime: [
+				(name: string) => `What can I help with${to(name)}?`,
+				(name: string) => `What’s on your mind${to(name)}?`,
+				(name: string) => `What are we working on${to(name)}?`,
+				(name: string) => `Good to see you${to(name)}. What’s up?`
+			]
+		},
 		noModels:
 			'No models are set up yet. An admin can add one on the Models page or with {command}.',
 		couldNotStart: 'Could not start the chat.',

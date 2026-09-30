@@ -5,6 +5,9 @@ import type { Messages } from './en';
 const p = plural('ru');
 const list = listOf('ru');
 
+/** ", Anna" to finish a greeting with, or nothing when there's no name. */
+const to = (name: string) => (name ? `, ${name}` : '');
+
 // Weekdays by JavaScript's numbers (0 is Sunday), in the cases the schedules need.
 /** "с понедельника" */
 const WEEKDAY_FROM = [
@@ -415,8 +418,38 @@ export const ru: Messages = {
 	},
 
 	newChat: {
-		greeting: (name: string) => `Чем помочь, ${name}?`,
-		greetingNoName: 'Чем помочь?',
+		greetings: {
+			morning: [
+				(name: string) => `Доброе утро${to(name)}!`,
+				(name: string) => `Доброе утро${to(name)}. С чего начнём день?`,
+				(name: string) => `Сначала кофе или сразу к делу${to(name)}?`,
+				(name: string) => `Что у нас сегодня в планах${to(name)}?`
+			],
+			afternoon: [
+				(name: string) => `Добрый день${to(name)}!`,
+				(name: string) => `Добрый день${to(name)}. Как дела?`,
+				(name: string) => `Что мне взять на себя${to(name)}?`,
+				(name: string) => `Нужна помощь${to(name)}?`
+			],
+			evening: [
+				(name: string) => `Добрый вечер${to(name)}!`,
+				(name: string) => `Добрый вечер${to(name)}. Как прошёл день?`,
+				(name: string) => `Остались дела на сегодня${to(name)}?`,
+				(name: string) => `Какие планы на вечер${to(name)}?`
+			],
+			night: [
+				(name: string) => `Не спится${to(name)}?`,
+				(name: string) => `Засиделись допоздна${to(name)}?`,
+				(name: string) => `Ещё не спите${to(name)}? Я здесь.`,
+				(name: string) => `Уже поздно${to(name)}. Чем помочь?`
+			],
+			anytime: [
+				(name: string) => `Чем помочь${to(name)}?`,
+				(name: string) => `Что у вас на уме${to(name)}?`,
+				(name: string) => `Над чем поработаем${to(name)}?`,
+				(name: string) => `Рад вас видеть${to(name)}. Что нового?`
+			]
+		},
 		noModels:
 			'Модели ещё не настроены. Администратор может добавить модель на странице «Модели и ключи» или командой {command}.',
 		couldNotStart: 'Не удалось начать чат.',
