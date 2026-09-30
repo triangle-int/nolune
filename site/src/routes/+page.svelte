@@ -26,7 +26,7 @@
 		},
 		{
 			command: 'nolune service install',
-			text: 'Keep it running in the background, then open the address from setup and sign in. On Linux, run nolune start.'
+			text: 'Keep it running in the background, on macOS or on Linux with systemd, then open the address from setup and sign in.'
 		}
 	];
 

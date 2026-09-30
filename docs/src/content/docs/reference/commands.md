@@ -12,8 +12,8 @@ skill tells it how, and it restarts itself only when asked.
 - `nolune setup`: interactive first-time setup (your account, public URL); the model comes after: a
   new profile's welcome on the web asks for one, or use key set and preset add below
 - `nolune start`: run the gateway in the foreground
-- `nolune service install|uninstall|restart|status|logs [-f]`: run it in the background at login
-  (macOS)
+- `nolune service install|uninstall|restart|status|logs [-f]`: run it in the background (macOS, or
+  Linux with systemd)
 
 ## Settings
 
@@ -26,6 +26,11 @@ skill tells it how, and it restarts itself only when asked.
 - `nolune config set claude-path <path>`, `nolune config set codex-path <path>`: the Claude Code
   that claude-plan chats run, and the Codex that chatgpt-plan chats run (found on the PATH and in
   their usual folders otherwise)
+- `nolune config set command-mode <auto|unrestricted>`: auto (the default): a model checks each
+  command the agent runs and blocks what could do harm nobody asked for; unrestricted runs them
+  unchecked (not recommended). Not from the agent's own commands
+- `nolune config set safety-model <preset|chat>`: the preset whose model does auto mode's checks, or
+  chat for each chat's own model (the default)
 - `nolune key set <anthropic|openai|openrouter> [key]`: store an API key (prompts if omitted) after
   checking it; OpenAI's runs GPT chats and makes pictures. Admins can also do this on the web, under
   Models & keys

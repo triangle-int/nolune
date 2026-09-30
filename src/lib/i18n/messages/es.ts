@@ -316,10 +316,12 @@ export const es: Messages = {
 		ranCommands: (n: number) =>
 			p(n, { one: `Ejecutó ${n} comando`, other: `Ejecutó ${n} comandos` }),
 		failedCount: (n: number) => p(n, { one: `${n} falló`, other: `${n} fallaron` }),
+		blockedCount: (n: number) => p(n, { one: `${n} bloqueado`, other: `${n} bloqueados` }),
 		failed: 'falló',
 		didntWork: 'no funcionó',
 		statusStopped: 'detenido',
 		statusNotRun: 'no ejecutado',
+		statusBlocked: 'bloqueado',
 		command: 'Comando',
 		theCommand: 'El comando que ejecutó nolune',
 		inFolder: (cwd: string) => `en ${cwd}`,
@@ -344,6 +346,17 @@ export const es: Messages = {
 			xhigh: { label: 'Muy alto', hint: 'Se toma su tiempo' },
 			max: { label: 'Máximo', hint: 'El más lento, para los problemas más difíciles' }
 		}
+	},
+
+	commandMode: {
+		title: 'Comandos en este chat',
+		auto: 'Automático',
+		autoHint: 'Un modelo revisa cada comando antes de que se ejecute.',
+		unrestricted: 'Sin restricciones',
+		unrestrictedHint: 'Los comandos se ejecutan sin revisión. No recomendado.',
+		adminsOnly: 'Solo un administrador puede desactivar la revisión en un chat.',
+		labelAuto: 'Comandos: modo automático',
+		labelUnrestricted: 'Comandos: sin restricciones'
 	},
 
 	newChat: {
@@ -1049,6 +1062,34 @@ export const es: Messages = {
 			wordsOnly: 'Guardado. La memoria se busca solo por palabras.',
 			noAnswer: (problem: string) => `Guardado, pero no hubo respuesta: ${problem}`,
 			needModel: 'Indica el modelo que debe usar.'
+		},
+		commands: {
+			title: 'Comandos',
+			hint: 'El agente trabaja ejecutando comandos en este ordenador, con el acceso de esta cuenta a sus archivos y apps. En modo automático, un modelo revisa cada comando antes de que se ejecute y detiene lo que podría hacer daño sin que nadie lo haya pedido. Todos los chats lo siguen, salvo que alguien cambie uno con el escudo de su cuadro de mensaje; allí solo los administradores pueden desactivar la revisión.',
+			modes: {
+				auto: 'Modo automático',
+				unrestricted: 'Sin restricciones'
+			},
+			choices: {
+				auto: 'Automático (recomendado)',
+				unrestricted: 'Sin restricciones (no recomendado)'
+			},
+			checkedByChat: 'Cada comando lo revisa el propio modelo del chat.',
+			checkedBy: (preset: string) => `Cada comando lo revisa ${preset}.`,
+			presetGone:
+				'Se eliminó el modelo elegido para las revisiones, así que cada chat revisa sus comandos con su propio modelo.',
+			unrestrictedStatus: 'Los comandos se ejecutan sin revisión.',
+			change: 'Cambiar',
+			mode: 'Modo',
+			autoNote:
+				'Los comandos que solo miran se ejecutan al momento. Los demás se revisan antes; uno bloqueado no se ejecuta, y nolune explica qué quería hacer para que alguien pueda dar el visto bueno.',
+			unrestrictedNote:
+				'Cada comando se ejecuta tal como lo escribió el agente, sin nada que frene un error, ni una página web o un correo que lo convenza de algo. Solo para quien lo vigila de cerca.',
+			checker: 'Lo revisa',
+			chatModel: 'El propio modelo del chat',
+			checkerNote:
+				'Un modelo rápido y capaz mantiene ágiles los chats: cada comando que hace algo más que mirar le cuesta una breve consulta.',
+			saved: 'Guardado. Se aplica desde el próximo comando.'
 		}
 	}
 };

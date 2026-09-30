@@ -2,6 +2,7 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import {
 	EFFORTS,
 	TitleError,
+	commandMode,
 	deleteConversation,
 	getConversation,
 	getDefaultPreset,
@@ -33,6 +34,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 			heldBy: heldFileProviders(conversation.id),
 			hidden: conversation.hidden,
 			cacheTtl: conversation.cacheTtl,
+			/** How its commands run: its own choice, and what Models & keys says. */
+			commands: { mode: conversation.commandMode, fallback: commandMode() },
 			/** A subagent's own chat: who started it, where. */
 			subagent: subagent
 				? {

@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { streamTurn } from './anthropic.ts';
 import { getDb } from './db/index.ts';
 import { notification } from './db/schema.ts';
@@ -7,7 +7,7 @@ import { runCommand, type RunCommandResult } from './run-command.ts';
 import { onLoopEnd } from './runner.ts';
 import { runTriggerNow, startScheduler } from './scheduler.ts';
 import { createTrigger, getRun } from './triggers.ts';
-import { makeFamily, makePreset } from './test/fixtures.ts';
+import { makeFamily, makePreset, runCommandsUnchecked } from './test/fixtures.ts';
 
 vi.mock('./anthropic.ts', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./anthropic.ts')>()),
@@ -18,6 +18,11 @@ vi.mock('./run-command.ts', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./run-command.ts')>()),
 	runCommand: vi.fn()
 }));
+
+beforeEach(() => {
+	// About automations, not auto mode's checks (command-safety.test.ts).
+	runCommandsUnchecked();
+});
 
 afterEach(() => {
 	vi.resetAllMocks();

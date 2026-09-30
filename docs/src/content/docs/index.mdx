@@ -47,7 +47,9 @@ make pictures and check automations. The terminal is only for setup and administ
 </CardGrid>
 
 :::caution[Built for people you trust]
-The agent runs commands with your host account's permissions, without a sandbox or approval step.
-Profiles organize access in the web app; they do not isolate the agent from files on the computer.
-Everyone in a shared profile can read its chats and memory.
+The agent runs commands with your host account's permissions, without a sandbox. In
+[auto mode](/docs/guides/auto-mode/), the default, a model checks each command before it runs and
+blocks what could do harm nobody asked for; it's a safeguard against mistakes and manipulation, not a
+sandbox. Profiles organize access in the web app; they do not isolate the agent from files on the
+computer. Everyone in a shared profile can read its chats and memory.
 :::

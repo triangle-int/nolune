@@ -82,8 +82,8 @@ See [prompt caching](DESIGN.md#prompt-caching) for the implementation.
 
 ## Try it
 
-You'll need **Node.js 22.18+** and a model connection. macOS supports the built-in background
-service; on Linux, run the gateway in the foreground.
+You'll need **Node.js 22.18+** and a model connection. `nolune service install` runs the gateway in
+the background: as a LaunchAgent on macOS, and as a systemd user service on Linux.
 
 ```sh
 npm install -g nolune
@@ -91,7 +91,7 @@ nolune setup
 nolune service install
 ```
 
-On Linux, use `nolune start` instead of `nolune service install`.
+Without systemd, run `nolune start` under your own process manager instead.
 
 Open the address from setup, sign in, and create your first profile. Its welcome helps you pick a
 model and personalize the assistant. Admins manage providers and models under **Models & keys**.
@@ -117,8 +117,10 @@ administrator; joining a profile doesn't send an email invitation.
 
 > [!IMPORTANT]
 > nolune is built for people you trust. The agent runs commands with your host account's permissions,
-> without a sandbox or approval step. Profiles organize access in the web app; they do not isolate
-> the agent from files on the computer. Everyone in a shared profile can read its chats and memory.
+> without a sandbox. In auto mode, the default, a model checks each command before it runs and
+> blocks what could do harm nobody asked for; it's a safeguard against mistakes and manipulation,
+> not a sandbox. Profiles organize access in the web app; they do not isolate the agent from files
+> on the computer. Everyone in a shared profile can read its chats and memory.
 
 ## Your computer, your setup
 

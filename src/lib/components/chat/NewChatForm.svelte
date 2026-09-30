@@ -1,10 +1,13 @@
 <script lang="ts">
 	import { onMount, untrack, type Snippet } from 'svelte';
 	import { enhance } from '$app/forms';
+	import { page } from '$app/state';
+	import type { CommandMode } from '@nolune/core';
 	import type { Avatar } from '@nolune/core/avatars';
 	import type { FolderItem } from '$lib/folders';
 	import { getI18n } from '$lib/i18n';
 	import { Attachments } from '$lib/uploads.svelte';
+	import CommandModeMenu from './CommandModeMenu.svelte';
 	import Composer from './Composer.svelte';
 	import FolderMenu from './FolderMenu.svelte';
 	import ModelMenu from './ModelMenu.svelte';
@@ -20,6 +23,8 @@
 		folderId: string | null;
 		/** The profile's assistant, for the reasoning slider. */
 		avatar: Avatar;
+		/** How commands run in Models & keys, which a new chat starts with. */
+		commandFallback: CommandMode;
 		placeholder?: string;
 		autofocus?: boolean;
 		class?: string;
@@ -42,6 +47,7 @@
 		folders,
 		folderId: initialFolderId,
 		avatar,
+		commandFallback,
 		placeholder = m.chat.placeholder,
 		autofocus = false,
 		class: className,
@@ -58,6 +64,8 @@
 	const attachments = new Attachments(() => slug, m);
 	let presetId = $state(untrack(() => defaultPresetId));
 	let effort = $state('medium');
+	/** Never remembered: every new chat starts as Models & keys says. */
+	let commands = $state<CommandMode>(untrack(() => commandFallback));
 	// Follows the page (`?folder=`) until someone picks another folder in the chip.
 	let folderId = $derived(initialFolderId);
 	let submitting = $state(false);
@@ -109,6 +117,7 @@
 	<input type="hidden" name="preset" value={presetId} />
 	<input type="hidden" name="effort" value={effort} />
 	<input type="hidden" name="folder" value={folderId ?? ''} />
+	<input type="hidden" name="commands" value={commands} />
 	{#each attachments.ids as id (id)}
 		<input type="hidden" name="upload" value={id} />
 	{/each}
@@ -140,6 +149,12 @@
 					{avatar}
 				/>
 				<FolderMenu {folders} {folderId} {slug} onchange={(id) => (folderId = id)} />
+				<CommandModeMenu
+					mode={commands}
+					fallback={commandFallback}
+					canUnrestrict={page.data.user?.isAdmin === true}
+					onchange={(mode) => (commands = mode)}
+				/>
 			{/snippet}
 		</Composer>
 

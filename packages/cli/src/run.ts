@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { userInfo } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
@@ -21,7 +22,9 @@ import {
 	createSkill,
 	createUser,
 	deleteUser,
+	describeCommandSafety,
 	effectiveContextWindow,
+	findPreset,
 	generatePassword,
 	getDb,
 	getDefaultPreset,
@@ -34,6 +37,7 @@ import {
 	initConfig,
 	installCliShim,
 	isApiKeyProvider,
+	isCommandMode,
 	isCustomProvider,
 	isProvider,
 	providerFor,
@@ -50,7 +54,9 @@ import {
 	removeCustomProvider,
 	removePreset,
 	saveApiKey,
+	saveCommandMode,
 	saveCustomProvider,
+	saveSafetyPreset,
 	scanSkills,
 	setAdmin,
 	setDefaultPreset,
@@ -75,7 +81,7 @@ import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
 	installService,
 	logFile,
-	renderPlist,
+	renderServiceFile,
 	restartService,
 	serviceStatus,
 	uninstallService
@@ -90,7 +96,7 @@ Getting started
                                              web asks for one, or use key set and preset add below
   nolune start                               run the gateway in the foreground
   nolune service install|uninstall|restart|status|logs [-f]
-                                             run it in the background at login (macOS)
+                                             run it in the background (macOS, or Linux with systemd)
 
 Settings (${paths.home})
   nolune config                                 show address, port and what's configured
@@ -104,6 +110,13 @@ Settings (${paths.home})
   nolune config set claude-path <path>          the Claude Code that claude-plan chats run, and the
   nolune config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
+  nolune config set command-mode <auto|unrestricted>
+                                             auto (the default): a model checks each command the
+                                             agent runs and blocks what could do harm nobody asked
+                                             for; unrestricted runs them unchecked (not
+                                             recommended). Not from the agent's own commands
+  nolune config set safety-model <preset|chat>  the preset whose model does auto mode's checks, or
+                                             chat for each chat's own model (the default)
   nolune key set <anthropic|openai|openrouter> [key]
                                              store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
@@ -333,8 +346,10 @@ function listenAddress() {
 	};
 }
 
+/** macOS keeps background processes out of these folders; elsewhere there's nothing to say. */
 function fullDiskAccessHint(): string {
-	return `To let the agent reach Documents, Desktop, Downloads, Photos and Mail, give Full Disk Access to
+	if (process.platform !== 'darwin') return '';
+	return `\n\nTo let the agent reach Documents, Desktop, Downloads, Photos and Mail, give Full Disk Access to
   ${process.execPath}
   in System Settings > Privacy & Security > Full Disk Access (click +, press Cmd+Shift+G, paste the path).
   Note: this applies to every script run with that node binary.`;
@@ -395,9 +410,7 @@ then the model). Or add one under Models & keys, or with \`nolune key set\` and 
 
 The gateway listens on http://${current.host}:${port}. To reach it from outside your home, point a
 tunnel at that address (Tailscale Funnel, Cloudflare Tunnel, or your own VPS) and set its URL with
-\`nolune config set origin https://...\`.
-
-${fullDiskAccessHint()}`);
+\`nolune config set origin https://...\`.${fullDiskAccessHint()}`);
 }
 
 /** Runs the gateway in this process, so it only makes sense in a process of its own. */
@@ -429,17 +442,21 @@ async function service(io: Io, action: string | undefined, args: string[]): Prom
 			if (!existsSync(paths.server))
 				fail('no server build. In a source checkout, run `pnpm build` first.');
 			if (args.includes('--dry-run')) {
-				io.log(renderPlist());
+				io.log(renderServiceFile());
 				return;
 			}
-			const plist = await installService();
+			const { file, atBoot } = await installService();
 			const { origin } = listenAddress();
-			io.log(`Installed ${plist}
-The gateway starts now and at every login: ${origin}
+			// A Linux user whose services don't linger has them stopped at their last logout.
+			const linger =
+				atBoot || process.platform !== 'linux'
+					? ''
+					: `\n\nIt stops when you log out. To keep it running whenever this computer is on, run
+  sudo loginctl enable-linger ${userInfo().username}`;
+			io.log(`Installed ${file}
+The gateway starts now and ${atBoot ? 'whenever this computer starts' : 'at every login'}: ${origin}
 Logs: ${logFile}
-It runs with ${process.execPath}; run \`nolune service install\` again after switching Node versions.
-
-${fullDiskAccessHint()}`);
+It runs with ${process.execPath}; run \`nolune service install\` again after switching Node versions.${fullDiskAccessHint()}${linger}`);
 			return;
 		}
 		case 'uninstall':
@@ -561,19 +578,46 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				const images = imageGenerationStatus();
 				row('images', `${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				row('embeddings', embeddingStatus());
+				row('commands', describeCommandSafety());
 				row('env', Object.keys(config.commandEnv ?? {}).join(', ') || '-');
 				return;
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|codex-path> <value>]'
+					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|codex-path|command-mode|safety-model> <value>]'
 				);
 			}
 			const key = positional(
 				rest,
 				0,
-				'host|port|origin|image-model|embeddings|claude-path|codex-path'
+				'host|port|origin|image-model|embeddings|claude-path|codex-path|command-mode|safety-model'
 			);
+			if (key === 'command-mode' || key === 'safety-model') {
+				// Auto mode guards against the agent itself, so it can't be the one to turn it off.
+				if (io.env.NOLUNE_CONVERSATION_ID) {
+					fail(
+						"the agent can't change how its own commands are checked. Someone can, at this computer's terminal or on the Models & keys page."
+					);
+				}
+				if (key === 'command-mode') {
+					const mode = positional(rest, 1, 'auto|unrestricted');
+					if (!isCommandMode(mode)) fail('command-mode is auto or unrestricted');
+					saveCommandMode(mode);
+				} else {
+					const which = positional(rest, 1, 'preset|chat');
+					let id: string | null = null;
+					if (which !== 'chat') {
+						try {
+							id = findPreset(which).id;
+						} catch (err) {
+							fail(`${(err as Error).message}. \`nolune preset list\` shows them.`);
+						}
+					}
+					saveSafetyPreset(id);
+				}
+				io.log(`Commands: ${describeCommandSafety()}.`);
+				return;
+			}
 			if (key === 'embeddings') {
 				let setting: ReturnType<typeof parseEmbeddingSetting>;
 				try {
@@ -604,7 +648,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				else if (key === 'codex-path') c.codexPath = value;
 				else
 					fail(
-						'you can set host, port, origin, image-model, embeddings, claude-path or codex-path'
+						'you can set host, port, origin, image-model, embeddings, claude-path, codex-path, command-mode or safety-model'
 					);
 			});
 			if (key === 'claude-path') {

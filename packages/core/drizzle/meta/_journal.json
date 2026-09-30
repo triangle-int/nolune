@@ -127,6 +127,13 @@
 			"when": 1790588162889,
 			"tag": "0017_member_person_note",
 			"breakpoints": true
+		},
+		{
+			"idx": 18,
+			"version": "6",
+			"when": 1790730907227,
+			"tag": "0018_chat_command_mode",
+			"breakpoints": true
 		}
 	]
 }

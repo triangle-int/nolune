@@ -5,7 +5,7 @@ description: Install nolune, connect a model and add the family.
 
 ## What you need
 
-- **macOS** (Linux works without the background service) and **Node.js 22.18** or later.
+- **macOS or Linux** (the background service needs systemd there) and **Node.js 22.18** or later.
 - **A model connection**, any of these:
   - an [Anthropic API key](https://console.anthropic.com/), an
     [OpenAI API key](https://platform.openai.com/api-keys) or an
@@ -24,11 +24,11 @@ description: Install nolune, connect a model and add the family.
 npm install -g nolune
 nolune setup                   # your account and the public URL
 nolune key set openai          # optional: GPT models for chats, and pictures (Images page)
-nolune service install         # run in the background, start at login
+nolune service install         # run in the background: a LaunchAgent on macOS, systemd on Linux
 nolune user create Anna anna@example.com   # add family members (prints their password)
 ```
 
-On Linux, run `nolune start` instead of `nolune service install`.
+Without systemd, run `nolune start` under your own process manager instead.
 
 Then open the address `nolune setup` printed, sign in and make a profile: its welcome asks for a
 model, on an API key or a plan. As the admin you can also add or replace API keys, sign in with
@@ -41,6 +41,14 @@ you give the `node` binary Full Disk Access (System Settings > Privacy & Securit
 Access). `nolune setup` prints the exact path.
 
 **Keep the Mac awake** if people should reach it at any time (System Settings > Energy).
+
+## On Linux
+
+`nolune service install` writes a systemd user service (`~/.config/systemd/user/nolune.service`,
+systemd 240 or later) and turns on lingering for your user, so it runs from boot whether you're
+logged in or not. Where that needs an admin, it prints the `sudo loginctl enable-linger` command.
+Run it from your own login, not with `sudo` or `su`, which leave no user systemd to talk to.
+`systemctl --user status nolune` works too.
 
 ## Reaching it from other devices
 
