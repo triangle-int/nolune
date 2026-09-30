@@ -1,4 +1,4 @@
-import { categoryOf, titleIn } from '@nolune/core/memory-categories';
+import { categoryOf, isCardPath, titleIn } from '@nolune/core/memory-categories';
 import type { Messages } from '$lib/i18n';
 
 /** A note's name as a topic: `people/anna-smith.md` is "Anna smith". */
@@ -14,9 +14,10 @@ export function memoryTopic(path: string): string {
 /**
  * A note's name as people read it: a category's in their language ("Планы" for plans.md), a
  * person's or project's by its title when there's `text` ("Olga" for people/grandma.md with
- * `# Olga`), anything else by its file name.
+ * `# Olga`), a card by its owner ("Anna's card"), anything else by its file name.
  */
 export function memoryTitle(m: Messages, path: string, text?: string): string {
+	if (isCardPath(path)) return m.memory.cards.title((text && titleIn(text)) || memoryTopic(path));
 	const category = categoryOf(path);
 	if (category && !path.includes('/')) return m.memory.categories[category];
 	return (category && text && titleIn(text)) || memoryTopic(path);

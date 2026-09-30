@@ -11,6 +11,7 @@ import {
 	checkApiKey,
 	claudePlanStatus,
 	getDefaultPreset,
+	cardOf,
 	importMemoryExport,
 	isApiKeyProvider,
 	isPlan,
@@ -144,9 +145,16 @@ export const actions: Actions = {
 			}
 			if (!facts.length) return fail(400, { rememberError: m.welcome.memory.nothingFound });
 		}
-		// Into their note, unless it isn't known yet which one is theirs.
+		// Onto their card while it has room, then into their note, unless it isn't known yet which
+		// one is theirs.
 		const note = membersWithNotes(profile).find((member) => member.id === user.id)?.note;
-		const result = importMemoryExport(profile.slug, user.name, facts, note ?? undefined);
+		const result = importMemoryExport(
+			profile.slug,
+			user.name,
+			facts,
+			note ?? undefined,
+			cardOf(user.id)
+		);
 		console.log(
 			`[nolune] ${profile.slug} imported ${result.added} memories for ${user.name} (${result.skipped} already known)`
 		);

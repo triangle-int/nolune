@@ -382,7 +382,11 @@ export function cardChanges(card: Card, limit = 50): CardChange[] {
 export function keepOnlyInProfile(
 	changeId: number,
 	userId: string
-): { profile: { id: string; slug: string; name: string }; note: string } {
+): {
+	profile: { id: string; slug: string; name: string };
+	note: string;
+	conversationId: string | null;
+} {
 	const db = getDb();
 	const row = db.select().from(memoryChange).where(eq(memoryChange.id, changeId)).get();
 	const card = row ? cardByPath(row.note) : null;
@@ -410,7 +414,7 @@ export function keepOnlyInProfile(
 		.where(eq(memoryChange.id, changeId))
 		.run();
 	const { note, ...profile } = target;
-	return { profile, note };
+	return { profile, note, conversationId: row.conversationId };
 }
 
 // --- Starting a card from the notes people have ---

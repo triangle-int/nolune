@@ -165,6 +165,7 @@ export const de: Messages = {
 		account: 'Konto',
 		settings: 'Einstellungen',
 		allProfiles: 'Alle Profile',
+		card: 'Deine Karte',
 		modelsAndKeys: 'Modelle & Schlüssel',
 		logOut: 'Abmelden'
 	},
@@ -529,6 +530,24 @@ export const de: Messages = {
 		unsortedHint:
 			'Aus der Zeit, bevor das Gedächtnis Kategorien hatte: nolune liest sie, fügt aber nichts hinzu. Verschiebe sie in eine Kategorie, damit sie weiterwächst.',
 		memberNote: (name: string) => `Mitglied: ${name}`,
+		/** Members' cards: a note each that goes with them into all their profiles. */
+		cards: {
+			group: 'Karten',
+			title: (name: string) => `Karte von ${name}`,
+			yours: 'Deine Karte',
+			intro:
+				'Auf der Karte jedes Mitglieds steht, was es nolune über sich selbst erzählt hat und jedem erzählen würde. Sie geht mit in jedes Profil, in dem es ist, und jeder Chat beginnt mit ihr. Nur das Mitglied selbst ändert sie.',
+			everywhere: 'geht mit in alle Profile der Person',
+			yoursEverywhere: 'geht mit dir in alle deine Profile',
+			readBy: (profiles: string[]) => `Alle in ${list(profiles)} können sie lesen.`,
+			empty: (name: string) => `Die Karte von ${name} ist noch leer.`,
+			yoursEmpty:
+				'Deine Karte ist noch leer. Erzähl nolune in einem beliebigen Chat von dir, etwa „Ich bin Vegetarier“, und es kommt auf deine Karte, für alle deine Profile.',
+			edit: 'Deine Karte bearbeiten',
+			make: 'Leg deine Karte an',
+			makeHint: (n: number) =>
+				`Deine Notizen in deinen Profilen sagen schon ${p(n, { one: `${n} Sache`, other: `${n} Dinge` })} über dich. Such aus, was überallhin mitgehen soll.`
+		},
 		move: {
 			button: (topic: string) => `${topic} verschieben`,
 			title: (topic: string) => `„${topic}“ verschieben`,
@@ -561,6 +580,10 @@ export const de: Messages = {
 			changedSince:
 				'Das wurde inzwischen geändert und lässt sich hier nicht rückgängig machen. Bearbeite die Notiz auf der Gedächtnis-Seite.',
 			alreadyUndone: 'Das wurde schon rückgängig gemacht.',
+			keepHere: 'Nur hier behalten',
+			keepHereHint: (profile: string) =>
+				`Von deiner Karte nehmen und nur in deiner Notiz in ${profile} behalten`,
+			ownerOnly: (name: string) => `Nur ${name} kann das rückgängig machen.`,
 			recent: 'Aus Chats gespeichert',
 			recentHint:
 				'Was nolune sich von selbst notiert hat, wenn Chats still wurden, in den letzten zwei Wochen.',
@@ -568,6 +591,45 @@ export const de: Messages = {
 			deletedChat: 'aus einem gelöschten Chat',
 			showAll: (n: number) => `Alle ${n} zeigen`,
 			untitled: 'einem Chat'
+		}
+	},
+
+	/** The person's own card, on a page of its own. */
+	card: {
+		title: 'Deine Karte',
+		intro:
+			'Was nolune über dich weiß, wo immer du bist: welche Sprachen du sprichst, was du isst, wie du Antworten magst. Sie geht mit dir in jedes Profil, in dem du bist, und jeder neue Chat dort beginnt mit ihr. Nur was du selbst über dich sagst, kommt darauf, und nur du änderst sie hier.',
+		readBy: (profiles: string[]) => `Alle in ${list(profiles)} können sie lesen.`,
+		inNoProfile: 'Du bist noch in keinem Profil, also liest sie niemand.',
+		empty:
+			'Noch leer. Erzähl nolune in einem Chat von dir, oder hol unten herein, was deine Notizen in deinen Profilen schon sagen.',
+		placeholder:
+			'Zum Beispiel:\n- Spricht Deutsch und Englisch\n- Vegetarier\n- Mag kurze Antworten, in metrischen Einheiten',
+		edit: 'Bearbeiten',
+		emptyText: 'Deine Karte ist leer. Zum Leeren nimm „Leeren“.',
+		saved: 'Gespeichert. Neue Chats in all deinen Profilen sehen es.',
+		clear: 'Leeren',
+		clearTitle: 'Deine Karte leeren?',
+		clearBody:
+			'nolune vergisst, was auf deiner Karte steht, in all deinen Profilen. Chats, die schon laufen, behalten, was sie gelesen haben.',
+		cleared: 'Deine Karte ist jetzt leer.',
+		bring: {
+			title: 'Aus deinen Notizen holen',
+			intro:
+				'Was deine Notizen in deinen Profilen über dich sagen. Angehakt ist, was mehrere davon sagen, und deine in einem Profil angehefteten Regeln. Was du hinzufügst, wandert auf deine Karte und aus den Notizen, aus denen es kam: Die lesen jetzt deine Karte. Wer du für die Leute in einem Profil bist und wie sie dich dort nennen, bleibt dort.',
+			rule: 'deine Regel',
+			add: (n: number) => `${n} auf deine Karte`,
+			added: (n: number, left: number) =>
+				n || left
+					? `${p(n, { one: `${n} Sache`, other: `${n} Dinge` })} auf deine Karte gebracht.${left ? ` ${left} ${left === 1 ? 'passte' : 'passten'} nicht mehr drauf: Sie hält ein paar Dinge, nicht alles.` : ''}`
+					: 'Nichts hinzugefügt.'
+		},
+		changes: {
+			title: 'Was nolune geändert hat',
+			intro:
+				'Was nolune in Chats auf deine Karte geschrieben hat, in einem deiner Profile. Woher es jeweils kam, siehst nur du.',
+			inProfile: 'in {profile}',
+			fromChat: 'in {profile}, aus {chat}'
 		}
 	},
 
