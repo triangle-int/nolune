@@ -1504,9 +1504,14 @@ nothing, and opening the page again runs it again.
   comes up. A click or Esc skips it, and with reduced motion it opens on the welcome.
 - **A model, only when there is none** (`ModelStep.svelte`). Five cards: the Claude plan, the
   ChatGPT plan, and an Anthropic, OpenAI or OpenRouter key. A key is checked and saved as on Models
-  & keys (a key already set skips pasting); a plan's sign-in is checked, and when its agent isn't
-  installed or signed in the step says what's wrong and points to Models & keys, where the sign-in
-  lives. Then chips with the provider's first six models (or a typed id) make the first preset,
+  & keys (a key already set skips pasting); a plan's sign-in is checked. The Claude plan, when
+  Claude Code isn't installed or signed in, says what's wrong and points to Models & keys. The
+  ChatGPT plan signs in right in the step, through `/api/chatgpt/sign-in`: it starts a sign-in (or
+  follows one already under way), and **Continue with ChatGPT** opens OpenAI's page in a new tab.
+  The step asks every 2 seconds until the sign-in ends and then moves on by itself. The address a
+  browser on another device ends on can be pasted there too, and "Use another account" is offered
+  after a sign-out, or when the account signed in can't use its plan. Then chips with the
+  provider's first six models (or a typed id) make the first preset,
   which becomes the default. Only admins can add one; anyone else is told to ask and carries on.
 - **The avatar.** `AvatarPicker` in its big layout, starting on the avatar the slug picked. A
   tile only previews; "This one" saves it. The page then takes on the avatar's tint, which grows

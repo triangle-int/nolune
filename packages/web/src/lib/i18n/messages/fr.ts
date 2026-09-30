@@ -796,7 +796,18 @@ export const fr: Messages = {
 			checkAgain: 'Vérifier à nouveau',
 			pickModel: 'Avec quel modèle les nouvelles discussions doivent-elles commencer ?',
 			asking: 'Récupération des modèles…',
-			modelId: 'Identifiant du modèle'
+			modelId: 'Identifiant du modèle',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Se connecter avec ChatGPT',
+				about:
+					'Connectez-vous sur la page de ChatGPT et autorisez nolune à utiliser votre abonnement Plus ou Pro. Les discussions compteront alors dans l’utilisation de l’abonnement, comme dans ChatGPT.',
+				newTab: 'La page de connexion de ChatGPT s’ouvre dans un nouvel onglet.',
+				waiting: 'Une fois connecté là-bas, cette page continue toute seule.',
+				starting: 'Préparation de la page de connexion de ChatGPT…',
+				tryAgain: 'Réessayer',
+				otherDevice: 'Vous vous connectez sur un autre appareil ?'
+			}
 		},
 		avatar: {
 			title: 'Qui dois-je être ?',

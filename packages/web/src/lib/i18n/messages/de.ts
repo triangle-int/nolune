@@ -784,7 +784,18 @@ export const de: Messages = {
 			checkAgain: 'Noch einmal prüfen',
 			pickModel: 'Mit welchem Modell sollen neue Chats beginnen?',
 			asking: 'Frage nach den Modellen…',
-			modelId: 'Modell-ID'
+			modelId: 'Modell-ID',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Mit ChatGPT anmelden',
+				about:
+					'Melde dich auf der Seite von ChatGPT an und erlaube nolune, dein Plus- oder Pro-Abo zu nutzen. Chats zählen dann zur Nutzung des Abos, wie bei ChatGPT selbst.',
+				newTab: 'Die Anmeldeseite von ChatGPT öffnet sich in einem neuen Tab.',
+				waiting: 'Sobald du dort angemeldet bist, geht es hier von selbst weiter.',
+				starting: 'Die Anmeldeseite von ChatGPT wird vorbereitet…',
+				tryAgain: 'Erneut versuchen',
+				otherDevice: 'Meldest du dich auf einem anderen Gerät an?'
+			}
 		},
 		avatar: {
 			title: 'Wer soll ich sein?',

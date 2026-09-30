@@ -74,7 +74,10 @@ export const actions: Actions = {
 		}
 	},
 
-	/** Whether a plan's agent is installed and signed in. Signing in happens on Models & keys. */
+	/**
+	 * Whether a plan is signed in and works. The Claude plan signs in on Models & keys or in a
+	 * terminal; the ChatGPT plan right in the step (/api/chatgpt/sign-in).
+	 */
 	plan: async ({ locals, request }) => {
 		requireAdmin(locals);
 		const plan = (await request.formData()).get('plan')?.toString() ?? '';
@@ -87,7 +90,10 @@ export const actions: Actions = {
 			plan,
 			planError:
 				status.problem ?? (plan === 'claude-plan' ? m.admin.claudeNoAnswer : m.admin.chatgptNobody),
-			// Only Claude Code is installed; the ChatGPT plan is signed in to on Models & keys.
+			// Who's signed in anyway: the step says what's wrong with their plan rather than asking
+			// someone to sign in.
+			signedIn: status.signedIn,
+			// Only Claude Code is installed.
 			installCommand: status.installed ? null : CLAUDE_INSTALL_COMMAND
 		});
 	},

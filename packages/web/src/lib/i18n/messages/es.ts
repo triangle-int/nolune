@@ -799,7 +799,18 @@ export const es: Messages = {
 			checkAgain: 'Volver a comprobar',
 			pickModel: '¿Con qué modelo deben empezar los chats nuevos?',
 			asking: 'Pidiendo los modelos…',
-			modelId: 'ID del modelo'
+			modelId: 'ID del modelo',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Iniciar sesión con ChatGPT',
+				about:
+					'Inicia sesión en la página de ChatGPT y permite que nolune use tu plan Plus o Pro. Los chats contarán para el uso del plan, como en el propio ChatGPT.',
+				newTab: 'La página de inicio de sesión de ChatGPT se abre en una pestaña nueva.',
+				waiting: 'En cuanto inicies sesión allí, esta página seguirá sola.',
+				starting: 'Preparando la página de inicio de sesión de ChatGPT…',
+				tryAgain: 'Intentarlo de nuevo',
+				otherDevice: '¿Inicias sesión en otro dispositivo?'
+			}
 		},
 		avatar: {
 			title: '¿Quién debo ser?',

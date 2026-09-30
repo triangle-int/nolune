@@ -716,7 +716,18 @@ export const en = {
 			checkAgain: 'Check again',
 			pickModel: 'Which model should new chats start with?',
 			asking: 'Asking for the models…',
-			modelId: 'Model id'
+			modelId: 'Model id',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Sign in with ChatGPT',
+				about:
+					"Sign in on ChatGPT's page and allow nolune to use your Plus or Pro plan. Chats then count toward the plan's usage, like ChatGPT's own.",
+				newTab: "ChatGPT's sign-in page opens in a new tab.",
+				waiting: "Once you've signed in there, this page goes on by itself.",
+				starting: "Getting ChatGPT's sign-in page ready…",
+				tryAgain: 'Try again',
+				otherDevice: 'Signing in on another device?'
+			}
 		},
 		avatar: {
 			title: 'Who should I be?',

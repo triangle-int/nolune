@@ -860,7 +860,18 @@ export const ru: Messages = {
 			checkAgain: 'Проверить ещё раз',
 			pickModel: 'С какой модели начинать новые чаты?',
 			asking: 'Запрашиваю список моделей…',
-			modelId: 'ID модели'
+			modelId: 'ID модели',
+			/** Signing in with ChatGPT right in the step. */
+			chatgpt: {
+				title: 'Вход через ChatGPT',
+				about:
+					'Войдите на странице ChatGPT и разрешите nolune пользоваться вашей подпиской Plus или Pro. Чаты будут расходовать её лимиты, как и сам ChatGPT.',
+				newTab: 'Страница входа ChatGPT откроется в новой вкладке.',
+				waiting: 'Когда войдёте там, эта страница продолжит сама.',
+				starting: 'Готовим страницу входа ChatGPT…',
+				tryAgain: 'Попробовать снова',
+				otherDevice: 'Входите с другого устройства?'
+			}
 		},
 		avatar: {
 			title: 'Кем мне быть?',
