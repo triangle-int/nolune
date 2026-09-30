@@ -834,7 +834,8 @@ export const de: Messages = {
 				openrouter: {
 					title: 'OpenRouter-API-Schlüssel',
 					about: 'Claude, GPT, Gemini und mehr mit einem Schlüssel'
-				}
+				},
+				xai: { title: 'xAI-API-Schlüssel', about: 'Grok-Modelle, nach Verbrauch bezahlt' }
 			},
 			checkingPlan: 'Anmeldung wird geprüft…',
 			pasteKey: (label: string) => `Füge deinen ${label}-Schlüssel ein`,
@@ -927,7 +928,8 @@ export const de: Messages = {
 			openai:
 				'Für Chats und Automationen mit OpenAI-Modellen und zum Erstellen von Bildern auf der Seite „Bilder“ und wenn der Agent zeichnet.',
 			openrouter:
-				'Für Chats und Automationen mit den Modellen, die OpenRouter anbietet (Claude, GPT, Gemini, DeepSeek und viele mehr), mit einem Schlüssel und dessen Guthaben.'
+				'Für Chats und Automationen mit den Modellen, die OpenRouter anbietet (Claude, GPT, Gemini, DeepSeek und viele mehr), mit einem Schlüssel und dessen Guthaben.',
+			xai: 'Für Chats und Automationen mit den Grok-Modellen von xAI.'
 		},
 		withoutIt: {
 			anthropic:
@@ -935,7 +937,8 @@ export const de: Messages = {
 			openai:
 				'Chats und Automationen mit OpenAI-Modellen funktionieren nicht mehr, und nolune kann keine Bilder erstellen, bis ein neuer Schlüssel hinzugefügt wird.',
 			openrouter:
-				'Chats und Automationen mit OpenRouter-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.'
+				'Chats und Automationen mit OpenRouter-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.',
+			xai: 'Chats und Automationen mit Grok-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`In nolune gespeichert${hint ? `, endet auf ${hint}` : ''}`,
@@ -1022,6 +1025,7 @@ export const de: Messages = {
 				openai: 'OpenAI meldet es nicht: Auto kennt nur das der Flaggschiffe (1,05M seit GPT-5.4).',
 				openrouter:
 					'Auto verwendet das Fenster, das OpenRouter für das Modell und seinen Hauptanbieter angibt.',
+				xai: 'Auto verwendet das Fenster, das xAI für das Modell angibt.',
 				'custom-openai':
 					'Auto verwendet das Fenster, das der Server für das Modell angibt, falls er eines angibt (vLLM tut es); sonst bleibt es offen.',
 				'custom-anthropic':

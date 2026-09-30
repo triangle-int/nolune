@@ -3,10 +3,12 @@ import * as anthropic from './anthropic.ts';
 import * as claudePlan from './claude-plan.ts';
 import * as chatgptPlan from './chatgpt-plan.ts';
 import type { Usage } from './conversations.ts';
+import type { ImageMediaType } from './images.ts';
 import * as custom from './custom-providers.ts';
 import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
 import * as openrouter from './openrouter.ts';
+import * as xai from './xai.ts';
 import {
 	PlanError,
 	isAgentPlan,
@@ -25,7 +27,8 @@ import {
  *
  * The Claude plan is the exception (plans.ts): Claude Code runs the agent loop, so the runner
  * hands it whole turns (runPlanTurn) rather than calling streamTurn. Chats on the ChatGPT plan
- * are OpenAI's, with the plan's sign-in instead of a key (chatgpt-plan.ts).
+ * are OpenAI's, with the plan's sign-in instead of a key (chatgpt-plan.ts), and so are chats on
+ * xAI's Grok models, whose API is OpenAI's Responses API at xAI (xai.ts).
  */
 
 /**
@@ -37,6 +40,7 @@ export const PROVIDERS = [
 	'anthropic',
 	'openai',
 	'openrouter',
+	'xai',
 	'custom-openai',
 	'custom-anthropic',
 	'claude-plan',
@@ -53,6 +57,7 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
 	anthropic: 'Anthropic',
 	openai: 'OpenAI',
 	openrouter: 'OpenRouter',
+	xai: 'xAI',
 	'custom-openai': custom.CUSTOM_LABELS['custom-openai'],
 	'custom-anthropic': custom.CUSTOM_LABELS['custom-anthropic'],
 	'claude-plan': 'Claude plan',
@@ -127,14 +132,22 @@ export async function streamTurn(opts: {
 		const reply = await openrouter.streamTurn({ ...request, cacheKey });
 		return fromContent(reply.content, reply.stopReason, reply.usage);
 	}
-	if (provider === 'openai' || provider === 'custom-openai' || provider === 'chatgpt-plan') {
-		// A custom provider's chats are OpenAI's with its own client, and the plan's with its sign-in.
+	if (
+		provider === 'openai' ||
+		provider === 'custom-openai' ||
+		provider === 'chatgpt-plan' ||
+		provider === 'xai'
+	) {
+		// A custom provider's chats are OpenAI's with its own client, the plan's with its sign-in,
+		// and xAI's at xAI.
 		const response =
 			provider === 'openai'
 				? await openai.streamResponse({ ...request, cacheKey })
 				: provider === 'chatgpt-plan'
 					? await chatgptPlan.streamResponse({ ...request, cacheKey })
-					: await custom.streamResponse({ ...request, cacheKey });
+					: provider === 'xai'
+						? await xai.streamResponse({ ...request, cacheKey })
+						: await custom.streamResponse({ ...request, cacheKey });
 		return fromContent(
 			response.output ?? [],
 			openai.stopReason(response),
@@ -175,14 +188,17 @@ export async function quickReply(opts: {
 	if (
 		opts.provider === 'openai' ||
 		opts.provider === 'custom-openai' ||
-		opts.provider === 'chatgpt-plan'
+		opts.provider === 'chatgpt-plan' ||
+		opts.provider === 'xai'
 	) {
 		const response =
 			opts.provider === 'openai'
 				? await openai.createResponse(opts)
 				: opts.provider === 'chatgpt-plan'
 					? await chatgptPlan.createResponse(opts)
-					: await custom.createResponse(opts);
+					: opts.provider === 'xai'
+						? await xai.createResponse(opts)
+						: await custom.createResponse(opts);
 		const usage = openai.summarizeUsage(response.usage);
 		if (openai.stopReason(response) !== 'end_turn') return { text: null, usage };
 		const text = textOf(response.output ?? []);
@@ -231,16 +247,25 @@ export function countDocumentTokens(
 
 /**
  * What the model can be sent besides text. Every model of Anthropic's, OpenAI's and the plans
- * sees pictures and reads PDFs; OpenRouter says per model; custom providers' models get them as
- * their paths.
+ * sees pictures and reads PDFs; OpenRouter says per model; xAI's models that see pictures get
+ * them, and PDFs as their paths; custom providers' models get them all as their paths.
  */
 export async function modelInputs(
 	provider: Provider,
 	model: string
 ): Promise<{ pictures: boolean; pdfs: boolean }> {
 	if (provider === 'openrouter') return openrouter.modelInputs(model);
+	if (provider === 'xai') return xai.modelInputs(model);
 	if (custom.isCustomProvider(provider)) return custom.modelInputs();
 	return { pictures: true, pdfs: true };
+}
+
+/**
+ * The picture formats the provider takes, when that isn't all of nolune's (JPEG, PNG, GIF, WebP):
+ * xAI takes JPEG and PNG. Pictures in the others are converted before they're sent.
+ */
+export function pictureTypes(provider: Provider): readonly ImageMediaType[] | undefined {
+	return provider === 'xai' ? xai.PICTURE_TYPES : undefined;
 }
 
 /**
@@ -255,6 +280,7 @@ export function readableMessages(
 	messages: Message[]
 ): Promise<Message[]> {
 	if (provider === 'openrouter') return openrouter.readableMessages(messages, model);
+	if (provider === 'xai') return xai.readableMessages(messages, model);
 	if (custom.isCustomProvider(provider)) return custom.readableMessages(messages, model);
 	return Promise.resolve(messages);
 }
@@ -276,6 +302,7 @@ export async function fetchContextWindow(
 	}
 	if (provider === 'chatgpt-plan') return chatgptPlan.fetchContextWindow(model);
 	if (provider === 'openrouter') return openrouter.fetchContextWindow(model);
+	if (provider === 'xai') return xai.fetchContextWindow(model);
 	if (custom.isCustomProvider(provider)) return custom.fetchContextWindow(provider, model);
 	return provider === 'openai'
 		? openai.fetchContextWindow(model)
@@ -303,6 +330,7 @@ export async function listModels(provider: Provider, customId = ''): Promise<Mod
 	if (provider === 'claude-plan') return claudePlan.listModels();
 	if (provider === 'chatgpt-plan') return chatgptPlan.listModels();
 	if (provider === 'openrouter') return openrouter.listModels();
+	if (provider === 'xai') return xai.listModels();
 	if (custom.isCustomProvider(provider)) return custom.listModels(customId);
 	return provider === 'openai' ? openai.listModels() : anthropic.listModels();
 }
@@ -310,10 +338,11 @@ export async function listModels(provider: Provider, customId = ''): Promise<Mod
 /** Plans say what went wrong in their own words (plans.ts). */
 export function describeApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
-	// A custom provider's errors are OpenAI's or Anthropic's SDK's classes, and OpenRouter's are
-	// OpenAI's, so they're asked first.
+	// A custom provider's errors are OpenAI's or Anthropic's SDK's classes, and OpenRouter's and
+	// xAI's are OpenAI's, so they're asked first.
 	if (custom.isCustomProviderError(err)) return custom.describeApiError(err);
 	if (openrouter.isOpenRouterError(err)) return openrouter.describeApiError(err);
+	if (xai.isXaiError(err)) return xai.describeApiError(err);
 	return openai.isOpenAIError(err) ? openai.describeApiError(err) : anthropic.describeApiError(err);
 }
 
@@ -322,6 +351,7 @@ export function shortApiError(err: unknown): string {
 	if (err instanceof PlanError) return err.message;
 	if (custom.isCustomProviderError(err)) return custom.shortApiError(err);
 	if (openrouter.isOpenRouterError(err)) return openrouter.shortApiError(err);
+	if (xai.isXaiError(err)) return xai.shortApiError(err);
 	return openai.isOpenAIError(err) ? openai.shortApiError(err) : anthropic.shortApiError(err);
 }
 

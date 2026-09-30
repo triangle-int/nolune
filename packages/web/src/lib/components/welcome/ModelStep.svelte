@@ -31,7 +31,8 @@
 		{ id: 'chatgpt-plan', icon: MessageCircleIcon },
 		{ id: 'anthropic', icon: KeyRoundIcon },
 		{ id: 'openai', icon: KeyRoundIcon },
-		{ id: 'openrouter', icon: KeyRoundIcon }
+		{ id: 'openrouter', icon: KeyRoundIcon },
+		{ id: 'xai', icon: KeyRoundIcon }
 	];
 	/** How many of the provider's models are offered as chips; the rest can be typed. */
 	const SHOWN = 6;

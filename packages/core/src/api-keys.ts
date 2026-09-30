@@ -1,6 +1,7 @@
 import { API_KEYS, configuredApiKey, updateConfig, type ApiKeyProvider } from './config.ts';
 import { openaiBaseUrl } from './openai.ts';
 import { openrouterBaseUrl } from './openrouter.ts';
+import { xaiBaseUrl } from './xai.ts';
 
 /*
  * API keys as the admin page and `nolune key` handle them. A key never goes back out: the status
@@ -44,6 +45,11 @@ const ABOUT: Record<ApiKeyProvider, Pick<ApiKeyStatus, 'purpose' | 'withoutIt' |
 			'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.',
 		withoutIt: 'Chats and automations on OpenRouter models stop working until a new key is added.',
 		consoleUrl: 'https://openrouter.ai/settings/keys'
+	},
+	xai: {
+		purpose: "Runs chats and automations on xAI's Grok models.",
+		withoutIt: 'Chats and automations on Grok models stop working until a new key is added.',
+		consoleUrl: 'https://console.x.ai'
 	}
 };
 
@@ -87,7 +93,8 @@ const CHECK_TIMEOUT_MS = 20_000;
 
 /**
  * Listing models is free and needs nothing but a valid key. OpenRouter lists its models for
- * anyone, so it's asked about the key itself.
+ * anyone, so it's asked about the key itself, and so is xAI, which also says whether the key or
+ * its team is blocked.
  */
 function checkRequest(
 	provider: ApiKeyProvider,
@@ -105,6 +112,9 @@ function checkRequest(
 	}
 	if (provider === 'openrouter') {
 		return { url: `${openrouterBaseUrl()}/key`, headers: { authorization: `Bearer ${key}` } };
+	}
+	if (provider === 'xai') {
+		return { url: `${xaiBaseUrl()}/api-key`, headers: { authorization: `Bearer ${key}` } };
 	}
 	return { url: `${openaiBaseUrl()}/models`, headers: { authorization: `Bearer ${key}` } };
 }
@@ -135,12 +145,14 @@ export async function checkApiKey(provider: ApiKeyProvider, key: string): Promis
 			'unchecked'
 		);
 	}
-	if (res.ok) return null;
+	if (res.ok) return provider === 'xai' ? xaiKeyWarning(res) : null;
 
 	let message = '';
 	try {
-		const body = (await res.json()) as { error?: { message?: unknown } };
-		if (typeof body.error?.message === 'string') message = body.error.message.trim();
+		// xAI's errors are `{ code, error }`, its message a string.
+		const body = (await res.json()) as { error?: { message?: unknown } | string };
+		const found = typeof body.error === 'string' ? body.error : body.error?.message;
+		if (typeof found === 'string') message = found.trim();
 	} catch {
 		// not JSON
 	}
@@ -149,7 +161,12 @@ export async function checkApiKey(provider: ApiKeyProvider, key: string): Promis
 	if ((res.status === 403 && provider === 'openai') || res.status === 429) {
 		return `${label} took the key but said: ${message || res.statusText}`;
 	}
-	if (res.status === 401 || res.status === 403) {
+	// xAI answers a key it doesn't know with a 400.
+	if (
+		res.status === 401 ||
+		res.status === 403 ||
+		(provider === 'xai' && res.status === 400 && /api key/i.test(message))
+	) {
 		throw new ApiKeyError(
 			`${label} didn't accept this key. Check that it was copied whole and hasn't been deleted.`,
 			'rejected'
@@ -159,6 +176,22 @@ export async function checkApiKey(provider: ApiKeyProvider, key: string): Promis
 		`${label} couldn't check the key (${res.status}${message ? `: ${message}` : ''}). Try again in a moment.`,
 		'unchecked'
 	);
+}
+
+/** What xAI says about a key it knows: whether it, or its team, can't make requests. */
+async function xaiKeyWarning(res: Response): Promise<string | null> {
+	let body: { team_blocked?: unknown; api_key_blocked?: unknown; api_key_disabled?: unknown };
+	try {
+		body = (await res.json()) as typeof body;
+	} catch {
+		return null;
+	}
+	if (body.api_key_disabled === true) return 'xAI took the key, but it is disabled.';
+	if (body.api_key_blocked === true) return 'xAI took the key, but it is blocked.';
+	if (body.team_blocked === true) {
+		return 'xAI took the key, but its team is blocked: it may be out of credits or over its spending limit (see https://console.x.ai).';
+	}
+	return null;
 }
 
 /** Saves the key to config.json, where it takes precedence over the environment's. */

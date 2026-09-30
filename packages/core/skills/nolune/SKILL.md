@@ -45,8 +45,8 @@ want to do and why; once they agree in the chat, the check lets it through.
 
 ## Models
 
-Chats run on model presets, on Claude (Anthropic), on OpenAI's models or on the models
-OpenRouter serves with an API key, on the models of custom providers, the family's own servers
+Chats run on model presets, on Claude (Anthropic), on OpenAI's models, on xAI's Grok or on the
+models OpenRouter serves with an API key, on the models of custom providers, the family's own servers
 (Ollama, LM Studio, oMLX, vLLM..., below) through their OpenAI API or their Anthropic API, or on a
 plan: someone's own Claude or ChatGPT subscription (`claude-plan`, `chatgpt-plan`, below). People
 pick one when they start a chat, and new chats start with the default. They can switch a chat to
@@ -57,6 +57,7 @@ nolune preset list                                 # name, provider/model, conte
 nolune preset add claude-sonnet-5 --name "Sonnet"  # Anthropic checks the model id first
 nolune preset add gpt-6-astra --provider openai --name "GPT"
 nolune preset add deepseek/deepseek-v4.1-flash --provider openrouter --name "DeepSeek"
+nolune preset add grok-4.7 --provider xai --name "Grok"
 nolune preset add qwen3:32b --provider "GPU box"   # a model of the custom provider "GPU box"
 nolune preset add claude-opus-5-5 --provider claude-plan --name "Opus (plan)"
 nolune preset add gpt-6.1-sol --provider chatgpt-plan --name "GPT (plan)"
@@ -107,7 +108,7 @@ preset). When a plan's limit is used up, chats on it stop until the time the err
 
 The `anthropic` key runs chats on Claude; the `openai` one runs chats on OpenAI's models and makes
 pictures; the `openrouter` one runs chats on OpenRouter's models and pays for them with its
-credits. `nolune key set` checks a key with the provider and refuses one it rejects, and nolune uses the
+credits; the `xai` one runs chats on Grok and pays from its team's credits. `nolune key set` checks a key with the provider and refuses one it rejects, and nolune uses the
 new key from the next message.
 
 ```sh

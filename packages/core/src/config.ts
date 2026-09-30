@@ -9,6 +9,8 @@ export interface Config {
 	/** For `nolune generate image` with the openai image provider. */
 	openaiApiKey?: string;
 	openrouterApiKey?: string;
+	/** For chats on xAI's Grok models (xai.ts). */
+	xaiApiKey?: string;
 	/**
 	 * Custom providers (custom-providers.ts): the family's own model servers, like Ollama or LM
 	 * Studio, each with an id from its name, the API it speaks, an address, and a key when it
@@ -81,7 +83,8 @@ export function publicOrigin(config: Config): string {
 export const API_KEYS = {
 	anthropic: { label: 'Anthropic', field: 'anthropicApiKey', env: 'ANTHROPIC_API_KEY' },
 	openai: { label: 'OpenAI', field: 'openaiApiKey', env: 'OPENAI_API_KEY' },
-	openrouter: { label: 'OpenRouter', field: 'openrouterApiKey', env: 'OPENROUTER_API_KEY' }
+	openrouter: { label: 'OpenRouter', field: 'openrouterApiKey', env: 'OPENROUTER_API_KEY' },
+	xai: { label: 'xAI', field: 'xaiApiKey', env: 'XAI_API_KEY' }
 } as const satisfies Record<string, { label: string; field: keyof Config; env: string }>;
 
 export type ApiKeyProvider = keyof typeof API_KEYS;

@@ -8,9 +8,11 @@ description: Install nolune, connect a model and add the family.
 - **macOS or Linux** (the background service needs systemd there) and **Node.js 22.18** or later.
 - **A model connection**, any of these:
   - an [Anthropic API key](https://console.anthropic.com/), an
-    [OpenAI API key](https://platform.openai.com/api-keys) or an
+    [OpenAI API key](https://platform.openai.com/api-keys), an
+    [xAI API key](https://console.x.ai) or an
     [OpenRouter API key](https://openrouter.ai/settings/keys). Chats run on Claude, on OpenAI's GPT
-    models, or on any model OpenRouter serves that can call tools; you can have all three;
+    models, on xAI's Grok, or on any model OpenRouter serves that can call tools; you can have them
+    all;
   - a model server of your own (Ollama, LM Studio, oMLX, vLLM...) with a model that can call tools;
   - a Claude Pro or Max plan signed in to [Claude Code](https://claude.com/claude-code) on the same
     computer, or a ChatGPT Plus or Pro plan, signed in with ChatGPT.

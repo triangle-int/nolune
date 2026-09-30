@@ -2,7 +2,7 @@
 	/** "claude-opus-5-5 (anthropic)" → "claude-opus-5-5". */
 	export function shortModelName(name: string): string {
 		return name.replace(
-			/\s*\((anthropic|openai|openrouter|custom-openai|custom-anthropic|claude-plan|chatgpt-plan)\)$/i,
+			/\s*\((anthropic|openai|openrouter|xai|custom-openai|custom-anthropic|claude-plan|chatgpt-plan)\)$/i,
 			''
 		);
 	}

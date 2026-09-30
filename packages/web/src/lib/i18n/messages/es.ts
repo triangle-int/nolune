@@ -849,7 +849,8 @@ export const es: Messages = {
 				openrouter: {
 					title: 'Clave de API de OpenRouter',
 					about: 'Claude, GPT, Gemini y más con una sola clave'
-				}
+				},
+				xai: { title: 'Clave de API de xAI', about: 'Modelos Grok, pago por uso' }
 			},
 			checkingPlan: 'Comprobando el inicio de sesión…',
 			pasteKey: (label: string) => `Pega tu clave de ${label}`,
@@ -941,7 +942,8 @@ export const es: Messages = {
 			openai:
 				'Hace funcionar los chats y las automatizaciones con modelos de OpenAI, y crea las imágenes de la página Imágenes y las que dibuja el agente.',
 			openrouter:
-				'Hace funcionar los chats y las automatizaciones con los modelos que ofrece OpenRouter (Claude, GPT, Gemini, DeepSeek y muchos más), con una sola clave y sus créditos.'
+				'Hace funcionar los chats y las automatizaciones con los modelos que ofrece OpenRouter (Claude, GPT, Gemini, DeepSeek y muchos más), con una sola clave y sus créditos.',
+			xai: 'Hace funcionar los chats y las automatizaciones con los modelos Grok de xAI.'
 		},
 		withoutIt: {
 			anthropic:
@@ -949,7 +951,8 @@ export const es: Messages = {
 			openai:
 				'Los chats y las automatizaciones con modelos de OpenAI dejan de funcionar, y nolune no puede crear imágenes, hasta que se añada una clave nueva.',
 			openrouter:
-				'Los chats y las automatizaciones con modelos de OpenRouter dejan de funcionar hasta que se añada una clave nueva.'
+				'Los chats y las automatizaciones con modelos de OpenRouter dejan de funcionar hasta que se añada una clave nueva.',
+			xai: 'Los chats y las automatizaciones con modelos Grok dejan de funcionar hasta que se añada una clave nueva.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`Guardada en nolune${hint ? `, termina en ${hint}` : ''}`,
@@ -1037,6 +1040,7 @@ export const es: Messages = {
 					'OpenAI no la indica: Auto solo conoce la de sus modelos insignia (1,05M desde GPT-5.4).',
 				openrouter:
 					'Auto usa la ventana que OpenRouter indica para el modelo y su proveedor principal.',
+				xai: 'Auto usa la ventana que xAI indica para el modelo.',
 				'custom-openai':
 					'Auto usa la ventana que el servidor indica para el modelo, si la indica (vLLM lo hace); si no, queda como desconocida.',
 				'custom-anthropic':

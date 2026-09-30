@@ -15,7 +15,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Attachments        | Any file, up to 100 MB and 10 per message, saved in the profile's `attachments` folder. nolune keeps a copy of each picture and PDF the model gets and sends it by reference: through the provider's Files API (base64 only if an upload fails), whichever provider the chat moves to; the plans have none, so pictures and PDFs go inline. Every other file goes as its path.                                                                                                                                                                                                                                                                                                                                                         |
-| Providers          | Anthropic, OpenAI and OpenRouter (API keys), custom providers (your own model servers), and two plans, someone's subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan in Claude Code, which nolune runs on this computer, and `chatgpt-plan`, a ChatGPT Plus or Pro plan, through Sign in with ChatGPT. Keys, custom providers and presets are all global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model and an optional window override. One preset is the default (the oldest until an admin picks one): new chats and automations without one use it. See [Model providers](#model-providers). |
+| Providers          | Anthropic, OpenAI, xAI and OpenRouter (API keys), custom providers (your own model servers), and two plans, someone's subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan in Claude Code, which nolune runs on this machine, and `chatgpt-plan`, a ChatGPT Plus or Pro plan, through Sign in with ChatGPT. Keys, custom providers and presets are global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model and an optional window override. One preset is the default (the oldest until an admin picks one): new chats and automations without one use it. See [Model providers](#model-providers). |
 | Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `nolune agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                                                   |
@@ -33,7 +33,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 ```
 ~/.nolune/                 (override with NOLUNE_HOME)
-  config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, custom providers
+  config.json                 auth secret, API keys (Anthropic, OpenAI, OpenRouter, xAI), custom providers
                               (name, API, address, key), image model,
                               extra env vars for commands, where Claude Code is if set, the
                               command mode and the preset that checks commands (mode 600)
@@ -134,6 +134,13 @@ markers. Requests carry `session_id` (the conversation's id), which keeps a conv
 same provider behind OpenRouter, whose cache holds its earlier calls. Usage reports
 `cached_tokens` and `cache_write_tokens` inside `prompt_tokens`; nolune subtracts them, as for OpenAI.
 
+### On xAI
+
+As on OpenAI: xAI caches the same prefix on its own, and `prompt_cache_key` (the conversation's
+id, which xAI also reads as its `x-grok-conv-id`) keeps a conversation on the server that has its
+cache. Its reasoning models need their encrypted reasoning back to hit it, so it's asked for on
+every request.
+
 ## Model providers
 
 A conversation runs on its preset's provider until someone switches it to another preset (see
@@ -218,6 +225,34 @@ plan's chats are OpenAI's, with the plan's sign-in instead of a key (`chatgpt-pl
   provider's as the window. A variant (`:nitro`, `:online`) is looked up as its model unless it's
   listed itself. The list is kept for an hour for what the model can be sent (see
   [Attachments](#attachments)). Titles are asked for at `low` effort with 2,048 tokens.
+- **xAI** (`xai.ts`) runs Grok with an xAI key. xAI's API is OpenAI's Responses API, so chats
+  are `openai-chat.ts`'s with a client at `https://api.x.ai/v1` (or `XAI_BASE_URL`; never
+  OpenAI's organization or project), the `XAI` target: `store: false`, the whole transcript,
+  encrypted reasoning back to the model that wrote it, and `prompt_cache_key`. What differs:
+  - **Effort.** Each model says which efforts it takes (`capabilities.reasoning_effort` in xAI's
+    model lists; `ResponsesApi.effort`): the chat's goes as it is, or as the nearest below it the
+    model takes (above, when there's none below), and a model that takes none (`grok-build-0.1`)
+    gets no `reasoning` at all, though it still reasons and gets its reasoning back. A model the
+    lists don't have gets the chat's, at most `high`, and a refusal is learned as for a custom
+    provider. No reasoning summary is asked for: xAI's models give theirs anyway. xAI counts
+    reasoning within `max_output_tokens`, so a short exchange with a model that takes no effort
+    gets 16,000 tokens more, or a title or auto mode's verdict could be cut off before it's
+    written.
+  - **Models.** `GET /language-models` says what each model takes and writes, `GET /models` its
+    window (`context_length`) and efforts; nolune joins them by id, keeps the models that write
+    text, and leaves out the multi-agent ones, which take no tools of the caller's. Adding a
+    preset checks the model is there (by id or alias) and takes its window. The lists are kept
+    for an hour.
+  - **Pictures and PDFs.** No Files API is used: pictures go inline to the models that see them
+    (`input_modalities`), and only as JPEG or PNG, xAI's formats, so GIF and WebP are converted
+    first (`pictureTypes`, for attachments and `nolune view`). A PDF goes as its path, since a
+    file sent to xAI is only searched (its `attachment_search` tool), not read whole.
+  - **Errors** are `{ code, error }` rather than OpenAI's `{ error: { message } }`, and a key xAI
+    doesn't know is a 400 ("Incorrect API key provided"), which nolune reads as a rejected key. A
+    403 is a team out of credits or over its spending limit. Its errors are OpenAI's SDK's
+    classes, so `models.ts` asks `xai.ts` first, which remembers its own calls' errors, as
+    OpenRouter's does. The key is checked with `GET /api-key`, which also says whether the key or
+    its team is blocked (saved, with a warning).
 - **Custom providers** (`custom-providers.ts`): the family's own servers (Ollama, LM Studio, oMLX,
   vLLM, llama.cpp's server, LiteLLM), each added by the admin as a provider of its own, among the
   API keys: a name (`Ollama`, `GPU box`), the API it speaks, an address and an optional key, kept

@@ -53,7 +53,7 @@ background. Members can also manage the profile and its membership.
 - **Room to make things.** Image templates help you start with a party invitation, a storybook
   page, a postcard, or a sticker pack. Choose a template or describe an idea, then ask for changes
   in the chat. Image generation needs an OpenAI API key.
-- **Your choice of models.** Use Anthropic, OpenAI, OpenRouter, or your own model server. The project
+- **Your choice of models.** Use Anthropic, OpenAI, xAI's Grok, OpenRouter, or your own model server. The project
   also runs on a Claude plan through Claude Code, or on a ChatGPT plan with Sign in with ChatGPT.
   Switch models within a conversation while
   keeping its history.
@@ -103,7 +103,7 @@ model and personalize the assistant. Admins manage providers and models under **
 For an API key, you can also use the CLI:
 
 ```sh
-nolune key set openai       # or anthropic / openrouter
+nolune key set openai       # or anthropic / openrouter / xai
 ```
 
 To bring someone into the family:

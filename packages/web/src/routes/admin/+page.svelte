@@ -188,7 +188,8 @@
 													class="underline">{new URL(key.consoleUrl).host}</a
 												>{/snippet}
 										</Rich>
-										{#if key.source}
+										<!-- xAI keeps no files of nolune's, so any key of the account does. -->
+										{#if key.source && key.provider !== 'xai'}
 											{key.provider === 'openai' ? m.admin.sameProject : m.admin.sameWorkspace}
 										{/if}
 									</p>
