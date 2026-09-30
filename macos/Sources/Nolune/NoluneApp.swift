@@ -72,6 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		let onboarding = Onboarding()
 		onboarding.onFinish = { [weak self] in self?.closeOnboarding() }
 		present(NSHostingView(rootView: OnboardingView(onboarding: onboarding)))
+		// Set before the intro starts, which waits for this to return.
+		if let window { onboarding.outburst = Outburst(around: window) }
 	}
 
 	/// A window of the onboarding's size and sky, with `content` in it.
