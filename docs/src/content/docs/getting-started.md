@@ -3,9 +3,22 @@ title: Install and set up
 description: Install nolune, connect a model and add the family.
 ---
 
+## The Mac app
+
+On a Mac, the easiest way in is the app. Download it for
+[Apple silicon](https://github.com/triangle-int/nolune/releases/latest/download/nolune-macos-apple-silicon.dmg)
+or [Intel](https://github.com/triangle-int/nolune/releases/latest/download/nolune-macos-intel.dmg)
+(macOS 13 or later), open the disk image and drag nolune to Applications. It brings its own Node, and
+its welcome sets up your account, an address that works from anywhere and Full Disk Access. After
+that it stays in the menu bar, opens at login and keeps nolune running while it's there.
+
+You still need a model connection (below), which a new profile's welcome asks for. The rest of this
+page installs nolune from the terminal instead, on macOS or Linux.
+
 ## What you need
 
-- **macOS or Linux** (the background service needs systemd there) and **Node.js 22.18** or later.
+- **macOS or Linux** (the background service needs systemd there) and **Node.js 22.18** or later;
+  the Mac app brings its own Node.
 - **A model connection**, any of these:
   - an [Anthropic API key](https://console.anthropic.com/), an
     [OpenAI API key](https://platform.openai.com/api-keys) or an
