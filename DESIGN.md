@@ -332,9 +332,9 @@ two agents speak differently (below); what they share is in `plans.ts` and the r
 claude-path|codex-path` for an agent nolune doesn't find. `chatgpt-plan` adds
   `logout` and `models`, which Codex has. Models & keys has one Plans list with a row for each.
 - **Finding the agent.** The configured path, else the PATH and its installers' folders, since
-  the gateway may run without a login shell's PATH (as a LaunchAgent). Without one, every one of
-  the above says so and how to install it; at a terminal, setup offers the maker's installer,
-  asking first.
+  the gateway may run without a login shell's PATH (as a LaunchAgent or systemd user service).
+  Without one, every one of the above says so and how to install it; at a terminal, setup offers
+  the maker's installer, asking first.
 - **No Files API.** Pictures go inline for both, within the conversation's 20 MB. PDFs go inline
   on the Claude plan and as their path on the ChatGPT plan, since Codex takes text and pictures
   only.
@@ -1596,6 +1596,13 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
   that runs `node dist/cli.js start` with `KeepAlive` and logs to `~/.nolune/logs/gateway.log`.
   It's a LaunchAgent, not a LaunchDaemon, so commands run as the user. It records the absolute
   node path, so switching Node versions needs a reinstall.
+- On Linux it writes a systemd user unit (`~/.config/systemd/user/nolune.service`) instead, for the
+  same reason, with `Restart=always` and `RestartSec=10` for `KeepAlive` and `ThrottleInterval`,
+  logging to the same file (`Type=exec` and `append:` need systemd 240). User services run from
+  the first login to the last logout unless the user lingers, so install runs
+  `loginctl enable-linger`, which logind allows for yourself on most systems, and prints the `sudo`
+  command when it can't. Unit files expand `%` specifiers everywhere and `$NAME` in ExecStart's
+  arguments (not its program path), so the unit doubles those.
 - On shutdown, the gateway kills the process groups of commands that are still running.
 - Remote access is the user's tunnel (Tailscale Funnel, Cloudflare Tunnel, a VPS). The gateway only
   binds to localhost by default.
