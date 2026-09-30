@@ -9,16 +9,28 @@ skill tells it how, and it restarts itself only when asked.
 
 ## Getting started
 
-- `nolune setup`: interactive first-time setup (your account, public URL); the model comes after: a
-  new profile's welcome on the web asks for one, or use key set and preset add below
+- `nolune setup`: interactive first-time setup (your account, and the address the family opens:
+  nolune's relay, this computer, or your own URL); the model comes after: a new profile's welcome on
+  the web asks for one, or use key set and preset add below
 - `nolune start`: run the gateway in the foreground
 - `nolune service install|uninstall|restart|status|logs [-f]`: run it in the background (macOS, or
   Linux with systemd)
 
+## Reaching nolune from anywhere
+
+No tunnel, port forwarding or domain of your own. See [Remote access](/docs/guides/remote-access/).
+
+- `nolune relay enable [--name NAME]`: get a public address through nolune's relay, like
+  https://NAME.nolune.family (a random name without --name). It passes the family's traffic to this
+  computer, and could see it, as any tunnel could. `--server URL` uses a relay of your own
+- `nolune relay status`: the address, whether the gateway is connected, and this month's traffic
+- `nolune relay disable`: stop using the relay and give the address back
+
 ## Settings
 
 - `nolune config`: show address, port and what's configured
-- `nolune config set <host|port|origin> <value>`: origin = the public URL people open
+- `nolune config set <host|port|origin> <value>`: origin = the public URL people open (the relay's
+  address is used instead while the relay is on)
 - `nolune config set image-model <provider/model>`: for pictures, e.g. openai/gpt-image-2.5-flare
 - `nolune config set embeddings <auto|off|provider/model>`: what memory search finds meaning with:
   auto uses the OpenAI key, else OpenRouter's; the provider is openai, openrouter or custom-openai

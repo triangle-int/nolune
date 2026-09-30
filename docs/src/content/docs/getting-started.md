@@ -21,7 +21,7 @@ description: Install nolune, connect a model and add the family.
 
 ```sh
 npm install -g nolune
-nolune setup                   # your account and the public URL
+nolune setup                   # your account, and the address: nolune's relay, or your own
 nolune key set openai          # optional: GPT models for chats, and pictures (Images page)
 nolune service install         # run in the background: a LaunchAgent on macOS, systemd on Linux
 nolune user create Anna anna@example.com   # add family members (prints their password)
@@ -53,8 +53,11 @@ Run it from your own login, not with `sudo` or `su`, which leave no user systemd
 
 ## Reaching it from other devices
 
-The gateway listens on `127.0.0.1:5780`, so at first only this computer can open it.
-[Remote access](/docs/guides/remote-access/) shows how to put a tunnel in front of it.
+Say yes to nolune's relay in `nolune setup` and you get an address like
+`https://smiths.nolune.family` that works on any device, at home or away, with no tunnel or port
+forwarding. Otherwise the gateway listens on `127.0.0.1:5780`, so only this computer can open it.
+[Remote access](/docs/guides/remote-access/) explains the relay, and how to use a tunnel of your own
+instead.
 
 ## Where things are
 

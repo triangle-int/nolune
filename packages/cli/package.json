@@ -15,7 +15,8 @@
 		"test:watch": "vitest"
 	},
 	"dependencies": {
-		"@nolune/core": "workspace:*"
+		"@nolune/core": "workspace:*",
+		"@nolune/relay": "workspace:*"
 	},
 	"devDependencies": {
 		"vitest": "^5.0.2"

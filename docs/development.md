@@ -23,6 +23,9 @@ pnpm start                          # run the built gateway with the settings fr
 
 Migrations are applied automatically when the gateway or the CLI opens the database.
 
+The relay (`packages/relay`) is a separate server, deployed on its own: see its
+[README](../packages/relay/README.md) for running it locally and in production.
+
 Every test starts with an empty `NOLUNE_HOME` in a temp folder (`packages/core/src/test/setup.ts`), so
 tests of the database code run against a fresh, migrated SQLite file and never touch your data.
 Each package runs its own tests (`pnpm --filter @nolune/core test:watch` to watch one): SvelteKit
