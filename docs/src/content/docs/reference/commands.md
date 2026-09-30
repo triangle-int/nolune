@@ -82,9 +82,11 @@ assume one person's ordinary use: keep busy automations and subagents on an API 
 
 ## Users
 
-Web sign-up is disabled; this is the only way to add people.
+There's no sign-up page: admins add people here, or on the **People** page in the web UI.
 
 - `nolune user create <name> <email> [--password P] [--admin]`
+- `nolune user invite [name]`: a link to send, where they make their own account (once, within 7
+  days); name: who it's for
 - `nolune user passwd <name|email> [--password P]`
 - `nolune user admin <name|email> [--off]`
 - `nolune user rm <name|email>`

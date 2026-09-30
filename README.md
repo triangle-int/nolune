@@ -108,17 +108,14 @@ nolune key set openai       # or anthropic / openrouter
 
 To bring someone into the family:
 
-1. Create their account on the host computer:
+1. As an admin, open **People** from the menu under your name and **Create invite link**. Send it
+   to them: they pick their name, email and password. Or **Add a person** and send them the
+   address and the password nolune shows. (At the terminal: `nolune user invite Anna`, or
+   `nolune user create Anna anna@example.com`.)
+2. Open **People & profile** in the profile you want to share, and add them by name or email.
 
-   ```sh
-   nolune user create Anna anna@example.com
-   ```
-
-2. Give them the address and the password printed by the command.
-3. Open **People & profile** in the profile you want to share, and add them by name or email.
-
-They can create their own profiles and add existing users too. Accounts are created by the host's
-administrator; joining a profile doesn't send an email invitation.
+They can create their own profiles and add existing users too. Only admins make accounts; joining
+a profile doesn't send an email invitation.
 
 > [!IMPORTANT]
 > nolune is built for people you trust. The agent runs commands with your host account's permissions,

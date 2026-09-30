@@ -198,6 +198,12 @@ export const es: Messages = {
 		nameTooLong: (max: number) => `Un nombre puede tener como mucho ${max} caracteres.`,
 		nameHasAt: 'Un nombre no puede llevar @.',
 		nameTaken: (name: string) => `Ya hay alguien que se llama ${name}.`,
+		emailInvalid: 'Escribe un correo electrónico, como anna@example.com.',
+		emailTaken: 'Alguien ya inicia sesión con ese correo.',
+		passwordTooShort: (min: number) => `Una contraseña necesita al menos ${min} caracteres.`,
+		passwordTooSimple:
+			'Usa 3 de: minúsculas, mayúsculas, dígitos y símbolos. O que tenga 20 caracteres o más.',
+		passwordTooRepetitive: 'Esa contraseña repite demasiado los mismos caracteres.',
 		notPicture: 'nolune no puede usar esa imagen.',
 		pictureTooLarge: 'Esa imagen es demasiado grande.'
 	},
@@ -207,6 +213,7 @@ export const es: Messages = {
 		settings: 'Ajustes',
 		allProfiles: 'Todos los perfiles',
 		modelsAndKeys: 'Modelos y claves',
+		people: 'Personas',
 		logOut: 'Cerrar sesión'
 	},
 
@@ -918,7 +925,8 @@ export const es: Messages = {
 		email: 'Correo electrónico',
 		password: 'Contraseña',
 		signingIn: 'Iniciando sesión…',
-		forgot: '¿Olvidaste la contraseña? Pide a quien configuró nolune que ejecute {command}.',
+		forgot:
+			'¿Olvidaste la contraseña? Pide a un administrador que la restablezca en Personas o que ejecute {command}.',
 		tooManyAttempts: 'Demasiados intentos. Espera un minuto y vuelve a intentarlo.',
 		wrongPassword: 'Correo o contraseña incorrectos.'
 	},
@@ -1166,5 +1174,89 @@ export const es: Messages = {
 				'Un modelo rápido y capaz mantiene ágiles los chats: cada comando que hace algo más que mirar le cuesta una breve consulta.',
 			saved: 'Guardado. Se aplica desde el próximo comando.'
 		}
+	},
+
+	people: {
+		title: 'Personas',
+		hint: 'Todos los que pueden iniciar sesión en nolune. Quien tiene una cuenta puede pedirle al agente cualquier cosa en este ordenador, así que añade solo a personas de confianza. Para compartir un perfil con alguien, añádelo en Personas y perfil de ese perfil.',
+		accounts: 'Cuentas',
+		you: 'Tú',
+		admin: 'Admin',
+		resetPassword: 'Restablecer contraseña',
+		makeAdmin: 'Hacer administrador',
+		removeAdmin: 'Quitar administrador',
+		resetTitle: (name: string) => `¿Restablecer la contraseña de ${name}?`,
+		resetBody:
+			'nolune crea una contraseña nueva y la muestra una vez. La anterior deja de funcionar; los dispositivos que ya iniciaron sesión siguen conectados.',
+		reset: 'Restablecer',
+		newPassword: (name: string) =>
+			`La nueva contraseña de ${name}. Solo se muestra esta vez: envíasela.`,
+		nowAdmin: (name: string) => `${name} ahora es administrador.`,
+		noLongerAdmin: (name: string) => `${name} ya no es administrador.`,
+		removeTitle: (name: string) => `¿Quitar a ${name}?`,
+		removeBody:
+			'Se cierra su sesión y ya no puede volver a entrar. Sus mensajes quedan en los chats compartidos, y un perfil en el que solo está esa persona queda en este ordenador sin nadie. No se puede deshacer.',
+		removed: (name: string) => `Se quitó a ${name}.`,
+		notYourself: 'No puedes hacerle eso a tu propia cuenta. Pídeselo a otro administrador.',
+		gone: 'Esa cuenta ya no existe.',
+		add: 'Añadir una persona',
+		addHint:
+			'nolune crea su contraseña y la muestra una vez, para que se la envíes con la dirección. O envía un enlace de invitación, abajo, y elige la suya.',
+		name: 'Nombre',
+		namePlaceholder: 'Anna',
+		email: 'Correo',
+		emailPlaceholder: 'anna@example.com',
+		makeThemAdmin: 'Administrador',
+		adminHint: 'Los administradores gestionan modelos, claves y personas.',
+		adding: 'Añadiendo…',
+		added: (name: string) =>
+			`Se añadió a ${name}. Envíale la dirección y esta contraseña; solo se muestra esta vez.`,
+		address: 'Dirección',
+		password: 'Contraseña',
+		copyAddress: 'Copiar la dirección',
+		copyPassword: 'Copiar la contraseña',
+		invites: 'Enlaces de invitación',
+		invitesHint: (days: number) =>
+			`Con un enlace, alguien crea su propia cuenta: elige su nombre, correo y contraseña, así que no hay que enviar ninguna contraseña. Cada enlace sirve una vez, durante ${days} días, y crea una cuenta normal.`,
+		newInvite: 'Crear enlace de invitación',
+		inviteFor: 'Para quién',
+		optional: '(opcional)',
+		inviteForPlaceholder: 'Abuela',
+		inviteForHint: 'Su nombre aparece ya en el formulario. Puede cambiarlo.',
+		create: 'Crear',
+		creating: 'Creando…',
+		inviteCreated: (name: string | null) =>
+			`${name ? `Envía este enlace a ${name}` : 'Envía este enlace a esa persona'}. Solo se muestra esta vez.`,
+		copyLink: 'Copiar el enlace',
+		noInvites: 'No hay enlaces de invitación pendientes.',
+		inviteTitle: (name: string | null) => (name ? `Para ${name}` : 'Enlace de invitación'),
+		inviteDetails: (by: string | null, until: string) =>
+			`${by ? `Creado por ${by}` : 'Creado en este ordenador'} · válido hasta el ${until}`,
+		revoke: 'Retirar',
+		revoked: 'Retirado. El enlace ya no funciona.'
+	},
+
+	invite: {
+		title: 'Únete a nolune',
+		from: (name: string) => `${name} te ha invitado.`,
+		hint: 'Crea tu cuenta: iniciarás sesión con este correo y esta contraseña.',
+		name: 'Tu nombre',
+		nameHint: 'Todos en tus perfiles lo ven, y nolune lo lee con cada mensaje que envías.',
+		email: 'Correo electrónico',
+		password: 'Contraseña',
+		passwordAgain: 'Repite la contraseña',
+		passwordHint: (min: number) =>
+			`Al menos ${min} caracteres, con 3 de: minúsculas, mayúsculas, dígitos y símbolos. O 20 caracteres o más de lo que sea.`,
+		mismatch: 'Las contraseñas no coinciden.',
+		create: 'Crear cuenta',
+		creating: 'Creando tu cuenta…',
+		until: (date: string) => `Este enlace es válido hasta el ${date}.`,
+		goneTitle: 'Este enlace ya no funciona',
+		goneBody: 'Ya se usó, caducó o se retiró. Pide uno nuevo a quien te lo envió.',
+		signIn: 'Iniciar sesión',
+		signedInTitle: (name: string) => `Has iniciado sesión como ${name}`,
+		signedInBody:
+			'Este enlace sirve para crear una cuenta nueva. Envíalo a la persona a la que va dirigido, o cierra sesión antes para usarlo.',
+		open: 'Abrir nolune'
 	}
 };

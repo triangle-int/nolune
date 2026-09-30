@@ -10,7 +10,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Execution          | Commands run as the gateway's macOS user with full access to the disk. There is no sandbox. The profile folder is only the default working folder. In auto mode (the default) a model checks each command before it runs and blocks what could do harm nobody asked for, in place of a person approving each one; unrestricted runs them unchecked. See [Auto mode](#auto-mode).                                                                                                                                                                                                                                                                                                                                                       |
 | Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Exposure           | Public through nolune's relay (`<name>.nolune.family`, see [The relay](#the-relay)) or the family's own tunnel. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Exposure           | Public through nolune's relay (`<name>.nolune.family`, see [The relay](#the-relay)) or the family's own tunnel. Every route requires login, except the invite links an admin sends. The sign-up endpoint is disabled: admins make accounts on the People page or with the local CLI, or send a single-use invite link, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                          |
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -1423,6 +1423,26 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   source once
   (`embeddingProblem`) and says if it didn't answer, and a source that works starts embedding every
   profile's facts in the background.
+- **People** (`/admin/people`, admins only, next to Models & keys in the user menu) lists every
+  account and does what `nolune user` does. **Add a person** takes a name, an email and whether
+  they're an admin, checks them as `nolune user create` does, and shows the address and a password
+  nolune made, once. **Reset password** makes a new one, shown once under their row; devices
+  already signed in stay signed in, as with `nolune user passwd`. Make admin, Remove admin and
+  Remove (which says what stays: their messages, and profiles only they were in, now empty) aren't
+  offered on the admin's own row, so nobody locks themselves out. Core errors carry a `reason`
+  (`UserNameError`, `EmailError`, `PasswordError`) for the page to say in its language.
+  **Invite links** let someone make their own account, so no password is passed along (or seen by
+  the agent, when it's asked for one: `nolune user invite [name]`). A link is
+  `<address>/invite/<token>`, 24 random bytes; the `invite` table keeps only the token's SHA-256,
+  so the page shows the link once, when it's made, and lists the ones still usable with who
+  they're for, who made them and until when, each with Take back. A link works once, for 7 days,
+  while whoever made it is still an admin (made at the terminal: always); removing that admin
+  removes their links. `/invite/<token>` is the one page besides `/login` open without signing in
+  (`referrer-policy: no-referrer`, so the token doesn't leak to anything it links to). It asks for
+  a name (starting with the one the admin gave), an email and the password twice, then
+  `acceptInvite` makes an ordinary account and deletes the invite in one transaction, so a link
+  sent twice at once makes one account, and signs them in. A link that's used, expired or taken
+  back says so, and someone signed in is told the link is for someone new.
 
 ## Languages
 
@@ -1704,7 +1724,7 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts; the
                 ChatGPT plan's requests in chatgpt-plan.ts, signed in with Sign in with ChatGPT in
                 chatgpt-sign-in.ts), provider
-                file cache, runner, media, users/profiles/presets, API
+                file cache, runner, media, users/invites/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
                 openai.ts), image templates and assistant avatars.
