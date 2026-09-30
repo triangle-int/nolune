@@ -6,7 +6,8 @@ import type {
 	DisplayMessage,
 	LiveBlock,
 	LiveEvent,
-	Snapshot
+	Snapshot,
+	Typist
 } from '@nolune/core';
 import type { ToolResult } from './transcript';
 
@@ -30,6 +31,8 @@ export class ChatState {
 	background = $state<BackgroundItem[]>([]);
 	/** What the note-taker saved from this chat, each shown after the last message it read. */
 	memory = $state<DisplayMemoryLook[]>([]);
+	/** Who is writing in the chat right now, this person included. */
+	typing = $state<Typist[]>([]);
 	connected = $state(false);
 	loaded = $state(false);
 
@@ -56,6 +59,7 @@ export class ChatState {
 				this.toolOutput = event.snapshot.toolOutput;
 				this.background = event.snapshot.background;
 				this.memory = event.snapshot.memory;
+				this.typing = event.snapshot.typing;
 				this.loaded = true;
 				break;
 			case 'title':
@@ -72,6 +76,9 @@ export class ChatState {
 				break;
 			case 'memory':
 				this.memory = event.memory;
+				break;
+			case 'typing':
+				this.typing = event.typing;
 				break;
 			case 'status':
 				this.running = event.running;
@@ -111,7 +118,11 @@ export class ChatState {
 	connect(conversationId: string): () => void {
 		const source = new EventSource(`/api/c/${conversationId}/events`);
 		source.onopen = () => (this.connected = true);
-		source.onerror = () => (this.connected = false);
+		source.onerror = () => {
+			this.connected = false;
+			// Nothing says when they stop until the stream is back, with a snapshot.
+			this.typing = [];
+		};
 		source.onmessage = (event) => this.apply(JSON.parse(event.data) as ServerEvent);
 		return () => source.close();
 	}

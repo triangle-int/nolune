@@ -1,0 +1,55 @@
+---
+title: Welcome to nolune
+description: nolune is an AI assistant for your family that runs on your own computer. Start here.
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+nolune is an AI assistant for your family. It runs on your computer and gives everyone a built-in
+web UI. Make a profile for yourself, one for the whole family, or one for something you're doing
+together. Each has its own conversations, memory, skills and assistant personality. In a shared
+profile, everyone can pick up the same conversation, and the assistant knows who's speaking.
+
+Family members use nolune in the browser: they chat, attach files, look after memory and skills,
+make pictures and check automations. The terminal is only for setup and administration.
+
+<CardGrid>
+	<LinkCard
+		title="Install and set up"
+		description="Get nolune running on the computer that stays at home."
+		href="/docs/getting-started/"
+	/>
+	<LinkCard
+		title="Profiles and family"
+		description="Personal and shared profiles, adding people, the assistant's look and soul."
+		href="/docs/guides/family/"
+	/>
+	<LinkCard
+		title="Memory"
+		description="What nolune remembers about the family, and how to see and change it."
+		href="/docs/guides/memory/"
+	/>
+	<LinkCard
+		title="Automations"
+		description="Ask for a recurring task in plain words; it runs in the background."
+		href="/docs/guides/automations/"
+	/>
+	<LinkCard
+		title="Models and keys"
+		description="API keys, OpenRouter, your own model servers, or a Claude or ChatGPT plan."
+		href="/docs/guides/models/"
+	/>
+	<LinkCard
+		title="Commands"
+		description="Everything the nolune command can do."
+		href="/docs/reference/commands/"
+	/>
+</CardGrid>
+
+:::caution[Built for people you trust]
+The agent runs commands with your host account's permissions, without a sandbox. In
+[auto mode](/docs/guides/auto-mode/), the default, a model checks each command before it runs and
+blocks what could do harm nobody asked for; it's a safeguard against mistakes and manipulation, not a
+sandbox. Profiles organize access in the web app; they do not isolate the agent from files on the
+computer. Everyone in a shared profile can read its chats and memory.
+:::

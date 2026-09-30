@@ -26,12 +26,14 @@ import {
 	recoverAfterRestart,
 	runningConversationIds,
 	sendMessage,
+	setTyping,
 	stop,
 	subscribe,
+	TYPING_TTL_MS,
 	type LiveEvent
 } from './runner.ts';
 import { runSubagent, setSubagentStatus } from './subagents.ts';
-import { makeFamily, makePreset, runCommandsUnchecked } from './test/fixtures.ts';
+import { makeFamily, makePreset, makeUser, runCommandsUnchecked } from './test/fixtures.ts';
 
 vi.mock('./anthropic.ts', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./anthropic.ts')>()),
@@ -299,6 +301,63 @@ describe('switching models', () => {
 			provider: 'anthropic',
 			model: 'claude-sonnet-5'
 		});
+	});
+});
+
+describe('typing', () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('tells everyone watching who is writing, until they stop or go quiet', () => {
+		vi.useFakeTimers();
+		const { user: anna, profile } = makeFamily();
+		const max = makeUser('Max');
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: anna.id });
+		const events: LiveEvent[] = [];
+		const off = subscribe(chat.id, (event) => events.push(event));
+
+		setTyping(chat.id, anna, true);
+		setTyping(chat.id, max, true);
+		vi.advanceTimersByTime(TYPING_TTL_MS - 1_000);
+		// Anna is still at it, which is nothing new, and she counts as typing for longer.
+		setTyping(chat.id, anna, true);
+		expect(getSnapshot(chat.id).typing).toEqual([anna, max]);
+		// Max's page stopped saying he's typing.
+		vi.advanceTimersByTime(1_000);
+		setTyping(chat.id, anna, false);
+		setTyping(chat.id, anna, false);
+		off();
+
+		expect(events).toEqual([
+			{ type: 'typing', typing: [anna] },
+			{ type: 'typing', typing: [anna, max] },
+			{ type: 'typing', typing: [anna] },
+			{ type: 'typing', typing: [] }
+		]);
+		expect(getSnapshot(chat.id).typing).toEqual([]);
+	});
+
+	it('stops once their message shows', async () => {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
+		vi.mocked(streamTurn).mockResolvedValue(
+			modelReply([{ type: 'text', text: 'Hi!' }], 'end_turn')
+		);
+		setTyping(chat.id, user, true);
+		const events: LiveEvent[] = [];
+		const off = subscribe(chat.id, (event) => events.push(event));
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'Hello');
+		await ended;
+		off();
+
+		const types = events.map((event) => event.type);
+		expect(types.indexOf('queued')).toBeLessThan(types.indexOf('typing'));
+		expect(events.filter((event) => event.type === 'typing')).toEqual([
+			{ type: 'typing', typing: [] }
+		]);
+		expect(getSnapshot(chat.id).typing).toEqual([]);
 	});
 });
 
