@@ -5,9 +5,8 @@ node_modules
 .vercel
 .netlify
 .wrangler
-/.svelte-kit
-/build
-/site/.svelte-kit
+.svelte-kit
+/packages/web/build
 /site/build
 /docs/.astro
 /docs/dist

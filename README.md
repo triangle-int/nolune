@@ -151,7 +151,7 @@ Use pnpm for development:
 ```sh
 pnpm install
 pnpm nolune setup
-cp .env.example .env
+cp packages/web/.env.example packages/web/.env
 pnpm dev
 ```
 
@@ -161,11 +161,11 @@ set `NOLUNE_HOME` for both setup and the dev server if you want a separate insta
 ```sh
 pnpm check     # Svelte and TypeScript checks
 pnpm lint      # Formatting and ESLint
-pnpm test      # Vitest
+pnpm test      # Vitest, in every package
 pnpm build     # Web app and CLI
 ```
 
-The web app lives in `src/`, the agent and storage in `packages/core/`, and the CLI in
+The web app lives in `packages/web/`, the agent and storage in `packages/core/`, and the CLI in
 `packages/cli/`. Database migrations apply automatically. Tests use a temporary data directory.
 
 Read the [design notes](DESIGN.md) for architecture and tradeoffs, or the

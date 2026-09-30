@@ -51,7 +51,7 @@ export const paths = {
 	builtinImageTemplates: join(packageRoot, 'packages', 'core', 'image-templates'),
 	migrations: join(packageRoot, 'packages', 'core', 'drizzle'),
 	/** adapter-node output; `nolune start` runs it. */
-	server: join(packageRoot, 'build', 'index.js'),
+	server: join(packageRoot, 'packages', 'web', 'build', 'index.js'),
 	/**
 	 * Where the gateway runs `nolune` commands for the CLI, so they don't load all of nolune each time.
 	 * Its folder is private: only this user can connect.

@@ -6,7 +6,8 @@
 	let { class: className }: Props = $props();
 </script>
 
-<!-- src/lib/assets/logo.svg, drawn in the text color: the name, then three dots that fade. -->
+<!-- packages/web/src/lib/assets/logo.svg, drawn in the text color: the name, then three dots
+     that fade. -->
 <svg
 	xmlns="http://www.w3.org/2000/svg"
 	viewBox="0 0 2088 349"

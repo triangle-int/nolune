@@ -25,8 +25,8 @@
 	}
 </script>
 
-<!-- The app's avatar (src/lib/components/AssistantAvatar.svelte) without its tooltip, and with
-     only the moods this page uses. -->
+<!-- The app's avatar (packages/web/src/lib/components/AssistantAvatar.svelte) without its tooltip,
+     and with only the moods this page uses. -->
 
 {#snippet eyeShapes(fill?: string)}
 	<g class="eyes" {fill}>

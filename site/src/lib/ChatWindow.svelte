@@ -18,7 +18,7 @@
 	import Mascot from './Mascot.svelte';
 
 	// The app in its light theme, drawn in HTML after the real screens (the sidebar and chat in
-	// src/lib/components), with a made-up family.
+	// packages/web/src/lib/components), with a made-up family.
 
 	interface Props {
 		avatar: Avatar;

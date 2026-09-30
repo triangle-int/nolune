@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { defineConfig } from 'drizzle-kit';
 
 export default defineConfig({
-	schema: './packages/core/src/db/schema.ts',
-	out: './packages/core/drizzle',
+	schema: './src/db/schema.ts',
+	out: './drizzle',
 	dialect: 'sqlite',
 	dbCredentials: {
 		url: join(process.env.NOLUNE_HOME || join(homedir(), '.nolune'), 'nolune.db')

@@ -1,4 +1,5 @@
-/* The app's fonts (src/routes/layout.css), bundled so every device shows the same ones. */
+/* The app's fonts (packages/web/src/routes/layout.css), bundled so every device shows the same
+   ones. */
 @import '@fontsource-variable/figtree';
 @import '@fontsource/fira-mono/400.css';
 @import '@fontsource/fira-mono/500.css';

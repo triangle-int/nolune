@@ -1,6 +1,9 @@
 import type { Avatar } from '@nolune/core/avatars';
 
-/** The app's `--avatar-*` colors (src/routes/layout.css): light for its light theme, dark for dark. */
+/**
+ * The app's `--avatar-*` colors (packages/web/src/routes/layout.css): light for its light
+ * theme, dark for dark.
+ */
 export const AVATAR_COLORS: Record<Avatar, { light: string; dark: string }> = {
 	probe: { light: '#039a80', dark: '#70e0c4' },
 	campfire: { light: '#d66a03', dark: '#fe9042' },

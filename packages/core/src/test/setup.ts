@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { afterAll, beforeEach } from 'vitest';
 
 /**
- * Runs before every test file (`test.setupFiles` in vite.config.ts). Each file gets its own nolune
- * home in a temp folder, emptied before every test, so a test starts with no database and no
- * profile folders, and nothing touches ~/.nolune. paths.ts reads NOLUNE_HOME when it's first
- * imported, which is after this.
+ * Runs before every test file (`test.setupFiles` in each package's vitest config). Each file gets
+ * its own nolune home in a temp folder, emptied before every test, so a test starts with no
+ * database and no profile folders, and nothing touches ~/.nolune. paths.ts reads NOLUNE_HOME when
+ * it's first imported, which is after this.
  */
 const home = mkdtempSync(join(tmpdir(), 'nolune-test-'));
 process.env.NOLUNE_HOME = home;
