@@ -348,6 +348,17 @@ export const es: Messages = {
 		}
 	},
 
+	commandMode: {
+		title: 'Comandos en este chat',
+		auto: 'Automático',
+		autoHint: 'Un modelo revisa cada comando antes de que se ejecute.',
+		unrestricted: 'Sin restricciones',
+		unrestrictedHint: 'Los comandos se ejecutan sin revisión. No recomendado.',
+		adminsOnly: 'Solo un administrador puede desactivar la revisión en un chat.',
+		labelAuto: 'Comandos: modo automático',
+		labelUnrestricted: 'Comandos: sin restricciones'
+	},
+
 	newChat: {
 		greeting: (name: string) => `¿En qué te ayudo, ${name}?`,
 		greetingNoName: '¿En qué te ayudo?',
@@ -1054,7 +1065,7 @@ export const es: Messages = {
 		},
 		commands: {
 			title: 'Comandos',
-			hint: 'El agente trabaja ejecutando comandos en este ordenador, con el acceso de esta cuenta a sus archivos y apps. En modo automático, un modelo revisa cada comando antes de que se ejecute y detiene lo que podría hacer daño sin que nadie lo haya pedido. Común a todos los perfiles.',
+			hint: 'El agente trabaja ejecutando comandos en este ordenador, con el acceso de esta cuenta a sus archivos y apps. En modo automático, un modelo revisa cada comando antes de que se ejecute y detiene lo que podría hacer daño sin que nadie lo haya pedido. Todos los chats lo siguen, salvo que alguien cambie uno con el escudo de su cuadro de mensaje; allí solo los administradores pueden desactivar la revisión.',
 			modes: {
 				auto: 'Modo automático',
 				unrestricted: 'Sin restricciones'

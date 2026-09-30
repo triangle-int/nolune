@@ -38,6 +38,7 @@ import {
 	readRow,
 	requestMessages,
 	rowCalls,
+	setCommandMode,
 	setEffort,
 	setHidden,
 	setPreset,
@@ -66,9 +67,11 @@ import {
 	BLOCK_TOTAL_LIMIT,
 	SAFETY_STOP,
 	blockedText,
+	chatCommandMode,
 	checkCommand,
 	commandMode,
-	refusedText
+	refusedText,
+	type CommandMode
 } from './command-safety.ts';
 import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
@@ -116,6 +119,7 @@ export type LiveEvent =
 	| { type: 'tool_output'; id: string; chunk: string }
 	| { type: 'title'; title: string }
 	| { type: 'model'; model: ChatModel }
+	| { type: 'commands'; commands: ChatCommands }
 	| { type: 'background'; background: BackgroundItem[] }
 	/** What the note-taker saved from the chat (memory-changes.ts), all of it. */
 	| { type: 'memory'; memory: DisplayMemoryLook[] };
@@ -133,6 +137,18 @@ export interface ChatModel {
 function chatModel(conv: Conversation): ChatModel {
 	const { presetId, presetName, provider, effort, contextWindow } = conv;
 	return { presetId, presetName, provider, effort, contextWindow };
+}
+
+/** How a chat's commands run (command-safety.ts), for its composer. */
+export interface ChatCommands {
+	/** The chat's own choice; null when it goes by Models & keys. */
+	mode: CommandMode | null;
+	/** What Models & keys says, which the chat goes by without a choice of its own. */
+	fallback: CommandMode;
+}
+
+function chatCommands(conv: Pick<Conversation, 'commandMode'> | undefined): ChatCommands {
+	return { mode: conv?.commandMode ?? null, fallback: commandMode() };
 }
 
 /** Work of the conversation's agent that goes on while it does other things, or nothing. */
@@ -160,6 +176,7 @@ export interface Snapshot {
 	title: string;
 	/** Null once the conversation was deleted. */
 	model: ChatModel | null;
+	commands: ChatCommands;
 	running: boolean;
 	error: string | null;
 	messages: DisplayMessage[];
@@ -298,6 +315,7 @@ export function getSnapshot(conversationId: string): Snapshot {
 	return {
 		title: conv?.title ?? '',
 		model: conv ? chatModel(conv) : null,
+		commands: chatCommands(conv),
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
@@ -535,6 +553,23 @@ export function changeEffort(conversationId: string, effort: Effort): ChatModel 
 }
 
 /**
+ * How the chat's commands run from its next one on, for everyone who has it open: `mode`, or
+ * null to go by Models & keys. Its subagents' commands follow. Null if the chat is gone.
+ */
+export function changeCommandMode(
+	conversationId: string,
+	mode: CommandMode | null
+): ChatCommands | null {
+	setCommandMode(conversationId, mode);
+	for (const s of listSubagents(conversationId)) setCommandMode(s.conversationId, mode);
+	const conv = getConversation(conversationId);
+	if (!conv) return null;
+	const commands = chatCommands(conv);
+	emit(conversationId, { type: 'commands', commands });
+	return commands;
+}
+
+/**
  * Renames the chat for everyone who has it open. A title the model is still thinking of for a
  * new chat doesn't replace it (replaceTitle).
  */
@@ -719,7 +754,8 @@ async function safetyCheck(
 	signal: AbortSignal,
 	st: State
 ): Promise<ToolResultBlock | null> {
-	if (commandMode() !== 'auto') return null;
+	// The chat's mode as it is now: someone may have changed it since the turn started.
+	if (chatCommandMode(getConversation(conv.id) ?? conv) !== 'auto') return null;
 	const tally = st.safety;
 	const tooMany = () => tally.streak >= BLOCK_STREAK_LIMIT || tally.total >= BLOCK_TOTAL_LIMIT;
 	if (tooMany()) {

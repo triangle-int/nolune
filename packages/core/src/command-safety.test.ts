@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	BLOCKED_PREFIX,
 	carefulVerdict,
+	chatCommandChoice,
+	chatCommandMode,
 	checkCommand,
 	checkInput,
 	commandMode,
@@ -116,6 +118,17 @@ describe('the command mode', () => {
 		saveCommandMode('auto');
 		expect(commandMode()).toBe('auto');
 		expect(readConfig().commandMode).toBeUndefined();
+	});
+
+	it('lets a chat differ, keeping only what differs from Models & keys', () => {
+		expect(chatCommandMode({ commandMode: null })).toBe('auto');
+		expect(chatCommandMode({ commandMode: 'unrestricted' })).toBe('unrestricted');
+		expect(chatCommandChoice('auto')).toBeNull();
+		expect(chatCommandChoice('unrestricted')).toBe('unrestricted');
+		saveCommandMode('unrestricted');
+		expect(chatCommandMode({ commandMode: null })).toBe('unrestricted');
+		expect(chatCommandChoice('auto')).toBe('auto');
+		expect(chatCommandChoice('unrestricted')).toBeNull();
 	});
 
 	it("checks with each chat's own model, or the preset chosen, while it's there", () => {

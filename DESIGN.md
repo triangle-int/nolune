@@ -599,6 +599,14 @@ set command-mode`), which runs commands unchecked as nolune did before. It appli
 command, to chats, automations and subagents alike, and on the plans too, since their commands run
 through the same `runToolCall`.
 
+- **Per chat.** A shield chip in the composer (new chats too) sets a chat apart from Models & keys:
+  `conversation.command_mode`, null while it goes by Models & keys, so a chat keeps only what
+  differs (`chatCommandChoice`). Anyone in the profile can have a chat's commands checked; only an
+  admin can turn that off for one, since auto mode is there partly so a child can't. The check
+  reads the chat's mode at every command, so a change applies mid-turn, and everyone with the chat
+  open gets it live (a `commands` event). Subagents start with their chat's mode and change with
+  it; automations go by Models & keys until a notification's chat sets its own.
+
 - **Commands that only look run at once** (`read-only-commands.ts`): `ls`, `cat`, `grep`, `find`
   without `-exec` or `-delete`, `nolune memory search` and the like, joined by pipes, `&&` or `;`,
   redirected only to `/dev/null`, and nowhere near where secrets live (`.ssh`, `.env`,

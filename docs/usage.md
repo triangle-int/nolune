@@ -168,7 +168,9 @@ Access). `nolune setup` prints the exact path.
   every command that does more than look costs a short call to it. Admins switch to
   **Unrestricted** (commands run unchecked, not recommended) under Commands in Models & keys, or
   with `nolune config set command-mode unrestricted`; `nolune config set safety-model <preset>`
-  picks the model. nolune can't change either itself.
+  picks the model. nolune can't change either itself. A single chat can differ: the shield in its
+  message box switches it between Auto and Unrestricted (only admins can pick Unrestricted there),
+  and the subagents it starts follow it.
 - Extra environment variables for the agent's commands, e.g. for a firecrawl web-search skill:
   `nolune env set FIRECRAWL_API_KEY fc-...`
 - Logs: `nolune service logs -f`. Data: `~/.nolune` (override with `NOLUNE_HOME`).

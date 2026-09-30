@@ -4,7 +4,13 @@
 	import { invalidate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import type { ChatModel, DisplayAttachment, Usage } from '@nolune/core';
+	import type {
+		ChatCommands,
+		ChatModel,
+		CommandMode,
+		DisplayAttachment,
+		Usage
+	} from '@nolune/core';
 	import type { Avatar } from '@nolune/core/avatars';
 	import { cacheHitRate, cacheMissTokens, cacheTtlMs, promptTokens } from '@nolune/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
@@ -46,6 +52,7 @@
 	import MemoryLook from './chat/MemoryLook.svelte';
 	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
 	import MessageAttachments from './chat/MessageAttachments.svelte';
+	import CommandModeMenu from './chat/CommandModeMenu.svelte';
 	import ModelMenu, { shortModelName } from './chat/ModelMenu.svelte';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
 	import PageHeader from './PageHeader.svelte';
@@ -67,6 +74,8 @@
 			/** A background run nobody has continued yet. */
 			hidden: boolean;
 			cacheTtl: '5m' | '1h';
+			/** How its commands run, until the chat says otherwise live. */
+			commands: ChatCommands;
 			/** A subagent's own chat: only the agent that started it writes here. */
 			subagent: { name: string; parentId: string; parentTitle: string } | null;
 		};
@@ -119,6 +128,15 @@
 			contextWindow: conversation.contextWindow
 		}
 	);
+	/** How its commands run: anyone can have them checked, only admins can turn that off. */
+	const commands = $derived(chat.commands ?? conversation.commands);
+
+	async function changeCommands(mode: CommandMode) {
+		if (mode === (commands.mode ?? commands.fallback)) return;
+		const res = await post('commands', { mode });
+		if (res) chat.apply({ type: 'commands', commands: (await res.json()) as ChatCommands });
+	}
+
 	/** A removed preset isn't in the list, but the chat still runs on its model: it shows as `current`. */
 	const listed = $derived(presets.some((p) => p.id === model.presetId));
 	const menuPresets = $derived(
@@ -857,6 +875,12 @@
 						{defaultPresetId}
 						{avatar}
 						bind:open={modelMenuOpen}
+					/>
+					<CommandModeMenu
+						mode={commands.mode ?? commands.fallback}
+						fallback={commands.fallback}
+						canUnrestrict={page.data.user?.isAdmin === true}
+						onchange={changeCommands}
 					/>
 				{/snippet}
 			</Composer>

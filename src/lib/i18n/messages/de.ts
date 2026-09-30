@@ -328,6 +328,17 @@ export const de: Messages = {
 		}
 	},
 
+	commandMode: {
+		title: 'Befehle in diesem Chat',
+		auto: 'Automatisch',
+		autoHint: 'Ein Modell prüft jeden Befehl, bevor er läuft.',
+		unrestricted: 'Uneingeschränkt',
+		unrestrictedHint: 'Befehle laufen ohne Prüfung. Nicht empfohlen.',
+		adminsOnly: 'Nur Admins können die Prüfung für einen Chat ausschalten.',
+		labelAuto: 'Befehle: automatischer Modus',
+		labelUnrestricted: 'Befehle: uneingeschränkt'
+	},
+
 	newChat: {
 		greeting: (name: string) => `Wobei kann ich helfen, ${name}?`,
 		greetingNoName: 'Wobei kann ich helfen?',
@@ -1045,7 +1056,7 @@ export const de: Messages = {
 		},
 		commands: {
 			title: 'Befehle',
-			hint: 'Der Agent arbeitet, indem er Befehle auf diesem Computer ausführt, mit dem Zugriff dieses Kontos auf seine Dateien und Apps. Im automatischen Modus prüft ein Modell jeden Befehl, bevor er läuft, und stoppt, was Schaden anrichten könnte, ohne dass jemand darum gebeten hat. Gilt für alle Profile.',
+			hint: 'Der Agent arbeitet, indem er Befehle auf diesem Computer ausführt, mit dem Zugriff dieses Kontos auf seine Dateien und Apps. Im automatischen Modus prüft ein Modell jeden Befehl, bevor er läuft, und stoppt, was Schaden anrichten könnte, ohne dass jemand darum gebeten hat. Jeder Chat richtet sich danach, außer jemand stellt ihn mit dem Schild im Eingabefeld anders ein; die Prüfung ausschalten können dort nur Admins.',
 			modes: {
 				auto: 'Automatischer Modus',
 				unrestricted: 'Uneingeschränkt'

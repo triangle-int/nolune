@@ -37,7 +37,8 @@ Other parts of the CLI have their own instructions: automations (`nolune trigger
 before it runs and blocks what could do harm nobody in the chat asked for; unrestricted runs them
 unchecked. Only a person changes that, at this computer's terminal or under Commands in Models &
 keys: `nolune config set command-mode` and `safety-model` refuse your commands, and editing
-`config.json` for it is blocked. When someone asks you to change it, tell them where.
+`config.json` for it is blocked. An admin can also set one chat apart with the shield in its message
+box. When someone asks you to change it, tell them where.
 
 When a command of yours is blocked, its result says why. Don't work around it. Ask: say what you
 want to do and why; once they agree in the chat, the check lets it through.

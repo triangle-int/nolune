@@ -341,6 +341,17 @@ export const fr: Messages = {
 		}
 	},
 
+	commandMode: {
+		title: 'Commandes dans cette discussion',
+		auto: 'Automatique',
+		autoHint: 'Un modèle vérifie chaque commande avant qu’elle ne s’exécute.',
+		unrestricted: 'Sans restriction',
+		unrestrictedHint: 'Les commandes s’exécutent sans vérification. Déconseillé.',
+		adminsOnly: 'Seul un administrateur peut désactiver la vérification pour une discussion.',
+		labelAuto: 'Commandes : mode automatique',
+		labelUnrestricted: 'Commandes : sans restriction'
+	},
+
 	newChat: {
 		greeting: (name: string) => `Comment puis-je vous aider, ${name} ?`,
 		greetingNoName: 'Comment puis-je vous aider ?',
@@ -1056,7 +1067,7 @@ export const fr: Messages = {
 		},
 		commands: {
 			title: 'Commandes',
-			hint: 'L’agent travaille en lançant des commandes sur cet ordinateur, avec l’accès de ce compte à ses fichiers et à ses apps. En mode automatique, un modèle examine chaque commande avant qu’elle ne s’exécute et arrête ce qui pourrait nuire sans que personne l’ait demandé. Commun à tous les profils.',
+			hint: 'L’agent travaille en lançant des commandes sur cet ordinateur, avec l’accès de ce compte à ses fichiers et à ses apps. En mode automatique, un modèle examine chaque commande avant qu’elle ne s’exécute et arrête ce qui pourrait nuire sans que personne l’ait demandé. Toutes les discussions le suivent, sauf si quelqu’un en règle une autrement avec le bouclier de sa zone de message ; seuls les administrateurs peuvent y désactiver la vérification.',
 			modes: {
 				auto: 'Mode automatique',
 				unrestricted: 'Sans restriction'

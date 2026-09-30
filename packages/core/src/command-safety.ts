@@ -35,7 +35,7 @@ export function isCommandMode(value: string): value is CommandMode {
 	return (COMMAND_MODES as readonly string[]).includes(value);
 }
 
-/** Auto, unless the admin chose unrestricted. */
+/** What chats follow unless they say otherwise: auto, unless an admin chose unrestricted. */
 export function commandMode(): CommandMode {
 	try {
 		return readConfig().commandMode === 'unrestricted' ? 'unrestricted' : 'auto';
@@ -43,6 +43,16 @@ export function commandMode(): CommandMode {
 		// Not set up yet: nothing has chosen otherwise.
 		return 'auto';
 	}
+}
+
+/** How a chat's commands run: its own choice, else Models & keys'. */
+export function chatCommandMode(conv: { commandMode: CommandMode | null }): CommandMode {
+	return conv.commandMode ?? commandMode();
+}
+
+/** What a chat keeps for a mode picked in it: nothing when it's what Models & keys says anyway. */
+export function chatCommandChoice(mode: CommandMode): CommandMode | null {
+	return mode === commandMode() ? null : mode;
 }
 
 export function saveCommandMode(mode: CommandMode): void {

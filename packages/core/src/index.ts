@@ -99,6 +99,8 @@ export {
 } from './presets.ts';
 export {
 	COMMAND_MODES,
+	chatCommandChoice,
+	chatCommandMode,
 	commandMode,
 	commandSafetyState,
 	describeCommandSafety,
@@ -157,6 +159,7 @@ export {
 	type MediaRow
 } from './media.ts';
 export {
+	changeCommandMode,
 	changeEffort,
 	changeModel,
 	getSnapshot,
@@ -172,6 +175,7 @@ export {
 	stop,
 	subscribe,
 	type BackgroundItem,
+	type ChatCommands,
 	type ChatModel,
 	type LiveBlock,
 	type LiveEvent,

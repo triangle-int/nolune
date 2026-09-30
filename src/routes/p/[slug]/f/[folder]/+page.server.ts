@@ -1,6 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import {
 	EFFORTS,
+	commandMode,
 	FolderError,
 	MAX_FOLDER_FILES,
 	MAX_FOLDER_INSTRUCTIONS,
@@ -53,7 +54,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		maxInstructions: MAX_FOLDER_INSTRUCTIONS,
 		presets: listPresets().map((p) => ({ id: p.id, name: p.name })),
 		defaultPresetId: getDefaultPreset()?.id ?? '',
-		efforts: [...EFFORTS]
+		efforts: [...EFFORTS],
+		commandMode: commandMode()
 	};
 };
 

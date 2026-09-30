@@ -2,12 +2,15 @@ import { fail, redirect } from '@sveltejs/kit';
 import {
 	AttachmentError,
 	EFFORTS,
+	chatCommandChoice,
+	commandMode,
 	createConversation,
 	currentSuggestions,
 	findUploads,
 	getDefaultPreset,
 	getFolder,
 	getPreset,
+	isCommandMode,
 	listPresets,
 	sendMessage,
 	type Effort
@@ -29,6 +32,7 @@ export const load: PageServerLoad = ({ locals, params, url }) => {
 		presets: listPresets().map((p) => ({ id: p.id, name: p.name })),
 		defaultPresetId: getDefaultPreset()?.id ?? '',
 		efforts: [...EFFORTS],
+		commandMode: commandMode(),
 		folderId: folderId && getFolder(profile.id, folderId) ? folderId : null
 	};
 };
@@ -52,6 +56,13 @@ export const actions: Actions = {
 		if (folderId && !getFolder(profile.id, folderId)) {
 			return fail(400, { message: m.newChat.folderGone });
 		}
+		// Left out (the folder's page), the chat goes by Models & keys.
+		const commands = form.get('commands')?.toString() || commandMode();
+		if (!isCommandMode(commands)) return fail(400, { message: 'Unknown command mode' });
+		const commandChoice = chatCommandChoice(commands);
+		if (commandChoice === 'unrestricted' && !user.isAdmin) {
+			return fail(403, { message: m.commandMode.adminsOnly });
+		}
 		try {
 			// Checked before the conversation exists, so a stale file doesn't leave an empty chat.
 			findUploads(profile.id, user.id, uploads);
@@ -64,7 +75,8 @@ export const actions: Actions = {
 			presetId,
 			userId: user.id,
 			effort,
-			folderId
+			folderId,
+			commandMode: commandChoice
 		});
 		if (text || uploads.length) {
 			await sendMessage(conversation.id, { id: user.id, name: user.name }, text, uploads);

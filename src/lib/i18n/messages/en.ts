@@ -253,6 +253,17 @@ export const en = {
 		}
 	},
 
+	commandMode: {
+		title: 'Commands in this chat',
+		auto: 'Auto',
+		autoHint: 'A model checks each command before it runs.',
+		unrestricted: 'Unrestricted',
+		unrestrictedHint: 'Commands run without a check. Not recommended.',
+		adminsOnly: 'Only an admin can turn the checks off for a chat.',
+		labelAuto: 'Commands: auto mode',
+		labelUnrestricted: 'Commands: unrestricted'
+	},
+
 	newChat: {
 		greeting: (name: string) => `What can I help with, ${name}?`,
 		greetingNoName: 'What can I help with?',
@@ -964,7 +975,7 @@ export const en = {
 		},
 		commands: {
 			title: 'Commands',
-			hint: "The agent works by running commands on this computer, with this account's access to its files and apps. Auto mode has a model look at each command before it runs and stop what could do harm nobody asked for. Shared by every profile.",
+			hint: "The agent works by running commands on this computer, with this account's access to its files and apps. Auto mode has a model look at each command before it runs and stop what could do harm nobody asked for. Every chat goes by it unless someone sets that chat differently with the shield in its message box; only admins can turn the checks off there.",
 			modes: {
 				auto: 'Auto mode',
 				unrestricted: 'Unrestricted'

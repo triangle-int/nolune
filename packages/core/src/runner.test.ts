@@ -16,6 +16,7 @@ import { addMemoryFact } from './memory.ts';
 import { conversation } from './db/schema.ts';
 import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
 import {
+	changeCommandMode,
 	changeEffort,
 	changeModel,
 	getSnapshot,
@@ -535,6 +536,65 @@ describe('auto mode', () => {
 		expect(results(chat.id)).toEqual([
 			[{ type: 'tool_result', callId: 't1', content: 'Not run. Stopped by Anna.', isError: true }]
 		]);
+	});
+
+	it("goes by the chat's own mode, changed for everyone who has it open", async () => {
+		const { chat } = tidyingChat(
+			modelReply([tidy('t1', 'rm -rf ~/Downloads')], 'tool_use'),
+			said('Emptied it.')
+		);
+		const events: LiveEvent[] = [];
+		subscribe(chat.id, (event) => events.push(event));
+		vi.mocked(runCommand).mockResolvedValueOnce({
+			content: '[exit code 0]',
+			isError: false,
+			exitCode: 0
+		});
+
+		expect(changeCommandMode(chat.id, 'unrestricted')).toEqual({
+			mode: 'unrestricted',
+			fallback: 'auto'
+		});
+		await run(chat.id);
+
+		expect(runCommand).toHaveBeenCalledTimes(1);
+		expect(createMessage).not.toHaveBeenCalled();
+		expect(events).toContainEqual({
+			type: 'commands',
+			commands: { mode: 'unrestricted', fallback: 'auto' }
+		});
+		expect(getSnapshot(chat.id).commands).toEqual({ mode: 'unrestricted', fallback: 'auto' });
+	});
+
+	it('checks a chat set to auto when Models & keys says unrestricted', async () => {
+		saveCommandMode('unrestricted');
+		const { chat } = tidyingChat(
+			modelReply([tidy('t1', 'rm -rf ~/Downloads')], 'tool_use'),
+			said('I need your OK first.')
+		);
+		changeCommandMode(chat.id, 'auto');
+		checkSays('BLOCK', "Verdict: BLOCK\nReason: Anna didn't ask to delete everything.");
+
+		await run(chat.id);
+
+		expect(runCommand).not.toHaveBeenCalled();
+		expect(results(chat.id)[0][0].content).toMatch(/^Blocked by auto mode/);
+	});
+
+	it("starts subagents with their chat's mode, and changes theirs with it", () => {
+		const { chat } = tidyingChat();
+		changeCommandMode(chat.id, 'unrestricted');
+		const { conversation: sub } = runSubagent({
+			parentId: chat.id,
+			name: 'sorter',
+			prompt: 'Sort.'
+		});
+		const modeOf = (id: string) =>
+			getDb().select().from(conversation).where(eq(conversation.id, id)).get()?.commandMode;
+
+		expect(modeOf(sub.id)).toBe('unrestricted');
+		changeCommandMode(chat.id, null);
+		expect(modeOf(sub.id)).toBeNull();
 	});
 
 	it('checks nothing when commands are unrestricted', async () => {
