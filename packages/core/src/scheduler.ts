@@ -11,6 +11,7 @@ import {
 import { pruneUploads } from './attachments.ts';
 import { pruneMedia } from './media.ts';
 import { startLearning } from './memory-learning.ts';
+import { profileCards } from './memory-cards.ts';
 import { recallByWords, startEmbeddingMemory } from './memory-search.ts';
 import { pruneProviderFiles } from './provider-files.ts';
 import { createNotification, pruneNotifications } from './notifications.ts';
@@ -187,7 +188,7 @@ function startAgentRun(run: TriggerRun): void {
 		hidden: true
 	});
 	const text = [run.prompt, run.payload].filter(Boolean).join('\n\n');
-	const memory = recall(profile.slug, text, conv.systemPrompt);
+	const memory = recall(profile, text, conv.systemPrompt);
 	appendRow({
 		conversationId: conv.id,
 		role: 'user',
@@ -208,11 +209,12 @@ function startAgentRun(run: TriggerRun): void {
  * What memory has on an automation's prompt, like on a person's message but by words only: the
  * run starts now. Never stops the run.
  */
-function recall(slug: string, text: string, known: string): string | null {
+function recall(profile: { id: string; slug: string }, text: string, known: string): string | null {
 	try {
-		return recallByWords(slug, text, { known });
+		const cards = profileCards(profile.id).map((card) => card.path);
+		return recallByWords(profile.slug, text, { known, cards });
 	} catch (err) {
-		console.error(`[nolune] ${slug} could not look in memory for a background run:`, err);
+		console.error(`[nolune] ${profile.slug} could not look in memory for a background run:`, err);
 		return null;
 	}
 }

@@ -1,15 +1,18 @@
-import { and, asc, desc, eq, gte, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
-import { conversation, memoryChange } from './db/schema.ts';
+import { card, conversation, memoryChange, user } from './db/schema.ts';
+import { CARDS_FOLDER, isCardPath } from './memory-categories.ts';
 import { parseFacts } from './memory-facts.ts';
 import { MemoryError, revertMemoryLines } from './memory.ts';
+import { CARDS } from './paths.ts';
 
 /*
  * What the note-taker (memory-learning.ts) changed in memory, and the chat it learned it from, so
  * people see it: in that chat, after the last message it read, and on the Memory page. Each change
  * can be undone from either, which puts back the lines it left in the note, as long as nobody
  * changed them since. The agent's own saves show as its commands, and people's edits are their
- * own, so neither is kept here.
+ * own, so neither is kept here, except the agent's on a card (memory-cards.ts): a card's owner
+ * sees every change to it, from any of their profiles, and only they can undo one.
  */
 
 /** A change as the note-taker made it, with the lines it left in the note. */
@@ -31,6 +34,8 @@ export function recordMemoryChanges(input: {
 	/** The last message it read. */
 	afterMessageId: number;
 	changes: RecordedMemoryChange[];
+	/** The note-taker's (the default), or the agent's on a card. */
+	source?: 'learning' | 'agent';
 }): void {
 	if (!input.changes.length) return;
 	getDb()
@@ -40,6 +45,7 @@ export function recordMemoryChanges(input: {
 				profileId: input.profileId,
 				conversationId: input.conversationId,
 				afterMessageId: input.afterMessageId,
+				source: input.source ?? 'learning',
 				op: change.op,
 				note: change.note,
 				line: change.line,
@@ -63,6 +69,8 @@ export interface DisplayMemoryChange {
 	createdAt: number;
 	/** Undone, when and by whom. */
 	undone: { at: number; by: string | null } | null;
+	/** A change to a card: whose it is. Only they can undo it. */
+	card: { ownerId: string; owner: string } | null;
 }
 
 /** What one look at a chat changed, shown after the last message it read. */
@@ -80,7 +88,27 @@ function plainLines(lines: string): string {
 	return parseFacts(lines).join(' · ') || lines.trim();
 }
 
-function toDisplay(row: Row): DisplayMemoryChange {
+/** The owners of the cards among `notes`, by path. */
+function cardOwners(notes: string[]): Map<string, { ownerId: string; owner: string }> {
+	const names = [...new Set(notes.filter(isCardPath))].map((note) =>
+		note.replace(/\.(md|markdown|txt)$/i, '').slice(CARDS_FOLDER.length + 1)
+	);
+	if (!names.length) return new Map();
+	return new Map(
+		getDb()
+			.select({ name: card.name, ownerId: user.id, owner: user.name })
+			.from(card)
+			.innerJoin(user, eq(user.id, card.userId))
+			.where(inArray(card.name, names))
+			.all()
+			.map((row) => [`${CARDS_FOLDER}/${row.name}.md`, { ownerId: row.ownerId, owner: row.owner }])
+	);
+}
+
+function toDisplay(
+	row: Row,
+	owners: Map<string, { ownerId: string; owner: string }>
+): DisplayMemoryChange {
 	return {
 		id: row.id,
 		op: row.op,
@@ -88,18 +116,25 @@ function toDisplay(row: Row): DisplayMemoryChange {
 		fact: plainLines(row.line),
 		before: row.before === null ? null : plainLines(row.before),
 		createdAt: row.createdAt.getTime(),
-		undone: row.undoneAt ? { at: row.undoneAt.getTime(), by: row.undoneBy } : null
+		undone: row.undoneAt ? { at: row.undoneAt.getTime(), by: row.undoneBy } : null,
+		card: owners.get(row.note) ?? null
 	};
 }
 
-/** What the note-taker saved from a chat, each look with the message it shows after. */
+/**
+ * What the note-taker saved from a chat, each look with the message it shows after. The agent's
+ * changes to a card show in the chat as its commands.
+ */
 export function memoryLooks(conversationId: string): DisplayMemoryLook[] {
 	const rows = getDb()
 		.select()
 		.from(memoryChange)
-		.where(eq(memoryChange.conversationId, conversationId))
+		.where(
+			and(eq(memoryChange.conversationId, conversationId), eq(memoryChange.source, 'learning'))
+		)
 		.orderBy(asc(memoryChange.id))
 		.all();
+	const owners = cardOwners(rows.map((row) => row.note));
 	const looks = new Map<number, DisplayMemoryLook>();
 	for (const row of rows) {
 		let look = looks.get(row.afterMessageId);
@@ -107,7 +142,7 @@ export function memoryLooks(conversationId: string): DisplayMemoryLook[] {
 			look = { after: row.afterMessageId, createdAt: row.createdAt.getTime(), changes: [] };
 			looks.set(row.afterMessageId, look);
 		}
-		look.changes.push(toDisplay(row));
+		look.changes.push(toDisplay(row, owners));
 	}
 	return [...looks.values()];
 }
@@ -117,28 +152,42 @@ export interface RecentMemoryChange extends DisplayMemoryChange {
 	conversation: { id: string; title: string } | null;
 }
 
-/** What the note-taker saved in a profile lately, newest first. */
+/**
+ * What the note-taker saved from a profile's chats lately, newest first: on its members' cards
+ * too, but only from this profile's chats, so nobody learns where a card fact came from unless
+ * they're in that profile.
+ */
 export function recentMemoryChanges(
 	profileId: string,
 	{ since, limit }: { since: Date; limit: number }
 ): RecentMemoryChange[] {
-	return getDb()
+	const rows = getDb()
 		.select({ change: memoryChange, title: conversation.title })
 		.from(memoryChange)
 		.leftJoin(conversation, eq(conversation.id, memoryChange.conversationId))
-		.where(and(eq(memoryChange.profileId, profileId), gte(memoryChange.createdAt, since)))
+		.where(
+			and(
+				eq(memoryChange.profileId, profileId),
+				eq(memoryChange.source, 'learning'),
+				gte(memoryChange.createdAt, since)
+			)
+		)
 		.orderBy(desc(memoryChange.id))
 		.limit(limit)
-		.all()
-		.map(({ change, title }) => ({
-			...toDisplay(change),
-			conversation: change.conversationId ? { id: change.conversationId, title: title ?? '' } : null
-		}));
+		.all();
+	const owners = cardOwners(rows.map(({ change }) => change.note));
+	return rows.map(({ change, title }) => ({
+		...toDisplay(change, owners),
+		conversation: change.conversationId ? { id: change.conversationId, title: title ?? '' } : null
+	}));
 }
 
-/** Why a change can't be undone: it already was, or its lines changed since. */
+/**
+ * Why a change can't be undone: it already was, its lines changed since, or it's on someone
+ * else's card.
+ */
 export class MemoryUndoError extends Error {
-	readonly reason: 'undone' | 'changed' | 'missing';
+	readonly reason: 'undone' | 'changed' | 'missing' | 'owner';
 
 	constructor(reason: MemoryUndoError['reason'], message: string) {
 		super(message);
@@ -148,12 +197,14 @@ export class MemoryUndoError extends Error {
 
 /**
  * Undoes a change of the profile's: an added fact goes (and a note it started, once empty), a
- * replaced one reads as before. Returns the chat it came from, whose open views need to know.
+ * replaced one reads as before. A change to a card only by its owner (`userId`). Returns the chat
+ * it came from, whose open views need to know.
  */
 export function undoMemoryChange(
 	profile: { id: string; slug: string },
 	id: number,
-	by: string
+	by: string,
+	userId?: string
 ): { conversationId: string | null } {
 	const db = getDb();
 	const row = db
@@ -163,10 +214,14 @@ export function undoMemoryChange(
 		.get();
 	if (!row) throw new MemoryUndoError('missing', 'No such memory change.');
 	if (row.undoneAt) throw new MemoryUndoError('undone', 'It was already undone.');
+	const onCard = isCardPath(row.note);
+	if (onCard && cardOwners([row.note]).get(row.note)?.ownerId !== userId) {
+		throw new MemoryUndoError('owner', 'Only its owner can change a card.');
+	}
+	const place = onCard ? CARDS : profile.slug;
 	try {
-		if (row.op === 'add')
-			revertMemoryLines(profile.slug, row.note, row.line, null, row.createdNote);
-		else revertMemoryLines(profile.slug, row.note, row.line, row.before);
+		if (row.op === 'add') revertMemoryLines(place, row.note, row.line, null, row.createdNote);
+		else revertMemoryLines(place, row.note, row.line, row.before);
 	} catch (err) {
 		if (err instanceof MemoryError) throw new MemoryUndoError('changed', err.message);
 		throw err;

@@ -3,6 +3,7 @@ import { hashPassword } from 'better-auth/crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
 import { account, user } from './db/schema.ts';
+import { trashCard } from './memory-cards.ts';
 
 export const MIN_PASSWORD_LENGTH = 14;
 
@@ -112,8 +113,10 @@ export function listUsers() {
 		.all();
 }
 
+/** Deletes the account; their card goes to the trash, like a deleted profile. */
 export function deleteUser(nameOrEmail: string): void {
 	const found = findUser(nameOrEmail);
 	if (!found) throw new Error(`No user "${nameOrEmail}"`);
+	trashCard(found.id);
 	getDb().delete(user).where(eq(user.id, found.id)).run();
 }

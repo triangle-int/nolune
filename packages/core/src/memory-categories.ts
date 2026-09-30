@@ -38,11 +38,11 @@ const NOTES: MemoryCategory[] = MEMORY_CATEGORIES.filter((c) => c !== 'people');
 
 /** What goes in each, for the agent and the note-taker. */
 export const CATEGORY_HINTS: Record<MemoryCategory, string> = {
-	core: 'pinned, in every conversation whole, so only what matters in nearly every one: who is in the family and how to address them, the languages they use, allergies, standing preferences',
+	core: "pinned, in every conversation whole, so only what matters in nearly every one: who is in the family and how to address them, the languages they use, allergies, standing preferences (a member's own go on their card)",
 	people:
 		"one note per person, in the family or not (grandparents, friends, the nanny, doctors, teachers): who they are to the family, what they're called, how to reach them, birthdays, what they like",
 	home: 'the home and household: devices, accounts and services, where things are kept, codes',
-	health: 'conditions, medicines, doctors (allergies also go in core)',
+	health: "conditions, medicines, doctors (allergies also go in core, or on a member's card)",
 	plans: "what's coming up, with full dates: events, trips, appointments, deadlines",
 	routines: 'what repeats: schedules, classes, chores, habits, meals',
 	pets: 'the pets',

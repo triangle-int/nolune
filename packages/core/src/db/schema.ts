@@ -148,6 +148,20 @@ export const profileMember = sqliteTable(
 	]
 );
 
+/**
+ * A user's card (memory-cards.ts): a note that goes with them into all their profiles, kept as
+ * `~/.nolune/cards/<name>.md`. The name is picked when it's first needed and fixed after that,
+ * like a profile's slug, so the paths in prompts stay valid.
+ */
+export const card = sqliteTable('card', {
+	userId: text('user_id')
+		.primaryKey()
+		.references(() => user.id, { onDelete: 'cascade' }),
+	/** Like `anna`: the card is `cards/anna.md` in every profile its owner is in. */
+	name: text('name').notNull().unique(),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+});
+
 export const modelPreset = sqliteTable('model_preset', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull().unique(),
@@ -663,7 +677,8 @@ export const providerFile = sqliteTable(
 /**
  * What the note-taker (memory-learning.ts) changed in a profile's memory, and the chat it learned
  * it from: shown in that chat after the last message it read, and on the Memory page, each with
- * Undo. The agent's own saves show as its commands, so they aren't here.
+ * Undo. The agent's own saves show as its commands, so they aren't here, except on a card
+ * (memory-cards.ts), whose owner sees every change to it from any of their profiles.
  */
 export const memoryChange = sqliteTable(
 	'memory_change',
@@ -677,8 +692,12 @@ export const memoryChange = sqliteTable(
 		}),
 		/** The last message it read: the change shows after it. */
 		afterMessageId: integer('after_message_id').notNull(),
+		/** Who made it: the note-taker, or the agent (only on a card). */
+		source: text('source', { enum: ['learning', 'agent'] })
+			.default('learning')
+			.notNull(),
 		op: text('op', { enum: ['add', 'replace'] }).notNull(),
-		/** The note's path in the memory folder, like `people/leo.md`. */
+		/** The note's path in the memory folder, like `people/leo.md`, or a card's, `cards/leo.md`. */
 		note: text('note').notNull(),
 		/** The lines the change left in the note, as they are there. */
 		line: text('line').notNull(),

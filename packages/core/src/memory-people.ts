@@ -10,6 +10,7 @@ import {
 	titleIn,
 	whoIn
 } from './memory-categories.ts';
+import { profileCards } from './memory-cards.ts';
 import { parseFacts } from './memory-facts.ts';
 import {
 	MemoryError,
@@ -301,19 +302,22 @@ export function mergeProfileNotes(
 }
 
 /**
- * Who is who, for the agent and the note-taker: each member with their note, like
- * `- Anna Smith: people/anna`. Empty without members.
+ * Who is who, for the agent and the note-taker: each member with their card (memory-cards.ts)
+ * and their note here, like `- Anna Smith: card cards/anna, note people/anna`. Empty without
+ * members.
  */
 export function peopleGuide(profile: ProfileRef): string {
+	const cards = new Map(profileCards(profile.id).map((card) => [card.userId, card]));
 	return membersWithNotes(profile)
 		.map((member) => {
 			const note = member.note?.replace(/\.md$/i, '');
 			const state = !note
-				? 'no note linked yet'
+				? 'no note here linked yet'
 				: member.exists
-					? note
-					: `${note} (nothing in it yet)`;
-			return `- ${member.name}: ${state}`;
+					? `note ${note}`
+					: `note ${note} (nothing in it yet)`;
+			const card = cards.get(member.id)?.path.replace(/\.md$/i, '');
+			return `- ${member.name}: ${card ? `card ${card}, ` : ''}${state}`;
 		})
 		.join('\n');
 }

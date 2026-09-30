@@ -102,7 +102,12 @@ describe('learnFrom', () => {
 		);
 		expect(input).not.toContain('SAVE THIS');
 		expect(input).not.toContain('cat vets.txt');
-		expect(input).toContain('<people>\n- Anna: people/anna (nothing in it yet)\n</people>');
+		expect(input).toContain(
+			'<people>\n- Anna: card cards/anna, note people/anna (nothing in it yet)\n</people>'
+		);
+		expect(input).toContain(
+			'<cards>\n<card name="cards/anna" of="Anna" room="2000 characters">\n(empty so far)\n</card>\n</cards>'
+		);
 	});
 
 	it('only saves into the categories', async () => {
@@ -229,7 +234,12 @@ describe('what it saved', () => {
 		await learnFrom(conv.id);
 		off();
 
-		const change = { id: expect.any(Number), createdAt: expect.any(Number), undone: null };
+		const change = {
+			id: expect.any(Number),
+			createdAt: expect.any(Number),
+			undone: null,
+			card: null
+		};
 		const looks = memoryLooks(conv.id);
 		expect(looks).toEqual([
 			{

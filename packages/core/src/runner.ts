@@ -84,6 +84,7 @@ import {
 	type PreparedMedia
 } from './media.ts';
 import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
+import { profileCards } from './memory-cards.ts';
 import { memberWords } from './memory-people.ts';
 import { recallFor } from './memory-search.ts';
 import { profileDir } from './paths.ts';
@@ -507,7 +508,9 @@ async function recall(
 		const known = [conv.systemPrompt, ...rows.map((row) => messageText(readRow(row).blocks))];
 		// What's about who's asking comes first, by any name their note calls them.
 		const words = memberWords({ id: conv.profileId, slug }, sender.id, sender.name);
-		return await recallFor(slug, text, { sender: words, known: known.join('\n') });
+		// The members' cards too: one that changed since the chat started has news.
+		const cards = profileCards(conv.profileId).map((card) => card.path);
+		return await recallFor(slug, text, { sender: words, known: known.join('\n'), cards });
 	} catch (err) {
 		console.error(`[nolune] ${conv.id.slice(0, 8)} could not look in memory:`, err);
 		return null;

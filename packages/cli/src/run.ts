@@ -70,6 +70,7 @@ import {
 	type CustomApi
 } from '@nolune/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
+import { CARD_HELP, cardCommand } from './card.ts';
 import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
@@ -187,6 +188,8 @@ ${PROFILE_HELP}
 ${TRIGGER_HELP}
 
 ${MEMORY_HELP}
+
+${CARD_HELP}
 
 ${SOUL_HELP}
 
@@ -928,6 +931,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		case 'memory':
 			requireInit();
 			return memoryCommand(io, argv.slice(1));
+
+		case 'card':
+			requireInit();
+			return cardCommand(io, argv.slice(1));
 
 		case 'soul':
 			requireInit();
