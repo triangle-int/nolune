@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - site
 allowBuilds:
   # Ships prebuilt binaries; its binding.gyp would make pnpm run node-gyp.
   better-sqlite3: false

@@ -31,6 +31,8 @@ jobs:
             run: pnpm test
           - name: Build
             run: pnpm build
+          - name: Site
+            run: pnpm --filter @nolune/site check && pnpm --filter @nolune/site build
     steps:
       - uses: actions/checkout@v5
         with:
