@@ -105,6 +105,7 @@ cp "$MACOS/Resources/Fonts/OFL.txt" "$CONTENTS/Resources/Figtree-OFL.txt"
 cp "$WORK/$NODE_DIR/LICENSE" "$CONTENTS/Resources/Node-LICENSE.txt"
 SOUNDS="$ROOT/packages/web/src/lib/assets/sounds/welcome"
 cp "$SOUNDS/music.mp3" "$SOUNDS/confirm.mp3" "$CONTENTS/Resources/"
+cp "$MACOS/Resources/Sounds/boom.mp3" "$CONTENTS/Resources/"
 mv "$WORK/app" "$CONTENTS/Resources/app"
 
 ICONSET="$WORK/AppIcon.iconset"

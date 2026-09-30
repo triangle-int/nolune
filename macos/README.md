@@ -74,7 +74,8 @@ onboarding over.
   dims and specks of light spiral in from all over the screen; at the bang the window's knocked
   about, the flash lights up the desktop, the shock waves roll out across the screen and sparks
   fly out past the window's edges, falling as they burn out. With no screen to draw on, the window
-  draws the bang itself.
+  draws the bang itself. It's heard a moment after it's seen, far away: unfa's Big Boom, made
+  distant (`Resources/Sounds`, with its credit).
 
 The CI workflow `macos.yml` builds the app on every change here, checks the bundle keeps a
 gateway that answers, restarts and stops, and keeps every screen as a PNG (`Nolune --snapshot <folder>`, which draws
