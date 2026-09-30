@@ -5,17 +5,15 @@
 	import LaptopIcon from '@lucide/svelte/icons/laptop';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import CodeXmlIcon from '@lucide/svelte/icons/code-xml';
-	import { resolve } from '$app/paths';
 	import { AVATARS, type Avatar } from '@nolune/core/avatars';
 	import { AVATAR_COLORS } from '$lib/avatars';
 	import ChatWindow from '$lib/ChatWindow.svelte';
 	import Mascot from '$lib/Mascot.svelte';
 	import Orbit from '$lib/Orbit.svelte';
 	import Stars from '$lib/Stars.svelte';
-	import Wordmark from '$lib/Wordmark.svelte';
+	import GithubMark from '$lib/GithubMark.svelte';
 
 	const GITHUB = 'https://github.com/triangle-int/nolune';
-	const NPM = 'https://www.npmjs.com/package/nolune';
 
 	const steps = [
 		{
@@ -70,14 +68,6 @@
 	<meta name="twitter:card" content="summary_large_image" />
 </svelte:head>
 
-{#snippet githubMark(size: number)}
-	<svg viewBox="0 0 16 16" width={size} height={size} fill="currentColor" aria-hidden="true">
-		<path
-			d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
-		/>
-	</svg>
-{/snippet}
-
 {#snippet copyState(command: string)}
 	{#if copied === command}
 		<CheckIcon size={16} aria-label="Copied" />
@@ -85,18 +75,6 @@
 		<CopyIcon size={16} aria-label="Copy" />
 	{/if}
 {/snippet}
-
-<header class="bar">
-	<div class="wrap bar-row">
-		<a href={resolve('/')} class="home"><Wordmark class="wordmark" /></a>
-		<nav>
-			<a href="#features">Features</a>
-			<a href="#how">How it works</a>
-			<a href={GITHUB}>GitHub</a>
-		</nav>
-		<a href="#how" class="pill">Install</a>
-	</div>
-</header>
 
 <main>
 	<section class="hero">
@@ -113,7 +91,7 @@
 						<span>{steps[0].command}</span>
 						<span class="copy">{@render copyState(steps[0].command)}</span>
 					</button>
-					<a href={GITHUB} class="github">{@render githubMark(22)}<span>Star on GitHub</span></a>
+					<a href={GITHUB} class="github"><GithubMark size={22} /><span>Star on GitHub</span></a>
 				</div>
 			</div>
 			<Orbit />
@@ -264,27 +242,8 @@
 	</div>
 </main>
 
-<footer>
-	<div class="wrap footer-row">
-		<Wordmark class="wordmark" />
-		<nav>
-			<a href={GITHUB}>GitHub</a>
-			<a href={NPM}>npm</a>
-			<a href="{GITHUB}/blob/main/LICENSE">MIT license</a>
-		</nav>
-		<p>Made by Triangle Interactive</p>
-	</div>
-</footer>
-
 <style>
-	.wrap {
-		width: 100%;
-		max-width: 1240px;
-		margin: 0 auto;
-		padding-inline: 24px;
-	}
-	section,
-	.bar {
+	section {
 		position: relative;
 		border-bottom: 1px solid var(--line);
 	}
@@ -293,52 +252,6 @@
 	h3,
 	p {
 		margin: 0;
-	}
-	:global(.wordmark) {
-		display: block;
-		height: 30px;
-		width: auto;
-		color: var(--cream);
-	}
-
-	/* nav */
-	.bar-row {
-		display: flex;
-		gap: 40px;
-		align-items: center;
-		height: 80px;
-	}
-	.bar nav {
-		display: flex;
-		gap: 44px;
-		margin-left: auto;
-		font-size: 0.95rem;
-	}
-	.bar nav a,
-	footer nav a {
-		color: var(--text);
-		text-decoration: none;
-	}
-	.bar nav a:hover,
-	footer nav a:hover {
-		color: var(--cream);
-	}
-	.pill {
-		display: inline-flex;
-		gap: 12px;
-		align-items: center;
-		padding: 10px 28px;
-		border: 1.5px solid var(--rust);
-		border-radius: 999px;
-		background: none;
-		color: var(--rust);
-		font: 500 1rem var(--mono);
-		text-decoration: none;
-		cursor: pointer;
-		transition: background 0.2s;
-	}
-	.pill:hover {
-		background: rgb(240 122 60 / 0.1);
 	}
 
 	/* hero */
@@ -673,7 +586,7 @@
 		font-size: 0.95rem;
 	}
 
-	/* strip and footer */
+	/* strip */
 	.strip {
 		display: flex;
 		flex-wrap: wrap;
@@ -705,30 +618,8 @@
 	.strip a:hover {
 		text-decoration: underline;
 	}
-	footer {
-		border-top: 1px solid var(--line);
-	}
-	.footer-row {
-		display: flex;
-		gap: 40px;
-		align-items: center;
-		padding-top: 32px;
-		padding-bottom: 32px;
-		font-size: 0.9rem;
-	}
-	footer nav {
-		display: flex;
-		gap: 28px;
-		margin-left: auto;
-	}
 
 	@media (max-width: 960px) {
-		.bar nav {
-			display: none;
-		}
-		.bar-row .pill {
-			margin-left: auto;
-		}
 		.hero-grid {
 			grid-template-columns: 1fr;
 			padding-top: 48px;
@@ -762,19 +653,9 @@
 		.art {
 			max-width: 420px;
 		}
-		.footer-row {
-			flex-wrap: wrap;
-			gap: 20px 28px;
-		}
-		footer nav {
-			margin-left: 0;
-		}
 	}
 
 	@media (max-width: 560px) {
-		.wrap {
-			padding-inline: 16px;
-		}
 		.ruled {
 			grid-template-columns: 1fr;
 			text-align: center;
