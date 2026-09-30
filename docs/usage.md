@@ -165,6 +165,18 @@ which leave no user systemd to talk to. `systemctl --user status nolune` works t
   conversation of its own that starts with only its task, and reports back to the chat. While they
   work, the chat lists them under "Working in the background", where you can open a subagent's own
   chat or stop everything. Logs: `~/.nolune/profiles/<profile>/agents`.
+- **Auto mode.** Before a command runs, a model checks it and blocks what could do harm nobody in
+  the chat asked for: deleting more than you asked, sending files or passwords out, changing
+  security settings, installing things from unknown places, buying or posting for you. Commands
+  that only look (`ls`, `cat`, `grep`, `nolune memory search`...) run without a check. A blocked
+  command doesn't run; nolune says what it wanted to do, and a yes from you in the chat lets it
+  through. Checks use the chat's own model unless an admin picks a faster preset for them;
+  every command that does more than look costs a short call to it. Admins switch to
+  **Unrestricted** (commands run unchecked, not recommended) under Commands in Models & keys, or
+  with `nolune config set command-mode unrestricted`; `nolune config set safety-model <preset>`
+  picks the model. nolune can't change either itself. A single chat can differ: the shield in its
+  message box switches it between Auto and Unrestricted (only admins can pick Unrestricted there),
+  and the subagents it starts follow it.
 - Extra environment variables for the agent's commands, e.g. for a firecrawl web-search skill:
   `nolune env set FIRECRAWL_API_KEY fc-...`
 - Logs: `nolune service logs -f`. Data: `~/.nolune` (override with `NOLUNE_HOME`).

@@ -89,6 +89,7 @@ export {
 	addPreset,
 	editPreset,
 	effectiveContextWindow,
+	findPreset,
 	getDefaultPreset,
 	getPreset,
 	listPresets,
@@ -96,6 +97,19 @@ export {
 	setDefaultPreset,
 	type Preset
 } from './presets.ts';
+export {
+	COMMAND_MODES,
+	chatCommandChoice,
+	chatCommandMode,
+	commandMode,
+	commandSafetyState,
+	describeCommandSafety,
+	isCommandMode,
+	saveCommandMode,
+	saveSafetyPreset,
+	type CommandMode,
+	type CommandSafetyState
+} from './command-safety.ts';
 export {
 	createConversation,
 	deleteConversation,
@@ -145,6 +159,7 @@ export {
 	type MediaRow
 } from './media.ts';
 export {
+	changeCommandMode,
 	changeEffort,
 	changeModel,
 	getSnapshot,
@@ -160,6 +175,7 @@ export {
 	stop,
 	subscribe,
 	type BackgroundItem,
+	type ChatCommands,
 	type ChatModel,
 	type LiveBlock,
 	type LiveEvent,

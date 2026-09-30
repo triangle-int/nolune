@@ -60,6 +60,8 @@
 			<span class="shrink-0 text-xs text-destructive">
 				{prefs.technical ? m.steps.failed : m.steps.didntWork}
 			</span>
+		{:else if status === 'blocked'}
+			<span class="shrink-0 text-xs text-warning">{m.steps.statusBlocked}</span>
 		{:else if status === 'stopped' || status === 'not run'}
 			<span class="shrink-0 text-xs"
 				>{status === 'stopped' ? m.steps.statusStopped : m.steps.statusNotRun}</span
@@ -87,7 +89,11 @@
 			<pre
 				class={cn(
 					'max-h-72 overflow-auto px-3 py-2 font-mono break-all whitespace-pre-wrap',
-					status === 'failed' ? 'text-destructive' : 'text-muted-foreground'
+					status === 'failed'
+						? 'text-destructive'
+						: status === 'blocked'
+							? 'text-warning'
+							: 'text-muted-foreground'
 				)}>{output || (status === 'running' ? m.steps.noOutputYet : m.steps.noOutput)}</pre>
 			{#if result?.pictures.length}
 				<!-- What the command showed the agent with `nolune view`. -->

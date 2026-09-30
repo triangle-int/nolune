@@ -158,6 +158,7 @@
 					folders={data.folders}
 					folderId={data.folder.id}
 					avatar={data.profile.avatar}
+					commandFallback={data.commandMode}
 					placeholder={m.folders.newChatIn(data.folder.name)}
 					autofocus
 				/>

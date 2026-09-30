@@ -1,5 +1,6 @@
 import type {
 	BackgroundItem,
+	ChatCommands,
 	ChatModel,
 	DisplayMemoryLook,
 	DisplayMessage,
@@ -17,6 +18,8 @@ export class ChatState {
 	title = $state('');
 	/** The model and reasoning level, which anyone in the profile can change. Null until then. */
 	model = $state<ChatModel | null>(null);
+	/** How its commands run, which anyone in the profile can change. Null until then. */
+	commands = $state<ChatCommands | null>(null);
 	messages = $state<DisplayMessage[]>([]);
 	queued = $state<DisplayMessage[]>([]);
 	running = $state(false);
@@ -44,6 +47,7 @@ export class ChatState {
 			case 'snapshot':
 				this.title = event.snapshot.title;
 				this.model = event.snapshot.model;
+				this.commands = event.snapshot.commands;
 				this.messages = event.snapshot.messages;
 				this.queued = event.snapshot.queued;
 				this.running = event.snapshot.running;
@@ -59,6 +63,9 @@ export class ChatState {
 				break;
 			case 'model':
 				this.model = event.model;
+				break;
+			case 'commands':
+				this.commands = event.commands;
 				break;
 			case 'background':
 				this.background = event.background;
