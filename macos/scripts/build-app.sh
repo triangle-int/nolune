@@ -37,6 +37,15 @@ DMG="$OUT/nolune-$VERSION-$ARCH.dmg"
 
 step() { printf '\n==> %s\n' "$*"; }
 
+# Checked first: signing comes after a few minutes of building.
+if [ "$IDENTITY" != - ] && ! security find-identity -v -p codesigning | grep -qF -- "$IDENTITY"; then
+	echo "No signing identity \"$IDENTITY\" in the keychain. It has:" >&2
+	security find-identity -v -p codesigning >&2
+	echo "Make a Developer ID Application certificate in Xcode (Settings > Accounts > Manage" >&2
+	echo "Certificates), or leave SIGN_IDENTITY out for an ad-hoc build." >&2
+	exit 1
+fi
+
 rm -rf "$WORK" "$OUT/$ARCH" "$DMG"
 mkdir -p "$WORK" "$OUT/$ARCH"
 

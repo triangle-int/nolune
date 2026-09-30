@@ -25,7 +25,9 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=nolu
   macos/scripts/build-app.sh
 ```
 
-`ARCH=x86_64` builds for Intel Macs; `NODE_VERSION` picks the Node to bundle (the newest 24.x by
+To test on your own Mac, an `Apple Development` identity works as well, and keeps the Full Disk
+Access switch on across builds, as an ad-hoc signature doesn't; `security find-identity -v -p
+codesigning` lists yours. `ARCH=x86_64` builds for Intel Macs; `NODE_VERSION` picks the Node to bundle (the newest 24.x by
 default). The script's header lists the rest.
 
 ## Work on it
