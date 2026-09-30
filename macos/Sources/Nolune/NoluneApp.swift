@@ -42,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		Theme.registerFonts()
+		if Relocation.needed {
+			Relocation.offer()
+			return
+		}
 		if !UserDefaults.standard.bool(forKey: Onboarding.doneKey) { showOnboarding() }
 	}
 

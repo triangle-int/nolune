@@ -1616,8 +1616,10 @@ signing.
   wordmark's star, sweep, typing dots and burst in `IntroView.swift`), on the same timings and
   song. Then three steps with the web welcome's look (Figtree, the off-white pill, the progress
   bars): the admin account (`nolune setup`, with a generated password to keep; skipped when an
-  admin exists), Full Disk Access, and the gateway started in the background. A relaunch halfway
-  (System Settings' "Quit & Reopen") comes back to the step it was on, without the intro.
+  admin exists), Full Disk Access, and the gateway started in the background. Opened from the
+  DMG (or translocated from Downloads), it first offers to move itself to Applications
+  (`Relocation.swift`), since the gateway it registers runs from wherever the app is. A relaunch
+  halfway (System Settings' "Quit & Reopen") comes back to the step it was on, without the intro.
 - **The gateway as the app.** An `SMAppService` LaunchAgent inside the bundle runs the app's own
   executable with `--gateway`, which starts `node cli.js start` as its child and passes signals
   on. macOS charges file access to the app launchd started, so the gateway and the commands it
