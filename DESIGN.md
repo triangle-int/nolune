@@ -42,8 +42,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
                               notifications, subagents, running background commands
-  media/<sha256>              copies of the pictures and files shown in chats, and of attached
-                              files not sent yet
+  media/<sha256>              copies of the pictures and files shown in chats, of attached
+                              files not sent yet, and people's profile pictures
   image-templates/<id>/       Images page templates for every profile (TEMPLATE.md, cover.webp)
   bin/nolune                     shim so the agent can run `nolune` from any command
   profiles/<slug>/            default working folder for commands in this profile
@@ -1287,6 +1287,23 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   too) switch the labels to the raw commands and add context size, prompt-cache hit rate, cache
   misses, per-reply token usage and the model that wrote each reply. "Always show steps" opens the
   groups by default.
+- **Your name and picture** are at the top of Settings. Unlike the rest of Settings they belong to
+  the account, and everyone sees them. A name is checked as `nolune user create` checks one
+  (`renameUser`): not empty, at most 64 characters, no `@` (which `findUser` takes for an email),
+  and nobody else's, ignoring case. Messages keep the name they were sent with, which is also the
+  one the model read, so the chat tells someone's own messages by their user id. A picture is
+  cropped in the browser (`PictureCropper.svelte`: drag or the arrow keys move it, the slider,
+  the wheel or a pinch zoom it) to a 256-pixel square, sent as WebP (PNG where the browser can't
+  write WebP) to `PUT /api/me/picture`, checked to be a PNG, JPEG, GIF or WebP of at most 1024
+  pixels a side and 512 KB, and kept in the media store under its SHA-256 (`user.picture`), which
+  the prune leaves alone. `/api/pictures/<sha256>` serves a hash only while it is someone's
+  picture, to anyone signed in, and lets the browser keep it for good: a new picture has a new
+  address. Pictures show wherever the initial did: the user menu, People & profile, over someone's
+  messages and while they type, and their note on the Memory page. A change reaches open pages the
+  way a profile's new avatar does, since `noticeProfileChanges` counts the members' names and
+  pictures as part of a profile's look. better-auth's own `/update-user` is off, so nothing gets
+  past these checks, and the picture isn't better-auth's `image`, which that endpoint would let
+  anyone set to anything.
 - **The composer** is docked over the end of the chat and of the Images grid (`ComposerDock`):
   what scrolls under it fades and blurs into it instead of stopping at an edge, and the scroll
   area pads its end by the composer's height so the newest message still clears it.
@@ -1454,8 +1471,8 @@ its cache never depend on someone's settings. nolune already answers in the lang
 Each profile's assistant has a small mascot: one of eight one-color glyphs (probe, campfire, lantern,
 planet, quantum, comet, moon, satellite), redrawn by hand as SVG from a concept sheet. It shows next
 to every reply, large on the new chat screen, in the profile switcher and the profile list, on
-notifications, and as the tab icon of the profile's pages. People keep `UserAvatar`, their initial
-on a colored circle.
+notifications, and as the tab icon of the profile's pages. People keep `UserAvatar`: their
+picture, or their initial on a colored circle (see [Web UI](#web-ui), "Your name and picture").
 
 - **Drawing.** `packages/core/src/avatars.ts` has the names and the glyphs: shapes on a 24×24 grid
   filled with `currentColor`, with no strokes or second tone. Eyes and other details are holes
@@ -1705,6 +1722,8 @@ packages/relay  @nolune/relay. The relay server (relay.ts, with its gateways fil
                 (headers.ts). Deployed on its own (Dockerfile, compose.yaml with Caddy), not
                 part of the npm package; the CLI bundles only the shared files.
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
+macos/          nolune.app: the SwiftUI onboarding, the gateway's keeper and the menu bar
+                extra (see [The macOS app](#the-macos-app)); scripts/build-app.sh bundles it.
 ```
 
 Core finds the package root by walking up to the `package.json` named `nolune`. That works
@@ -1746,7 +1765,47 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
   Funnel, Cloudflare Tunnel, a VPS). The gateway only binds to localhost by default.
 - macOS privacy (TCC): the background `node` process needs Full Disk Access to reach Documents,
   Desktop, Photos and Mail. Setup prints the path. Granting it applies to everything that node
-  binary runs.
+  binary runs. The macOS app avoids that: its switch is named nolune and covers only nolune.
+
+## The macOS app
+
+`nolune.app` (`macos/`, built by `macos/scripts/build-app.sh`, checked by
+`.github/workflows/macos.yml`) is nolune without a Terminal: a SwiftUI launcher with its own Node
+and the npm package installed in `Contents/Resources/app`. See `macos/README.md` for building and
+signing.
+
+- **First run.** A big bang, about four seconds (`IntroView.swift`): in the dark a point of light
+  gathers and bursts in a flash and a shock wave, the song starts, and the stars fly out of it,
+  fast then settling (IntroSky.svelte's sky in `Sky.swift`, with a `burst`), the eight colors
+  after them, pooling into the glow. The full intro, with the wordmark, stays the web welcome's,
+  which the admin sees next, so it isn't played twice. Then three steps with the web welcome's look (Figtree, the off-white pill, the progress
+  bars): the admin account (`nolune setup`, with a generated password to keep; skipped when an
+  admin exists), Full Disk Access, and the gateway started. Opened from the DMG (or translocated
+  from Downloads), it first offers to move itself to Applications (`Relocation.swift`), since it
+  opens at login from wherever it is. A relaunch
+  halfway (System Settings' "Quit & Reopen") comes back to the step it was on, without the intro.
+- **The gateway runs with the app.** No LaunchAgent: the app starts its own executable with
+  `--gateway` as its child when it opens (`Service.swift`), and stops it when it quits; the app
+  opens at login (`SMAppService.mainApp`), so nolune is up whenever it's in the menu bar, and only
+  then. The keeper (`Gateway.swift`) runs `node cli.js start` with a clean signal state (posix_spawn,
+  as Foundation's Process would pass on a dispatch thread's blocked signals), starts it again at
+  once on SIGHUP and after a growing pause (1 s to 30 s) when it stops by itself, stops it on
+  SIGTERM, and when the app is gone (its parent changes), and keeps its pid in
+  `$NOLUNE_HOME/gateway.pid`. macOS charges file access to the app, and its children count as it,
+  so the gateway and the commands it runs are nolune's for Full Disk Access, and the grant
+  survives updates (the signature, not the file, is what's matched). The CLI knows the app's Node
+  (`appManaged` in service.ts): `nolune service restart` sends the keeper SIGHUP, `status` asks
+  whether it runs, and install and uninstall point to the app. The app removes a LaunchAgent with
+  the gateway's label (`nolune service install`'s) when it starts one, since two would fight over
+  the port.
+- **Full Disk Access.** No API asks for it. The step opens the pane, reads a protected file (which
+  usually lists the app, switched off), offers the app's icon to drag in, and checks every second
+  in a fresh `--probe-disk-access` process, since a running one may not see the grant until it
+  relaunches. When the switch goes on, the step's own big switch flips with it and the aurora
+  swells.
+- **After.** A menu bar extra: whether the gateway answers, the people with accounts, the address,
+  open, restart, the log, and Quit, which stops nolune. Opening the app again opens nolune in the
+  browser.
 
 ## Not done yet
 

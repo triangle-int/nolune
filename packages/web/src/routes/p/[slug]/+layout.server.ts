@@ -1,12 +1,13 @@
-import { listConversations, listFolders, listProfilesForUser } from '@nolune/core';
+import { listConversations, listFolders, listMembers, listProfilesForUser } from '@nolune/core';
 import { translations } from '$lib/i18n';
+import { pictureUrl } from '$lib/pictures';
 import { requireProfile } from '$lib/server/access';
 import { LAST_PROFILE_COOKIE } from '$lib/server/last-profile';
 import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = ({ locals, params, depends, cookies }) => {
 	depends('nolune:conversations');
-	// Pushed when someone renames the profile or changes its avatar.
+	// Pushed when someone renames the profile or changes its avatar, or a member their picture.
 	depends('nolune:profiles');
 	const { user, profile } = requireProfile(locals, params.slug);
 	const { m } = translations(locals.locale);
@@ -24,6 +25,12 @@ export const load: LayoutServerLoad = ({ locals, params, depends, cookies }) => 
 			name: p.name,
 			avatar: p.avatar
 		})),
+		/** Members' profile pictures by user id, for those who have one. */
+		pictures: Object.fromEntries(
+			listMembers(profile.id).flatMap((member) =>
+				member.picture ? [[member.id, pictureUrl(member.picture)!]] : []
+			)
+		) as Record<string, string>,
 		folders: listFolders(profile.id).map((f) => ({ id: f.id, name: f.name })),
 		conversations: listConversations(profile.id).map((c) => ({
 			id: c.id,

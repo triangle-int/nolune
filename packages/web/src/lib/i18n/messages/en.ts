@@ -71,7 +71,7 @@ export const en = {
 
 	settings: {
 		title: 'Settings',
-		description: 'How nolune looks on this device.',
+		description: 'Your name and picture, and how nolune looks on this device.',
 		theme: 'Theme',
 		system: 'System',
 		light: 'Light',
@@ -88,6 +88,24 @@ export const en = {
 		soundsHint: 'Soft sounds where nolune moves on its own, like the welcome of a new profile.',
 		logOut: 'Log out',
 		deviceOnly: 'These settings are saved on this device only.'
+	},
+
+	account: {
+		name: 'Your name',
+		hint: 'Everyone in your profiles sees your name and picture, and nolune reads your name with each message you send.',
+		addPicture: 'Add a picture',
+		changePicture: 'Change picture',
+		removePicture: 'Remove picture',
+		cropHint: 'Drag the picture to place it in the circle.',
+		zoom: 'Zoom',
+		usePicture: 'Use this picture',
+		cantOpen: 'Couldn’t open that picture. Try a JPEG or PNG.',
+		nameRequired: 'Type a name.',
+		nameTooLong: (max: number) => `A name can be at most ${max} characters.`,
+		nameHasAt: 'A name can’t have an @ in it.',
+		nameTaken: (name: string) => `Someone is already called ${name}.`,
+		notPicture: 'That isn’t a picture nolune can use.',
+		pictureTooLarge: 'That picture is too large.'
 	},
 
 	userMenu: {

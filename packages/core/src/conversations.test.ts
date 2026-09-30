@@ -216,6 +216,7 @@ describe('messages', () => {
 
 		expect(toDisplay(human)).toMatchObject({
 			kind: 'human',
+			senderId: user.id,
 			senderName: 'Anna',
 			text: 'weather?',
 			queued: true

@@ -212,7 +212,7 @@ export const ru: Messages = {
 
 	settings: {
 		title: 'Настройки',
-		description: 'Как nolune выглядит на этом устройстве.',
+		description: 'Ваше имя и фото, и как nolune выглядит на этом устройстве.',
 		theme: 'Тема',
 		system: 'Как в системе',
 		light: 'Светлая',
@@ -231,6 +231,25 @@ export const ru: Messages = {
 			'Тихие звуки там, где nolune двигается сам, например при знакомстве с новым профилем.',
 		logOut: 'Выйти',
 		deviceOnly: 'Эти настройки сохраняются только на этом устройстве.'
+	},
+
+	account: {
+		name: 'Ваше имя',
+		hint: 'Ваше имя и фото видят все в ваших профилях, а nolune читает ваше имя с каждым вашим сообщением.',
+		addPicture: 'Добавить фото',
+		changePicture: 'Сменить фото',
+		removePicture: 'Убрать фото',
+		cropHint: 'Перетащите фото, чтобы поместить его в круг.',
+		zoom: 'Масштаб',
+		usePicture: 'Выбрать это фото',
+		cantOpen: 'Не удалось открыть это изображение. Попробуйте JPEG или PNG.',
+		nameRequired: 'Введите имя.',
+		nameTooLong: (max: number) =>
+			`Имя может быть не длиннее ${max} ${p(max, { one: 'символа', other: 'символов' })}.`,
+		nameHasAt: 'В имени не может быть @.',
+		nameTaken: (name: string) => `Имя ${name} уже занято.`,
+		notPicture: 'Это изображение nolune не может использовать.',
+		pictureTooLarge: 'Это изображение слишком большое.'
 	},
 
 	userMenu: {
