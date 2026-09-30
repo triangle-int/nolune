@@ -8,6 +8,8 @@
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import RocketIcon from '@lucide/svelte/icons/rocket';
 	import PanelTopIcon from '@lucide/svelte/icons/panel-top';
+	import AppWindowIcon from '@lucide/svelte/icons/app-window';
+	import TerminalIcon from '@lucide/svelte/icons/terminal';
 	import { AVATARS, type Avatar } from '@nolune/core/avatars';
 	import { AVATAR_COLORS } from '$lib/avatars';
 	import ChatWindow from '$lib/ChatWindow.svelte';
@@ -38,6 +40,13 @@
 			text: 'Keep it running in the background, on macOS or on Linux with systemd, then open the address and sign in.'
 		}
 	];
+
+	/** How it works shows one way to install at a time. */
+	const WAYS = [
+		{ id: 'app', label: 'Mac app', icon: AppWindowIcon },
+		{ id: 'terminal', label: 'Terminal', icon: TerminalIcon }
+	] as const;
+	let way = $state<(typeof WAYS)[number]['id']>('app');
 
 	let avatar = $state<Avatar>('planet');
 	let hovered = $state<Avatar | null>(null);
@@ -241,47 +250,56 @@
 	<section id="how" class="how">
 		<div class="wrap">
 			<h2 class="ruled">How it works</h2>
-			<h3 class="path">On a Mac</h3>
-			<ol class="steps">
-				<li>
-					<p class="number">01</p>
-					<a href={MAC} class="command"><DownloadIcon size={18} />Download nolune.app</a>
-					<p>
-						Open the disk image and drag nolune to Applications. There's one for
-						<a href={MAC_INTEL}>Intel Macs</a> too.
-					</p>
-				</li>
-				<li>
-					<p class="number">02</p>
-					<p class="command still"><RocketIcon size={18} />Open it</p>
-					<p>
-						A short welcome sets it up: your account, an address that works from anywhere, and Full
-						Disk Access.
-					</p>
-				</li>
-				<li>
-					<p class="number">03</p>
-					<p class="command still"><PanelTopIcon size={18} />Leave it in the menu bar</p>
-					<p>
-						nolune runs while the app is open, and the app opens at login. The family signs in from
-						their browsers.
-					</p>
-				</li>
-			</ol>
-			<h3 class="path">From a terminal, on macOS or Linux</h3>
-			<ol class="steps">
-				{#each steps as step, i (step.command)}
-					<li>
-						<p class="number">{String(i + 1).padStart(2, '0')}</p>
-						<button class="command" onclick={() => copy(step.command)}>
-							<span class="prompt">$</span>
-							<span>{step.command}</span>
-							<span class="copy">{@render copyState(step.command)}</span>
-						</button>
-						<p>{step.text}</p>
-					</li>
+			<div class="ways" role="radiogroup" aria-label="How to install">
+				{#each WAYS as { id, label, icon: Icon } (id)}
+					<label>
+						<input type="radio" name="way" value={id} bind:group={way} />
+						<Icon size={16} />{label}
+					</label>
 				{/each}
-			</ol>
+			</div>
+			{#if way === 'app'}
+				<ol class="steps">
+					<li>
+						<p class="number">01</p>
+						<a href={MAC} class="command"><DownloadIcon size={18} />Download nolune.app</a>
+						<p>
+							Open the disk image and drag nolune to Applications. There's one for
+							<a href={MAC_INTEL}>Intel Macs</a> too.
+						</p>
+					</li>
+					<li>
+						<p class="number">02</p>
+						<p class="command still"><RocketIcon size={18} />Open it</p>
+						<p>
+							A short welcome sets it up: your account, an address that works from anywhere, and
+							Full Disk Access.
+						</p>
+					</li>
+					<li>
+						<p class="number">03</p>
+						<p class="command still"><PanelTopIcon size={18} />Leave it in the menu bar</p>
+						<p>
+							nolune runs while the app is open, and the app opens at login. The family signs in
+							from their browsers.
+						</p>
+					</li>
+				</ol>
+			{:else}
+				<ol class="steps">
+					{#each steps as step, i (step.command)}
+						<li>
+							<p class="number">{String(i + 1).padStart(2, '0')}</p>
+							<button class="command" onclick={() => copy(step.command)}>
+								<span class="prompt">$</span>
+								<span>{step.command}</span>
+								<span class="copy">{@render copyState(step.command)}</span>
+							</button>
+							<p>{step.text}</p>
+						</li>
+					{/each}
+				</ol>
+			{/if}
 			<p class="more">
 				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the docs, another site on this domain -->
 				<a href="/docs/getting-started/" data-sveltekit-reload>The full setup guide</a>
@@ -672,15 +690,48 @@
 	.command.still:hover {
 		border-color: var(--line);
 	}
-	.path {
-		margin: 40px 0 0;
-		color: var(--muted);
-		font: 500 0.85rem var(--mono);
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
+	.ways {
+		display: flex;
+		width: fit-content;
+		margin: 32px auto 0;
+		padding: 4px;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		background: var(--ink-raised);
 	}
-	.path + .steps {
-		margin-top: 20px;
+	.ways label {
+		position: relative;
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		padding: 8px 18px;
+		border-radius: 999px;
+		color: var(--muted);
+		font: 500 0.9rem var(--mono);
+		cursor: pointer;
+		transition:
+			background 0.2s,
+			color 0.2s;
+	}
+	.ways label:hover {
+		color: var(--cream);
+	}
+	.ways label:has(:checked) {
+		background: var(--rust);
+		color: var(--ink);
+		font-weight: 600;
+	}
+	.ways label:has(:focus-visible) {
+		outline: 2px solid var(--cream);
+		outline-offset: 2px;
+	}
+	.ways input {
+		position: absolute;
+		opacity: 0;
+		pointer-events: none;
+	}
+	.ways + .steps {
+		margin-top: 32px;
 	}
 	.steps li > p:last-child a {
 		color: var(--text);
