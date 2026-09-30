@@ -42,9 +42,15 @@ final class Onboarding: ObservableObject {
 	let sky = Sky()
 	let music: Music
 	var onFinish: (() -> Void)?
+	/// Whether there's an admin already (an npm install, or a run that stopped halfway), found
+	/// while the intro plays: the account step is skipped then, before it shows.
+	private var admin: Task<Bool, Never>?
 
 	init() {
 		music = Music()
+		if !Snapshot.active {
+			admin = Task { await Runtime.shared.people()?.contains(where: \.isAdmin) ?? false }
+		}
 		// Relaunched partway (System Settings' "Quit & Reopen" after Full Disk Access): back
 		// where it was, without the intro.
 		let saved = UserDefaults.standard.string(forKey: Onboarding.phaseKey).flatMap(Phase.init(rawValue:))
@@ -125,7 +131,10 @@ final class Onboarding: ObservableObject {
 
 	func begin() {
 		music.duck(to: Music.under, over: 2.5)
-		go(.account)
+		Task {
+			let skip = await admin?.value ?? false
+			if phase == .welcome { go(skip ? .files : .account) }
+		}
 	}
 
 	// MARK: Account

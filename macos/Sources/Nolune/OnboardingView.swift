@@ -29,6 +29,8 @@ struct OnboardingView: View {
 		}
 		.frame(width: Self.size.width, height: Self.size.height)
 		.background(Theme.space)
+		// Under the see-through title bar too: the window is all sky.
+		.ignoresSafeArea()
 		.preferredColorScheme(.dark)
 		.task { await onboarding.startIntro(layout: layout) }
 	}
@@ -57,6 +59,8 @@ struct OnboardingView: View {
 			}
 			.frame(height: 52)
 			.padding(.horizontal, 14)
+			// Below the title bar, which takes the clicks in its strip.
+			.padding(.top, 24)
 			Spacer()
 		}
 	}
@@ -181,6 +185,7 @@ private struct FilesScreen: View {
 					.buttonStyle(PillButtonStyle())
 				HStack(spacing: 10) {
 					DraggableAppIcon()
+						.frame(width: 40, height: 40)
 					Text("Not in the list? Drag this into it.")
 						.font(Theme.font(12))
 						.foregroundStyle(Theme.muted)
@@ -310,14 +315,54 @@ private struct PulsingDot: View {
 	}
 }
 
-/// The app's icon, to drag into the Full Disk Access list when it isn't there by itself.
-private struct DraggableAppIcon: View {
-	var body: some View {
-		Image(nsImage: NSApp.applicationIconImage)
-			.resizable()
-			.frame(width: 40, height: 40)
-			.onDrag { NSItemProvider(object: Bundle.main.bundleURL as NSURL) }
-			.help("Drag into the Full Disk Access list")
+/**
+ * The app's icon, to drag into the Full Disk Access list when it isn't there by itself. AppKit's
+ * drag of the app's file, as Finder starts one: SwiftUI's lost to the window, which moves when its
+ * background is dragged.
+ */
+private struct DraggableAppIcon: NSViewRepresentable {
+	func makeNSView(context: Context) -> AppFileDragView {
+		let view = AppFileDragView()
+		view.toolTip = "Drag into the Full Disk Access list"
+		return view
+	}
+
+	func updateNSView(_ view: AppFileDragView, context: Context) {}
+}
+
+final class AppFileDragView: NSView, NSDraggingSource {
+	private var dragging = false
+
+	override var mouseDownCanMoveWindow: Bool { false }
+	override var intrinsicContentSize: NSSize { NSSize(width: 40, height: 40) }
+
+	override func draw(_ dirtyRect: NSRect) {
+		NSApp.applicationIconImage?.draw(in: bounds)
+	}
+
+	override func resetCursorRects() {
+		addCursorRect(bounds, cursor: .openHand)
+	}
+
+	/// Taken here, so the window doesn't get it and start moving.
+	override func mouseDown(with event: NSEvent) {}
+
+	override func mouseDragged(with event: NSEvent) {
+		guard !dragging else { return }
+		dragging = true
+		let item = NSDraggingItem(pasteboardWriter: Bundle.main.bundleURL as NSURL)
+		item.setDraggingFrame(bounds, contents: NSApp.applicationIconImage)
+		beginDraggingSession(with: [item], event: event, source: self)
+	}
+
+	func draggingSession(
+		_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext
+	) -> NSDragOperation {
+		.copy
+	}
+
+	func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+		dragging = false
 	}
 }
 
