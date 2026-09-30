@@ -30,3 +30,7 @@ vite.config.ts.timestamp-*
 # nolune
 /dist
 *.tgz
+
+# The macOS app (macos/)
+/macos/.build
+/macos/dist

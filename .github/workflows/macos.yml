@@ -1,0 +1,113 @@
+name: macOS app
+
+# Builds nolune.app (macos/) on a Mac, ad-hoc signed, and checks the bundle works: its Node runs
+# the CLI, and the launcher's gateway mode, as the app runs it, keeps a gateway that answers,
+# restarts it for `nolune service restart` and stops it in time.
+# The DMG is kept as an artifact for trying the onboarding.
+
+on:
+  push:
+    paths:
+      - 'macos/**'
+      - 'packages/cli/src/service.ts'
+      - 'packages/cli/src/run.ts'
+      - '.github/workflows/macos.yml'
+  pull_request:
+    paths:
+      - 'macos/**'
+      - 'packages/cli/src/service.ts'
+      - 'packages/cli/src/run.ts'
+      - '.github/workflows/macos.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Build and check nolune.app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          # The build number is the commit count.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Build the app
+        run: macos/scripts/build-app.sh
+      - name: Check the app
+        run: |
+          app=macos/dist/arm64/nolune.app
+          nolune() { "$app/Contents/MacOS/node" "$app/Contents/Resources/app/node_modules/nolune/dist/cli.js" "$@"; }
+          export NOLUNE_HOME="$RUNNER_TEMP/nolune-home"
+          log="$NOLUNE_HOME/logs/gateway.log"
+          up() {
+            for _ in $(seq 1 60); do
+              curl -s -o /dev/null http://localhost:5780/ && break
+              sleep 1
+            done
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5780/)
+            echo "HTTP $code"
+            [[ "$code" =~ ^(200|30[0-9])$ ]]
+          }
+          started() { grep -c 'nolune gateway:' "$log" || true; }
+          trap 'cat "$log" 2>/dev/null' EXIT
+          echo '::group::The bundled Node runs the CLI'
+          nolune setup --name CI --email ci@example.com --password 'Launcher-Check-42' --origin http://localhost:5780
+          echo '::endgroup::'
+          echo '::group::The launcher keeps the gateway, as the app runs it'
+          "$app/Contents/MacOS/Nolune" --gateway &
+          keeper=$!
+          up
+          [ "$(cat "$NOLUNE_HOME/gateway.pid")" = "$keeper" ]
+          nolune service status
+          # As the agent restarts it: the gateway stops and starts again.
+          nolune service restart
+          for _ in $(seq 1 30); do [ "$(started)" -ge 2 ] && break; sleep 1; done
+          [ "$(started)" -eq 2 ]
+          up
+          # As the app quits: the gateway stops, well before it would be killed (ten seconds).
+          kill -TERM "$keeper"
+          for _ in $(seq 1 8); do [ -e "$NOLUNE_HOME/gateway.pid" ] || break; sleep 1; done
+          [ ! -e "$NOLUNE_HOME/gateway.pid" ]
+          wait "$keeper" || true
+          if curl -s -o /dev/null http://localhost:5780/; then echo 'still answering'; exit 1; fi
+          nolune service status
+          echo '::endgroup::'
+          echo '::group::The Full Disk Access check runs'
+          if "$app/Contents/MacOS/Nolune" --probe-disk-access; then echo granted; else echo 'not granted'; fi
+          echo '::endgroup::'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nolune-macos-arm64
+          path: macos/dist/*.dmg
+          retention-days: 14
+      - name: Draw the screens
+        # Every screen of the onboarding and the menu, as PNGs (Snapshot.swift).
+        run: perl -e 'alarm 180; exec @ARGV' macos/dist/arm64/nolune.app/Contents/MacOS/Nolune --snapshot "$RUNNER_TEMP/snapshots"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: onboarding-screens
+          path: ${{ runner.temp }}/snapshots
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Show crash reports
+        if: failure()
+        run: |
+          for report in ~/Library/Logs/DiagnosticReports/Nolune*; do
+            [ -f "$report" ] || continue
+            echo "::group::$report"
+            head -c 20000 "$report"
+            echo '::endgroup::'
+          done

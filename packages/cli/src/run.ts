@@ -79,6 +79,7 @@ import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { SOUL_HELP, soulCommand } from './soul.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
+	appManaged,
 	installService,
 	logFile,
 	renderServiceFile,
@@ -349,6 +350,9 @@ function listenAddress() {
 /** macOS keeps background processes out of these folders; elsewhere there's nothing to say. */
 function fullDiskAccessHint(): string {
 	if (process.platform !== 'darwin') return '';
+	if (appManaged()) {
+		return '\n\nTo let the agent reach Documents, Desktop, Downloads, Photos and Mail, turn on nolune in System Settings > Privacy & Security > Full Disk Access.';
+	}
 	return `\n\nTo let the agent reach Documents, Desktop, Downloads, Photos and Mail, give Full Disk Access to
   ${process.execPath}
   in System Settings > Privacy & Security > Full Disk Access (click +, press Cmd+Shift+G, paste the path).
@@ -438,6 +442,7 @@ async function start(io: Io): Promise<void> {
 async function service(io: Io, action: string | undefined, args: string[]): Promise<void> {
 	switch (action) {
 		case 'install': {
+			if (appManaged()) fail('the nolune app runs the gateway while it is open.');
 			requireInit();
 			if (!existsSync(paths.server))
 				fail('no server build. In a source checkout, run `pnpm build` first.');
@@ -460,6 +465,11 @@ It runs with ${process.execPath}; run \`nolune service install\` again after swi
 			return;
 		}
 		case 'uninstall':
+			if (appManaged()) {
+				fail(
+					'the nolune app runs the gateway while it is open. Quit it from the menu bar, and turn it off under System Settings > General > Login Items so it stays closed.'
+				);
+			}
 			uninstallService();
 			io.log('Removed the background service.');
 			return;
@@ -469,7 +479,8 @@ It runs with ${process.execPath}; run \`nolune service install\` again after swi
 			return;
 		case 'status': {
 			const status = serviceStatus();
-			if (!status.installed) io.log('Not installed. Run `nolune service install`.');
+			if (appManaged() && !status.loaded) io.log('Not running. Open the nolune app.');
+			else if (!status.installed) io.log('Not installed. Run `nolune service install`.');
 			else if (!status.loaded) io.log('Installed but not loaded. Run `nolune service install`.');
 			else
 				io.log(

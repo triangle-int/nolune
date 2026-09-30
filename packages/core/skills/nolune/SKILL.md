@@ -250,7 +250,8 @@ admin the command that switches it back, to run at the computer.
 
 ## The service
 
-On macOS nolune runs in the background as a LaunchAgent, and on Linux as a systemd user service.
+On macOS nolune runs in the background as a LaunchAgent, or, set up with the nolune app, while the
+app is open in the menu bar; on Linux it runs as a systemd user service.
 Elsewhere, or on Linux without systemd, the owner runs `nolune start` under their own process
 manager, and `nolune service` doesn't work.
 

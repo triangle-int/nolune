@@ -1669,6 +1669,8 @@ packages/web    SvelteKit gateway (adapter-node). @nolune/core is bundled into t
                 profile's welcome in welcome/, its sounds in src/lib/welcome), the interface's
                 languages in src/lib/i18n.
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
+macos/          nolune.app: the SwiftUI onboarding, the gateway's keeper and the menu bar
+                extra (see [The macOS app](#the-macos-app)); scripts/build-app.sh bundles it.
 ```
 
 Core finds the package root by walking up to the `package.json` named `nolune`. That works
@@ -1708,7 +1710,47 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
   binds to localhost by default.
 - macOS privacy (TCC): the background `node` process needs Full Disk Access to reach Documents,
   Desktop, Photos and Mail. Setup prints the path. Granting it applies to everything that node
-  binary runs.
+  binary runs. The macOS app avoids that: its switch is named nolune and covers only nolune.
+
+## The macOS app
+
+`nolune.app` (`macos/`, built by `macos/scripts/build-app.sh`, checked by
+`.github/workflows/macos.yml`) is nolune without a Terminal: a SwiftUI launcher with its own Node
+and the npm package installed in `Contents/Resources/app`. See `macos/README.md` for building and
+signing.
+
+- **First run.** A big bang, about four seconds (`IntroView.swift`): in the dark a point of light
+  gathers and bursts in a flash and a shock wave, the song starts, and the stars fly out of it,
+  fast then settling (IntroSky.svelte's sky in `Sky.swift`, with a `burst`), the eight colors
+  after them, pooling into the glow. The full intro, with the wordmark, stays the web welcome's,
+  which the admin sees next, so it isn't played twice. Then three steps with the web welcome's look (Figtree, the off-white pill, the progress
+  bars): the admin account (`nolune setup`, with a generated password to keep; skipped when an
+  admin exists), Full Disk Access, and the gateway started. Opened from the DMG (or translocated
+  from Downloads), it first offers to move itself to Applications (`Relocation.swift`), since it
+  opens at login from wherever it is. A relaunch
+  halfway (System Settings' "Quit & Reopen") comes back to the step it was on, without the intro.
+- **The gateway runs with the app.** No LaunchAgent: the app starts its own executable with
+  `--gateway` as its child when it opens (`Service.swift`), and stops it when it quits; the app
+  opens at login (`SMAppService.mainApp`), so nolune is up whenever it's in the menu bar, and only
+  then. The keeper (`Gateway.swift`) runs `node cli.js start` with a clean signal state (posix_spawn,
+  as Foundation's Process would pass on a dispatch thread's blocked signals), starts it again at
+  once on SIGHUP and after a growing pause (1 s to 30 s) when it stops by itself, stops it on
+  SIGTERM, and when the app is gone (its parent changes), and keeps its pid in
+  `$NOLUNE_HOME/gateway.pid`. macOS charges file access to the app, and its children count as it,
+  so the gateway and the commands it runs are nolune's for Full Disk Access, and the grant
+  survives updates (the signature, not the file, is what's matched). The CLI knows the app's Node
+  (`appManaged` in service.ts): `nolune service restart` sends the keeper SIGHUP, `status` asks
+  whether it runs, and install and uninstall point to the app. The app removes a LaunchAgent with
+  the gateway's label (`nolune service install`'s) when it starts one, since two would fight over
+  the port.
+- **Full Disk Access.** No API asks for it. The step opens the pane, reads a protected file (which
+  usually lists the app, switched off), offers the app's icon to drag in, and checks every second
+  in a fresh `--probe-disk-access` process, since a running one may not see the grant until it
+  relaunches. When the switch goes on, the step's own big switch flips with it and the aurora
+  swells.
+- **After.** A menu bar extra: whether the gateway answers, the people with accounts, the address,
+  open, restart, the log, and Quit, which stops nolune. Opening the app again opens nolune in the
+  browser.
 
 ## Not done yet
 

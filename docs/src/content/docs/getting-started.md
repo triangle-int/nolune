@@ -37,7 +37,9 @@ ChatGPT, and add models on the web, under **Models & keys** in your account menu
 
 **Files in Documents, Desktop, Photos, Mail.** macOS blocks background processes from these until
 you give the `node` binary Full Disk Access (System Settings > Privacy & Security > Full Disk
-Access). `nolune setup` prints the exact path.
+Access). `nolune setup` prints the exact path. The macOS app
+([`macos/`](https://github.com/triangle-int/nolune/tree/main/macos)) walks you through this
+instead, and its switch is named nolune and covers only nolune.
 
 **Keep the Mac awake** if people should reach it at any time (System Settings > Energy).
 
