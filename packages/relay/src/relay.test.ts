@@ -143,6 +143,43 @@ describe('registration', () => {
 	});
 });
 
+describe('the relay opened in a browser', () => {
+	function open(
+		host: string,
+		path = '/'
+	): Promise<{ status: number; location?: string; body: string }> {
+		return new Promise((resolve, reject) => {
+			const req = http.get(`${base}${path}`, { headers: { host } });
+			req.on('error', reject);
+			req.on('response', async (res) => {
+				let body = '';
+				for await (const chunk of res) body += chunk;
+				resolve({ status: res.statusCode!, location: res.headers.location, body });
+			});
+		});
+	}
+
+	it('sends people to the site, from its own host and from the domain without a name', async () => {
+		await startRelay({ site: 'https://nolune.dev' });
+		expect(await open('127.0.0.1')).toMatchObject({ status: 302, location: 'https://nolune.dev' });
+		expect(await open('nolune.test')).toMatchObject({
+			status: 302,
+			location: 'https://nolune.dev'
+		});
+		expect(await open('nolune.test', '/api/gateways')).toMatchObject({ status: 302 });
+		// Its API and the families' addresses stay as they were.
+		expect(await open('127.0.0.1', '/api/health')).toEqual({ status: 200, body: 'ok\n' });
+		expect((await open('127.0.0.1', '/api/nothing')).status).toBe(404);
+		expect((await open('smiths.nolune.test')).status).toBe(404);
+	});
+
+	it('says what it is without a site', async () => {
+		await startRelay();
+		expect(await open('127.0.0.1')).toEqual({ status: 200, body: 'nolune relay\n' });
+		expect((await open('127.0.0.1', '/api/health')).body).toBe('ok\n');
+	});
+});
+
 describe('addresses without a gateway', () => {
 	it("shows an offline page, in the browser's language, for a gateway that isn't connected", async () => {
 		await startRelay();

@@ -11,6 +11,8 @@ import { GatewayStore } from './store.ts';
  *
  * RELAY_DOMAIN   gateways get <name>.<domain> (required)
  * RELAY_HOST     where gateways register and connect; the domain itself by default
+ * RELAY_SITE_URL where the relay's host and the bare domain send browsers; https://nolune.dev by
+ *                default, empty for a line of text instead
  * RELAY_DATA     the gateways file; data/gateways.json by default
  * RELAY_MONTHLY_GB     traffic each address may pass in a month; 30 by default, 0 for no limit
  * RELAY_MAX_PER_NETWORK  addresses one network may have; 10 by default, 0 for no limit
@@ -35,6 +37,7 @@ function setting(name: string, fallback: number): number {
 const relay = createRelay({
 	domain,
 	host: process.env.RELAY_HOST || undefined,
+	site: process.env.RELAY_SITE_URL ?? 'https://nolune.dev',
 	scheme: process.env.RELAY_SCHEME === 'http' ? 'http' : 'https',
 	store: new GatewayStore(dataFile()),
 	trustProxy: process.env.RELAY_TRUST_PROXY === '1',

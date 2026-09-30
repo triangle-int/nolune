@@ -47,6 +47,11 @@ export interface RelayOptions {
 	domain: string;
 	/** The relay's own host, where gateways register and connect. Defaults to the domain. */
 	host?: string;
+	/**
+	 * Where people who open the relay itself in a browser go: its host's `/`, and the domain
+	 * without a name. Without one, the host's `/` says what it is in a line of text.
+	 */
+	site?: string;
 	/** How the gateways' addresses start: https, unless testing without TLS. */
 	scheme?: 'https' | 'http';
 	/** Without one, gateways are kept in memory. */
@@ -104,6 +109,7 @@ const HOUR_MS = 60 * 60 * 1000;
 /** Requests that may wait for one gateway to come back; more get the offline page at once. */
 const MAX_WAITING = 64;
 const MAX_API_BODY_BYTES = 4096;
+const HEALTH_PATH = '/api/health';
 /** Per stream and per connection, so a large download doesn't crawl over a long distance. */
 const STREAM_WINDOW_BYTES = 1024 * 1024;
 const SESSION_WINDOW_BYTES = 16 * 1024 * 1024;
@@ -181,11 +187,21 @@ export function createRelay(options: RelayOptions): Relay {
 
 	const urlOf = (name: string) => `${scheme}://${name}.${domain}`;
 
+	function bareHost(host: string | undefined): string {
+		return (host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
+	}
+
 	/** The gateway a host is for, or null for the relay's own. */
 	function gatewayName(host: string | undefined): string | null {
-		const bare = (host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
+		const bare = bareHost(host);
 		if (bare === apiHost || !bare.endsWith(`.${domain}`)) return null;
 		return bare.slice(0, -(domain.length + 1));
+	}
+
+	/** Sends a browser on to the site. */
+	function toSite(res: ServerResponse, site: string): void {
+		res.writeHead(302, { location: site, 'cache-control': 'no-store' });
+		res.end();
 	}
 
 	function clientAddress(req: IncomingMessage): string {
@@ -300,10 +316,19 @@ export function createRelay(options: RelayOptions): Relay {
 			}
 			return json(res, 405, { error: 'GET or DELETE' });
 		}
-		if (pathname === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
-			const text = 'nolune relay. See https://nolune.dev\n';
+		const reading = req.method === 'GET' || req.method === 'HEAD';
+		// For monitoring, and to check a relay that was just set up.
+		if (pathname === HEALTH_PATH && reading) {
+			res.writeHead(200, {
+				'content-type': 'text/plain; charset=utf-8',
+				'cache-control': 'no-store'
+			});
+			return void res.end(req.method === 'HEAD' ? undefined : 'ok\n');
+		}
+		if (pathname === '/' && reading) {
+			if (options.site) return toSite(res, options.site);
 			res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
-			return void res.end(req.method === 'HEAD' ? undefined : text);
+			return void res.end(req.method === 'HEAD' ? undefined : 'nolune relay\n');
 		}
 		json(res, 404, { error: 'not found' });
 	}
@@ -466,6 +491,10 @@ export function createRelay(options: RelayOptions): Relay {
 			keepAliveTimeout: 75_000
 		},
 		(req, res) => {
+			// The domain without a name is nobody's nolune: whoever opens it goes to the site.
+			if (options.site && domain !== apiHost && bareHost(req.headers.host) === domain) {
+				return toSite(res, options.site);
+			}
 			const name = gatewayName(req.headers.host);
 			const handled = name === null ? api(req, res) : gateway(name, req, res);
 			handled.catch((err: unknown) => {

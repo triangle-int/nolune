@@ -22,6 +22,8 @@ browser ──HTTPS──▶ Caddy ──▶ relay ══ WebSocket (HTTP/2 insi
   streamed both ways (uploads, downloads, event streams). The relay sets `X-Forwarded-For`,
   `-Proto` and `-Host` itself and drops what the browser sent in them. WebSocket upgrades aren't
   passed on: nolune's pages use event streams.
+- **Opened in a browser.** The relay's host and the domain without a name (`relay.nolune.dev`,
+  `nolune.family`) send people to the site; `/api/health` answers `ok`, for monitoring.
 - **When a gateway isn't there.** For 15 seconds after a gateway leaves (a restart, a new
   network), requests wait for it to come back. After that they get a small page, in the browser's
   language, saying nolune is offline (it reloads itself), or that nothing is at an address nobody
@@ -51,8 +53,9 @@ On a small server with a public IP (1 vCPU and 1 GB is plenty for many families;
 grows). The relay runs from its TypeScript source on Node 22.18 or later, with one dependency
 (`ws`).
 
-1. **DNS.** Point `*.<domain>` and the relay's host at the server, with A (and AAAA) records. For
-   nolune's own relay: `*.nolune.family` and `relay.nolune.dev`. The families' addresses have a
+1. **DNS.** Point `*.<domain>`, the domain itself and the relay's host at the server, with A (and
+   AAAA) records. For nolune's own relay: `*.nolune.family`, `nolune.family` and
+   `relay.nolune.dev`. The families' addresses have a
    domain of their own, apart from the site on `nolune.dev`: a browser blocklist that takes in one
    abused address can take its whole domain with it, and an address can set cookies for its
    domain. In Cloudflare, leave the records **DNS only** (grey cloud): proxied, Cloudflare would
@@ -72,22 +75,23 @@ grows). The relay runs from its TypeScript source on Node 22.18 or later, with o
    docker compose up -d --build
    ```
 
-   `curl https://relay.nolune.dev` should say `nolune relay`.
+   `curl https://relay.nolune.dev/api/health` should say `ok`.
 
 `compose.yaml` runs the relay (`Dockerfile`) behind Caddy (`Caddy.Dockerfile`, Caddy with the
 Cloudflare DNS module, and `Caddyfile`). The relay's settings:
 
-| Variable                | Meaning                                                               |
-| ----------------------- | --------------------------------------------------------------------- |
-| `RELAY_DOMAIN`          | Gateways get `<name>.<domain>`. Required.                             |
-| `RELAY_HOST`            | Where gateways register and connect. The domain itself by default.    |
-| `RELAY_DATA`            | The gateways file. `/data/gateways.json` in the image.                |
-| `RELAY_MONTHLY_GB`      | Traffic each address may pass in a month. 30 by default; 0: no limit. |
-| `RELAY_MAX_PER_NETWORK` | Addresses one network may have. 10 by default; 0: no limit.           |
-| `RELAY_ADMIN_SOCKET`    | The operator's socket. `admin.sock` next to the gateways file.        |
-| `RELAY_TRUST_PROXY`     | `1`: the client's address is the last in `X-Forwarded-For` (Caddy's). |
-| `RELAY_SCHEME`          | `http` to try it without TLS; addresses are `https` otherwise.        |
-| `HOST`, `PORT`          | Where it listens. `0.0.0.0:8080` by default.                          |
+| Variable                | Meaning                                                                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RELAY_DOMAIN`          | Gateways get `<name>.<domain>`. Required.                                                                                                   |
+| `RELAY_HOST`            | Where gateways register and connect. The domain itself by default.                                                                          |
+| `RELAY_SITE_URL`        | Where a browser that opens the relay's host, or the domain without a name, goes. `https://nolune.dev` by default; empty for a line of text. |
+| `RELAY_DATA`            | The gateways file. `/data/gateways.json` in the image.                                                                                      |
+| `RELAY_MONTHLY_GB`      | Traffic each address may pass in a month. 30 by default; 0: no limit.                                                                       |
+| `RELAY_MAX_PER_NETWORK` | Addresses one network may have. 10 by default; 0: no limit.                                                                                 |
+| `RELAY_ADMIN_SOCKET`    | The operator's socket. `admin.sock` next to the gateways file.                                                                              |
+| `RELAY_TRUST_PROXY`     | `1`: the client's address is the last in `X-Forwarded-For` (Caddy's).                                                                       |
+| `RELAY_SCHEME`          | `http` to try it without TLS; addresses are `https` otherwise.                                                                              |
+| `HOST`, `PORT`          | Where it listens. `0.0.0.0:8080` by default.                                                                                                |
 
 To try it on your own computer, without TLS:
 
