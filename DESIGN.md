@@ -1291,12 +1291,12 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   pixels a side and 512 KB, and kept in the media store under its SHA-256 (`user.picture`), which
   the prune leaves alone. `/api/pictures/<sha256>` serves a hash only while it is someone's
   picture, to anyone signed in, and lets the browser keep it for good: a new picture has a new
-  address. Pictures show wherever the initial did: the user menu, People & profile, the name over
-  someone's messages and their note on the Memory page. A change reaches open pages the way a
-  profile's new avatar does, since `noticeProfileChanges` counts the members' names and pictures
-  as part of a profile's look. better-auth's own `/update-user` is off, so nothing gets past these
-  checks, and the picture isn't better-auth's `image`, which that endpoint would let anyone set to
-  anything.
+  address. Pictures show wherever the initial did: the user menu, People & profile, over someone's
+  messages and while they type, and their note on the Memory page. A change reaches open pages the
+  way a profile's new avatar does, since `noticeProfileChanges` counts the members' names and
+  pictures as part of a profile's look. better-auth's own `/update-user` is off, so nothing gets
+  past these checks, and the picture isn't better-auth's `image`, which that endpoint would let
+  anyone set to anything.
 - **The composer** is docked over the end of the chat and of the Images grid (`ComposerDock`):
   what scrolls under it fades and blurs into it instead of stopping at an edge, and the scroll
   area pads its end by the composer's height so the newest message still clears it.

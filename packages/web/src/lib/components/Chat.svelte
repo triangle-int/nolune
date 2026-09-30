@@ -842,7 +842,7 @@
 			{/each}
 
 			{#if typists.length}
-				<TypingIndicator {typists} />
+				<TypingIndicator {typists} {pictures} />
 			{/if}
 
 			{#if chat.error || (unanswered && !conversation.subagent)}

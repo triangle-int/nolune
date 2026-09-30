@@ -6,9 +6,11 @@
 	interface Props {
 		/** The others writing in the chat, in the order they started. */
 		typists: Typist[];
+		/** Members' profile pictures by user id. */
+		pictures: Record<string, string>;
 	}
 
-	let { typists }: Props = $props();
+	let { typists, pictures }: Props = $props();
 
 	const { m } = getI18n();
 </script>
@@ -18,7 +20,11 @@
 	<div class="flex max-w-full items-center gap-1.5 px-1 text-xs text-muted-foreground">
 		<span class="flex shrink-0 -space-x-1">
 			{#each typists as typist (typist.id)}
-				<UserAvatar name={typist.name} class="size-4 text-[9px] ring-2 ring-background" />
+				<UserAvatar
+					name={typist.name}
+					picture={pictures[typist.id]}
+					class="size-4 text-[9px] ring-2 ring-background"
+				/>
 			{/each}
 		</span>
 		<span class="truncate">{m.chat.typing(typists.map((typist) => typist.name))}</span>
