@@ -1,11 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// Whether the gateway answers, and who has an account: for the menu bar extra.
+/// Whether the gateway answers, who has an account, and where it's opened: for the menu bar extra.
 @MainActor
 final class GatewayStatus: ObservableObject {
 	@Published private(set) var running: Bool?
 	@Published private(set) var people: [Runtime.Person] = []
+	/// Where people open nolune: the relay's address while there is one, else this Mac's.
+	@Published private(set) var origin = Runtime.shared.origin
+	/// Whether that's the relay's, which opens from anywhere.
+	@Published private(set) var fromAnywhere = false
 	private var timer: Timer?
 
 	/// Checks now and every few seconds while the menu is open.
@@ -19,9 +23,11 @@ final class GatewayStatus: ObservableObject {
 	}
 
 	/// For `--snapshot`.
-	func pose(running: Bool, people: [Runtime.Person]) {
+	func pose(running: Bool, people: [Runtime.Person], relay: URL? = nil) {
 		self.running = running
 		self.people = people
+		origin = relay ?? Runtime.shared.localURL
+		fromAnywhere = relay != nil
 	}
 
 	func stopWatching() {
@@ -30,6 +36,9 @@ final class GatewayStatus: ObservableObject {
 	}
 
 	func refresh(people alsoPeople: Bool) async {
+		// First, and from config.json: the address shows as the menu opens.
+		origin = Runtime.shared.origin
+		fromAnywhere = Runtime.shared.config.relay != nil
 		running = await Service.isUp()
 		if alsoPeople, let people = await Runtime.shared.people() { self.people = people }
 	}
@@ -43,7 +52,7 @@ struct StatusMenu: View {
 	@State private var copied = false
 
 	private var address: String {
-		let origin = Runtime.shared.origin
+		let origin = status.origin
 		return origin.host.map { host in origin.port.map { "\(host):\($0)" } ?? host } ?? origin.absoluteString
 	}
 
@@ -85,7 +94,7 @@ struct StatusMenu: View {
 				Spacer()
 				Button {
 					NSPasteboard.general.clearContents()
-					NSPasteboard.general.setString(Runtime.shared.origin.absoluteString, forType: .string)
+					NSPasteboard.general.setString(status.origin.absoluteString, forType: .string)
 					copied = true
 					DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
 				} label: {
@@ -100,9 +109,9 @@ struct StatusMenu: View {
 			Divider().padding(.vertical, 10)
 
 			MenuRow(title: "Open nolune", icon: "arrow.up.right.square") {
-				NSWorkspace.shared.open(Runtime.shared.origin)
+				NSWorkspace.shared.open(status.origin)
 			}
-			if Runtime.shared.config.relay == nil {
+			if !status.fromAnywhere {
 				MenuRow(title: "Open it from anywhere…", icon: "globe") { openFromAnywhere() }
 			}
 			if status.running == false {

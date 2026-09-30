@@ -76,22 +76,23 @@ enum Snapshot {
 			await save(OnboardingView(onboarding: onboarding), size: size, as: name, in: folder)
 		}
 
-		let status = GatewayStatus()
-		status.pose(
-			running: true,
-			people: [
-				Runtime.Person(name: "Tim", email: "tim@example.com", isAdmin: true),
-				Runtime.Person(name: "Anna", email: "anna@example.com", isAdmin: false),
-				Runtime.Person(name: "Grandma", email: "grandma@example.com", isAdmin: false)
-			]
-		)
-		// The menu follows the system's appearance: both.
+		let people = [
+			Runtime.Person(name: "Tim", email: "tim@example.com", isAdmin: true),
+			Runtime.Person(name: "Anna", email: "anna@example.com", isAdmin: false),
+			Runtime.Person(name: "Grandma", email: "grandma@example.com", isAdmin: false)
+		]
+		// The menu follows the system's appearance: both. Dark with the relay's address, light with
+		// this Mac's and the way to get one.
+		let relayed = GatewayStatus()
+		relayed.pose(running: true, people: people, relay: URL(string: "https://smiths.\(RelaySetup.domain)"))
 		await save(
-			StatusMenu(status: status).background(Color(hex: 0x2A2A2A)).environment(\.colorScheme, .dark),
+			StatusMenu(status: relayed).background(Color(hex: 0x2A2A2A)).environment(\.colorScheme, .dark),
 			size: nil, as: "15-menu-dark", in: folder
 		)
+		let local = GatewayStatus()
+		local.pose(running: true, people: people)
 		await save(
-			StatusMenu(status: status).background(Color(hex: 0xF2F2F2)).environment(\.colorScheme, .light),
+			StatusMenu(status: local).background(Color(hex: 0xF2F2F2)).environment(\.colorScheme, .light),
 			size: nil, as: "16-menu-light", in: folder
 		)
 	}
