@@ -13,13 +13,7 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 
-			adapter: adapter(),
-
-			typescript: {
-				config: (config) => {
-					config.include.push('../drizzle.config.ts');
-				}
-			}
+			adapter: adapter()
 		})
 	],
 	server: {
@@ -30,9 +24,9 @@ export default defineConfig({
 		}
 	},
 	test: {
-		include: ['src/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
+		include: ['src/**/*.test.ts'],
 		environment: 'node',
-		setupFiles: ['packages/core/src/test/setup.ts'],
+		setupFiles: ['../core/src/test/setup.ts'],
 		expect: { requireAssertions: true }
 	}
 });
