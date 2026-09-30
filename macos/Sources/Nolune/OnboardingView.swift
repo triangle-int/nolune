@@ -215,7 +215,7 @@ private struct ServiceScreen: View {
 			case .starting:
 				StepTitle(
 					title: "Starting nolune…",
-					subtitle: "It runs while nolune is in your menu bar, with this window closed too."
+					subtitle: "It runs while nolune is up in your menu bar."
 				)
 				ProgressView()
 					.controlSize(.small)
