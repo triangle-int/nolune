@@ -1,6 +1,6 @@
 # Setup and usage
 
-Needs macOS (Linux works without the background service), Node 22.18+ and an
+Needs macOS or Linux (the background service needs systemd there), Node 22.18+ and an
 [Anthropic API key](https://console.anthropic.com/), an
 [OpenAI API key](https://platform.openai.com/api-keys), an
 [OpenRouter API key](https://openrouter.ai/settings/keys) (chats run on Claude, on OpenAI's GPT
@@ -77,6 +77,12 @@ nolune service restart
 **Files in Documents, Desktop, Photos, Mail.** macOS blocks background processes from these until
 you give the `node` binary Full Disk Access (System Settings > Privacy & Security > Full Disk
 Access). `nolune setup` prints the exact path.
+
+**On Linux**, `nolune service install` writes a systemd user service
+(`~/.config/systemd/user/nolune.service`, systemd 240 or later) and turns on lingering for your
+user, so it runs from boot whether you're logged in or not. Where that needs an admin, it prints
+the `sudo loginctl enable-linger` command. Run it from your own login, not with `sudo` or `su`,
+which leave no user systemd to talk to. `systemctl --user status nolune` works too.
 
 **Keep the Mac awake** if people should reach it at any time (System Settings > Energy).
 

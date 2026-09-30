@@ -82,8 +82,8 @@ See [prompt caching](DESIGN.md#prompt-caching) for the implementation.
 
 ## Try it
 
-You'll need **Node.js 22.18+** and a model connection. macOS supports the built-in background
-service; on Linux, run the gateway in the foreground.
+You'll need **Node.js 22.18+** and a model connection. `nolune service install` runs the gateway in
+the background: as a LaunchAgent on macOS, and as a systemd user service on Linux.
 
 ```sh
 npm install -g nolune
@@ -91,7 +91,7 @@ nolune setup
 nolune service install
 ```
 
-On Linux, use `nolune start` instead of `nolune service install`.
+Without systemd, run `nolune start` under your own process manager instead.
 
 Open the address from setup, sign in, and create your first profile. Its welcome helps you pick a
 model and personalize the assistant. Admins manage providers and models under **Models & keys**.
