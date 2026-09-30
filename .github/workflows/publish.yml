@@ -1,17 +1,22 @@
 name: Publish
 
-# Pushing a tag like v0.1.0 publishes that version to npm. The tag must match `version` in
-# package.json. npm trusted publishing (OIDC) signs in, so there's no npm token in the secrets.
+# Pushing a tag like v0.1.0 releases that version: the npm package, and nolune.app for macOS in a
+# GitHub release. The tag must match `version` in package.json. npm trusted publishing (OIDC) signs
+# in to npm, so there's no npm token in the secrets; the app is signed and notarized with the Apple
+# secrets below (docs/development.md). Run by hand (Actions > Publish > Run workflow), it only
+# builds the app, to try the signing without releasing anything.
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -50,4 +55,145 @@ jobs:
             echo "nolune@$version is on npm already"
           else
             npm publish
+          fi
+
+  app:
+    name: nolune.app (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    env:
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          # The build number is the commit count.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      # A Developer ID Application certificate with its private key, as a .p12 in base64, and an
+      # App Store Connect API key to notarize with. Without them the app is ad-hoc signed, and
+      # macOS won't open it on another Mac until it's allowed in System Settings.
+      - name: Sign in to Apple
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ]; then
+            echo "::warning::No Developer ID certificate (MACOS_CERTIFICATE): nolune.app is ad-hoc signed, and macOS won't open it on another Mac until it's allowed in System Settings."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          base64 --decode <<<"$MACOS_CERTIFICATE" >"$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          # Apple's intermediate certificate, which the signature's chain needs, unless the .p12
+          # carried it already.
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain" 2>/dev/null || true
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          # In the search list, for codesign to find.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" |
+            sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -n 1)"
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_CERTIFICATE has no valid Developer ID Application certificate. It has:"
+            security find-identity -v -p codesigning "$keychain"
+            exit 1
+          fi
+          echo "SIGN_IDENTITY=$identity" >>"$GITHUB_ENV"
+          if [ -z "$APPLE_API_KEY" ]; then
+            echo "::warning::No App Store Connect API key (APPLE_API_KEY): nolune.app is signed but not notarized, and macOS won't open it on another Mac until it's allowed in System Settings."
+            exit 0
+          fi
+          printf '%s\n' "$APPLE_API_KEY" >"$RUNNER_TEMP/notary.p8"
+          {
+            echo "NOTARY_KEY=$RUNNER_TEMP/notary.p8"
+            echo "NOTARY_KEY_ID=$APPLE_API_KEY_ID"
+            echo "NOTARY_ISSUER=$APPLE_API_ISSUER"
+          } >>"$GITHUB_ENV"
+      - name: Build nolune.app
+        run: macos/scripts/build-app.sh
+      # On this architecture: the bundled Node runs the CLI, SQLite's addon included, and the
+      # launcher starts (the Full Disk Access check exits 0 or 1, granted or not).
+      - name: Check the app
+        run: |
+          app="macos/dist/$ARCH/nolune.app"
+          nolune() { "$app/Contents/MacOS/node" "$app/Contents/Resources/app/node_modules/nolune/dist/cli.js" "$@"; }
+          export NOLUNE_HOME="$RUNNER_TEMP/nolune-home"
+          nolune setup --name CI --email ci@example.com --password 'Launcher-Check-42' --origin http://localhost:5780
+          nolune relay status | grep -q 'The relay is off'
+          code=0
+          "$app/Contents/MacOS/Nolune" --probe-disk-access || code=$?
+          [ "$code" -le 1 ]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nolune-macos-${{ matrix.arch }}
+          path: macos/dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    if: github.event_name == 'push'
+    needs: [publish, app]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nolune-macos-*
+          path: dmg
+          merge-multiple: true
+      # The disk images are named without the version, so a link like
+      # https://github.com/<repo>/releases/latest/download/nolune-macos-apple-silicon.dmg always
+      # gets the newest. A re-run puts them on the release it made before.
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NOTARIZED: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.APPLE_API_KEY != '' }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          mv dmg/nolune-*-arm64.dmg dmg/nolune-macos-apple-silicon.dmg
+          mv dmg/nolune-*-x86_64.dmg dmg/nolune-macos-intel.dmg
+          cat >notes.md <<'EOF'
+          **On a Mac:** download nolune-macos-apple-silicon.dmg (M1 and later) or
+          nolune-macos-intel.dmg, open it and drag nolune to Applications. **From the terminal**, on
+          macOS or Linux with Node 22.18 or later: `npm install -g nolune`, then `nolune setup`.
+          EOF
+          if [ "$NOTARIZED" != true ]; then
+            cat >>notes.md <<'EOF'
+
+          > [!WARNING]
+          > This build of the app isn't notarized by Apple, so macOS won't open it at first. After
+          > trying, allow it in System Settings > Privacy & Security > Open Anyway.
+          EOF
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dmg/*.dmg --clobber
+          else
+            gh release create "$tag" dmg/*.dmg --verify-tag --title "$tag" \
+              --notes-file notes.md --generate-notes
           fi
