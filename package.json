@@ -52,6 +52,7 @@
 		"prepack": "pnpm build"
 	},
 	"devDependencies": {
+		"@anthropic-ai/sdk": "^0.128.0",
 		"@eslint/js": "^10.0.1",
 		"@types/node": "^22",
 		"esbuild": "^0.28.2",
