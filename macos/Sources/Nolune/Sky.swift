@@ -86,12 +86,24 @@ final class Sky {
 
 	// MARK: Frame
 
+	/// What `advance` worked out for this frame, for `render` to draw.
+	private var skyTime: Double = 0
+	private var fadeOut: Double = 1
+	private var solid: Double = 0
+	private var orbitsAlpha: Double = 0
+
 	func draw(_ context: inout GraphicsContext, size: CGSize, now: TimeInterval) {
+		advance(size: size, now: now)
+		render(&context)
+	}
+
+	/// Moves everything on to `now`, drawing nothing: the web's `tick`, less the canvas.
+	func advance(size: CGSize, now: TimeInterval) {
 		if stars.isEmpty || size != self.size {
 			self.size = size
 			makeStars()
 		}
-		let dt = min(0.1, now - (last ?? now))
+		let dt = min(0.1, max(0, now - (last ?? now)))
 		last = now
 		if stage != current {
 			if current == .orbit { trails = trails.map { _ in [CGPoint]() } }
@@ -101,8 +113,8 @@ final class Sky {
 		}
 		if current != .dark, starsSince == nil { starsSince = now }
 		let t = now - since
-		let skyTime = starsSince.map { now - $0 } ?? 0
-		let out = current == .gone ? max(0, 1 - t / 0.8) : 1
+		skyTime = starsSince.map { now - $0 } ?? 0
+		fadeOut = current == .gone ? max(0, 1 - t / 0.8) : 1
 
 		// The camera floats forward; stars that pass it come back far away.
 		if !still {
@@ -119,17 +131,16 @@ final class Sky {
 		dawn = still ? (space ? 0 : 1) : clamp(dawn + (space ? -1 : 1) * dt / 1.5)
 		bloom = max(0, bloom - dt / 3)
 
-		context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Theme.background))
-		if current == .dark {
-			context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Theme.space))
-			return
+		// One shooting star, a few seconds in.
+		if shooting == nil, !still, current != .dark, skyTime > 5.5, skyTime < 6 {
+			shooting = (skyTime, width * 0.18, height * 0.14, width * 0.34, height * 0.16)
 		}
-		drawSpace(&context, t: skyTime, fadeOut: out)
 
 		switch current {
 		case .orbit:
 			let k = still ? 1 : easeOut(t / 1.8)
-			drawOrbits(&context, alpha: 0.07 * (still ? 1 : clamp((t - 0.6) / 2)))
+			solid = k
+			orbitsAlpha = 0.07 * (still ? 1 : clamp((t - 0.6) / 2))
 			for i in orbs.indices {
 				let target = onEllipse(i, t: t)
 				let start = origins.isEmpty ? CGPoint(x: mid.x, y: mid.y) : origins[i % origins.count]
@@ -141,9 +152,42 @@ final class Sky {
 				orbs[i].y = sy + (ty - sy) * k
 				orbs[i].r = 2.5 + (1.5 + Double(i % 3) * 1.2) * k
 				orbs[i].alpha = min(1, t * 4)
-				// The trail: where it just was, fainter the longer ago.
+				// The trail: where it just was.
 				trails[i].append(CGPoint(x: orbs[i].x, y: orbs[i].y))
 				if trails[i].count > 9 { trails[i].removeFirst() }
+			}
+		case .aurora, .gone:
+			let k = still ? 1 : easeOut(t / 2.4)
+			// The planets melt into the glow.
+			solid = 1 - k
+			for i in orbs.indices {
+				let target = inAurora(i, t: t)
+				let start = from[i]
+				orbs[i].x = start.x + (target.x - start.x) * k
+				orbs[i].y = start.y + (target.y - start.y) * k
+				orbs[i].r = start.r + (target.r - start.r) * k
+				orbs[i].alpha = (start.alpha + (target.alpha - start.alpha) * k) * fadeOut
+			}
+		case .dark, .stars:
+			break
+		}
+	}
+
+	/// Draws the frame `advance` got to.
+	func render(_ context: inout GraphicsContext) {
+		let whole = Path(CGRect(origin: .zero, size: size))
+		context.fill(whole, with: .color(Theme.background))
+		if current == .dark {
+			context.fill(whole, with: .color(Theme.space))
+			return
+		}
+		drawSpace(&context, t: skyTime, fadeOut: fadeOut)
+
+		switch current {
+		case .orbit:
+			drawOrbits(&context, alpha: orbitsAlpha)
+			for i in orbs.indices {
+				// Fainter the longer ago it was there.
 				for (age, point) in trails[i].dropLast().reversed().enumerated() {
 					var ghost = orbs[i]
 					ghost.x = point.x
@@ -151,22 +195,14 @@ final class Sky {
 					ghost.alpha *= 0.55 * pow(0.78, Double(age))
 					drawOrb(&context, ghost, color: Theme.avatars[i], solid: 0)
 				}
-				drawOrb(&context, orbs[i], color: Theme.avatars[i], solid: k)
+				drawOrb(&context, orbs[i], color: Theme.avatars[i], solid: solid)
 			}
 		case .aurora, .gone:
-			let k = still ? 1 : easeOut(t / 2.4)
 			for i in orbs.indices {
-				let target = inAurora(i, t: t)
-				let start = from[i]
-				orbs[i].x = start.x + (target.x - start.x) * k
-				orbs[i].y = start.y + (target.y - start.y) * k
-				orbs[i].r = start.r + (target.r - start.r) * k
-				orbs[i].alpha = (start.alpha + (target.alpha - start.alpha) * k) * out
 				var shown = orbs[i]
 				shown.alpha *= 1 + bloom * 1.4
 				shown.r *= 1 + bloom * 0.35
-				// The planets melt into the glow.
-				drawOrb(&context, shown, color: Theme.avatars[i], solid: 1 - k)
+				drawOrb(&context, shown, color: Theme.avatars[i], solid: solid)
 			}
 		case .dark, .stars:
 			break
@@ -334,10 +370,6 @@ final class Sky {
 			c.fill(dot, with: .color(s.color))
 		}
 
-		// One shooting star, a few seconds in.
-		if shooting == nil, !still, t > 5.5, t < 6 {
-			shooting = (t, width * 0.18, height * 0.14, width * 0.34, height * 0.16)
-		}
 		if let s = shooting {
 			let k = (t - s.at) / 0.9
 			if k >= 0, k <= 1 {

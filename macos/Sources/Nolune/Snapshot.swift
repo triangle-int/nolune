@@ -93,6 +93,8 @@ enum Snapshot {
 	 */
 	@MainActor
 	private static func save<V: View>(_ view: V, size: CGSize?, as name: String, in folder: URL) async {
+		print("snapshot: \(name)")
+		fflush(stdout)
 		let hosting = NSHostingView(rootView: view)
 		let frame = CGRect(origin: .zero, size: size ?? hosting.fittingSize)
 		hosting.frame = frame
@@ -126,12 +128,10 @@ enum Snapshot {
 		sky.stage = posed.stage
 		sky.bloom = posed.bloom
 		let layout = IntroLayout(size: size)
-		var unseen = context
-		unseen.clip(to: Path())
 		var t = intro ? 0 : max(0, clock - 0.2)
 		while t < clock {
 			if intro { stage(sky, at: t, layout: layout) }
-			sky.draw(&unseen, size: size, now: t)
+			sky.advance(size: size, now: t)
 			t += 1.0 / 30
 		}
 		if intro { stage(sky, at: clock, layout: layout) }
