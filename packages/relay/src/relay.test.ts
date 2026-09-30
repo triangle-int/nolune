@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { page, pageLanguage } from './pages.ts';
 import { CLOSE, RELAY_PROTOCOL, isValidName, type Registration } from './protocol.ts';
 import { createRelay, type Relay, type RelayOptions } from './relay.ts';
-import { GatewayStore, hashToken } from './store.ts';
+import { GatewayStore, currentMonth, hashToken, network } from './store.ts';
 
 /*
  * The relay on its own: its API, what it shows for gateways that aren't there, and whom it lets
@@ -94,6 +94,27 @@ describe('registration', () => {
 		expect((await register({ name: 'relay' })).status).toBe(409);
 	});
 
+	it('limits how many addresses one network has, and counts IPv6 by its /64', async () => {
+		await startRelay({ maxGatewaysPerNetwork: 2 });
+		const first = (await (await register()).json()) as Registration;
+		expect((await register()).status).toBe(201);
+		const third = await register();
+		expect(third.status).toBe(429);
+		expect(((await third.json()) as { error: string }).error).toMatch(/already has 2 addresses/);
+
+		await fetch(`${base}/api/gateways/${first.name}`, {
+			method: 'DELETE',
+			headers: { authorization: `Bearer ${first.token}` }
+		});
+		expect((await register()).status).toBe(201);
+
+		expect(network('203.0.113.7')).toBe('203.0.113.7');
+		expect(network('::ffff:203.0.113.7')).toBe('203.0.113.7');
+		expect(network('2001:db8:aa:bb:1:2:3:4')).toBe('2001:db8:aa:bb::/64');
+		expect(network('2001:DB8:aa:bb::99')).toBe('2001:db8:aa:bb::/64');
+		expect(network('2001:db8::1')).toBe('2001:db8:0:0::/64');
+	});
+
 	it('limits how many addresses one client gets in an hour', async () => {
 		await startRelay({ registrationsPerHour: 2 });
 		expect((await register()).status).toBe(201);
@@ -112,7 +133,8 @@ describe('registration', () => {
 		expect(await (await fetch(url, { headers: auth })).json()).toEqual({
 			name: 'smiths',
 			url: 'http://smiths.nolune.test',
-			online: false
+			online: false,
+			traffic: { month: currentMonth(), bytes: 0, limit: 30 * 1024 ** 3 }
 		});
 		expect((await fetch(url, { method: 'DELETE', headers: auth })).status).toBe(204);
 		expect((await fetch(url, { headers: auth })).status).toBe(401);
@@ -193,7 +215,80 @@ describe('connections', () => {
 	});
 });
 
+describe('the operator', () => {
+	/** A request to the relay's admin socket, as admin.ts makes it. */
+	function administer(
+		socketPath: string,
+		method: string,
+		path: string,
+		body?: unknown
+	): Promise<{ status: number; body: unknown }> {
+		return new Promise((resolve, reject) => {
+			const req = http.request({ socketPath, method, path }, async (res) => {
+				let text = '';
+				for await (const chunk of res) text += chunk;
+				resolve({ status: res.statusCode!, body: text ? JSON.parse(text) : undefined });
+			});
+			req.on('error', reject);
+			req.end(body === undefined ? undefined : JSON.stringify(body));
+		});
+	}
+
+	it('blocks an address, lets it back, and removes it', async () => {
+		const running = await startRelay();
+		const socket = join(mkdtempSync(join(tmpdir(), 'nolune-relay-')), 'admin.sock');
+		await new Promise<void>((resolve) => running.admin.listen(socket, resolve));
+		const { name, token } = (await (await register({ name: 'smiths' })).json()) as Registration;
+
+		const blocked = await administer(socket, 'POST', '/gateways/smiths/block', {
+			reason: 'phishing'
+		});
+		expect(blocked.body).toMatchObject({ name: 'smiths', blocked: 'phishing', online: false });
+		const page = await visit('smiths');
+		expect(page.status).toBe(410);
+		expect(page.body).toContain('This address is blocked');
+		// Its nolune can't connect, and hears why; its owner sees it in the status.
+		expect(await hello({ type: 'hello', protocol: RELAY_PROTOCOL, name, token })).toEqual({
+			code: CLOSE.blocked
+		});
+		const status = await fetch(`${base}/api/gateways/smiths`, {
+			headers: { authorization: `Bearer ${token}` }
+		});
+		expect(((await status.json()) as { blocked?: string }).blocked).toBe('phishing');
+
+		await administer(socket, 'POST', '/gateways/smiths/unblock');
+		expect((await visit('smiths')).status).toBe(503);
+
+		const list = await administer(socket, 'GET', '/gateways');
+		expect(list.body).toEqual([expect.objectContaining({ name: 'smiths', blocked: null })]);
+
+		expect((await administer(socket, 'DELETE', '/gateways/smiths')).status).toBe(204);
+		expect((await administer(socket, 'GET', '/gateways/smiths')).status).toBe(404);
+		expect((await register({ name: 'smiths' })).status).toBe(201);
+	});
+});
+
 describe('the gateways file', () => {
+	it('counts traffic by month, and writes it when flushed', () => {
+		const file = join(mkdtempSync(join(tmpdir(), 'nolune-relay-')), 'gateways.json');
+		const store = new GatewayStore(file);
+		store.add('smiths', 'token', '203.0.113.7');
+		store.addTraffic('smiths', 1000);
+		store.addTraffic('smiths', 500);
+		expect(store.trafficThisMonth('smiths')).toBe(1500);
+		expect(new GatewayStore(file).trafficThisMonth('smiths')).toBe(0);
+		store.flush();
+		const reopened = new GatewayStore(file);
+		expect(reopened.trafficThisMonth('smiths')).toBe(1500);
+		expect(reopened.countFrom('203.0.113.7')).toBe(1);
+
+		// Last month's count is no count this month, and starts again from what comes next.
+		reopened.get('smiths')!.traffic = { month: '2020-01', bytes: 10 ** 12 };
+		expect(reopened.trafficThisMonth('smiths')).toBe(0);
+		reopened.addTraffic('smiths', 7);
+		expect(reopened.trafficThisMonth('smiths')).toBe(7);
+	});
+
 	it('keeps gateways across restarts, with a hash of the token rather than the token', () => {
 		const file = join(mkdtempSync(join(tmpdir(), 'nolune-relay-')), 'gateways.json');
 		new GatewayStore(file).add('smiths', 'secret-token');

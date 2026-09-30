@@ -76,7 +76,9 @@ nolune relay disable                # stop using it and give the name back
 
 The gateway keeps a connection open to `relay.nolune.dev`, and the relay passes requests for the
 address down it, so there's no port to open and no tunnel to run. While the relay is on, its
-address is nolune's origin (sign-in, webhook URLs). The relay could read what passes through it,
+address is nolune's origin (sign-in, webhook URLs). The relay is free, with a fair-use limit of
+30 GB of traffic a month for each address, far more than a family's chats use; `nolune relay
+status` shows how much this month took. The relay could read what passes through it,
 as any hosted tunnel could; it keeps none of it. `--server` uses a relay of your own
 ([packages/relay](../packages/relay/README.md)). If the computer is off or asleep, the address
 shows a page saying nolune is offline, which reloads itself until it's back.

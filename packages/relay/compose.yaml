@@ -7,6 +7,8 @@ services:
     environment:
       RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.family}
       RELAY_HOST: ${RELAY_HOST:-relay.nolune.dev}
+      RELAY_MONTHLY_GB: ${RELAY_MONTHLY_GB:-30}
+      RELAY_MAX_PER_NETWORK: ${RELAY_MAX_PER_NETWORK:-10}
     volumes:
       - relay-data:/data
 

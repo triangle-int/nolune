@@ -3,7 +3,7 @@
  * speaks (the browser's first one that matches, else English).
  */
 
-export type PageKind = 'offline' | 'unknown' | 'failed';
+export type PageKind = 'offline' | 'unknown' | 'failed' | 'quota' | 'blocked';
 
 type Texts = Record<PageKind, { title: string; body: string }>;
 
@@ -20,6 +20,14 @@ const TEXTS: Record<string, Texts> = {
 		failed: {
 			title: "nolune didn't answer",
 			body: 'Something went wrong on the way to nolune. Try again in a moment.'
+		},
+		quota: {
+			title: "This address has used this month's traffic",
+			body: 'This nolune has passed the traffic its address gets each month. It works again from the 1st of next month.'
+		},
+		blocked: {
+			title: 'This address is blocked',
+			body: 'It was blocked for breaking the rules of the service that runs it.'
 		}
 	},
 	ru: {
@@ -34,6 +42,14 @@ const TEXTS: Record<string, Texts> = {
 		failed: {
 			title: 'nolune не ответил',
 			body: 'Что-то пошло не так по пути к nolune. Попробуйте ещё раз чуть позже.'
+		},
+		quota: {
+			title: 'У этого адреса закончился трафик на этот месяц',
+			body: 'Этот nolune израсходовал трафик, который его адресу положен на месяц. Он снова заработает с 1-го числа следующего месяца.'
+		},
+		blocked: {
+			title: 'Этот адрес заблокирован',
+			body: 'Его заблокировали за нарушение правил сервиса, через который он работает.'
 		}
 	},
 	de: {
@@ -48,6 +64,14 @@ const TEXTS: Record<string, Texts> = {
 		failed: {
 			title: 'nolune hat nicht geantwortet',
 			body: 'Auf dem Weg zu nolune ist etwas schiefgegangen. Versuche es gleich noch einmal.'
+		},
+		quota: {
+			title: 'Diese Adresse hat ihr Datenvolumen für diesen Monat verbraucht',
+			body: 'Dieses nolune hat das monatliche Datenvolumen seiner Adresse überschritten. Ab dem 1. des nächsten Monats funktioniert es wieder.'
+		},
+		blocked: {
+			title: 'Diese Adresse ist gesperrt',
+			body: 'Sie wurde gesperrt, weil sie gegen die Regeln des Dienstes verstoßen hat, über den sie läuft.'
 		}
 	},
 	es: {
@@ -62,6 +86,14 @@ const TEXTS: Record<string, Texts> = {
 		failed: {
 			title: 'nolune no respondió',
 			body: 'Algo salió mal por el camino hacia nolune. Inténtalo de nuevo en un momento.'
+		},
+		quota: {
+			title: 'Esta dirección ha gastado el tráfico de este mes',
+			body: 'Este nolune ha superado el tráfico mensual de su dirección. Volverá a funcionar a partir del día 1 del mes que viene.'
+		},
+		blocked: {
+			title: 'Esta dirección está bloqueada',
+			body: 'Se bloqueó por incumplir las normas del servicio a través del que funciona.'
 		}
 	},
 	fr: {
@@ -76,6 +108,14 @@ const TEXTS: Record<string, Texts> = {
 		failed: {
 			title: "nolune n'a pas répondu",
 			body: "Quelque chose s'est mal passé en chemin vers nolune. Réessayez dans un instant."
+		},
+		quota: {
+			title: 'Cette adresse a épuisé son trafic du mois',
+			body: 'Ce nolune a dépassé le trafic mensuel de son adresse. Il fonctionnera de nouveau à partir du 1er du mois prochain.'
+		},
+		blocked: {
+			title: 'Cette adresse est bloquée',
+			body: 'Elle a été bloquée pour non-respect des règles du service par lequel elle passe.'
 		}
 	}
 };

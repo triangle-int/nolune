@@ -20,7 +20,7 @@ import {
 	type Ready,
 	type Registration
 } from './protocol.ts';
-import { GatewayStore } from './store.ts';
+import { GatewayStore, currentMonth, network, type GatewayRecord } from './store.ts';
 import { webSocketStream } from './stream.ts';
 
 /*
@@ -36,6 +36,10 @@ import { webSocketStream } from './stream.ts';
  * TLS is left to a proxy in front (Caddy, with a wildcard certificate for the domain). The relay
  * sees the requests it passes on, as any tunnel does, and keeps none of them: it logs only
  * registrations and gateways coming and going.
+ *
+ * Anyone may register, so it keeps what one person can take in check: a limit on each address's
+ * traffic in a month, on the addresses one network can register (in an hour, and in all), and an
+ * operator who can block an address (`admin`, served on a Unix socket, never on the web).
  */
 
 export interface RelayOptions {
@@ -52,8 +56,12 @@ export interface RelayOptions {
 	 * entry, rather than the connection's.
 	 */
 	trustProxy?: boolean;
-	/** Registrations each client address may make in an hour. */
+	/** Registrations each network (network() of the client's address) may make in an hour. */
 	registrationsPerHour?: number;
+	/** Addresses each network may have registered at once; 0 for no limit. */
+	maxGatewaysPerNetwork?: number;
+	/** Bytes each address may pass through the relay in a month (UTC), both ways; 0 for no limit. */
+	monthlyTrafficBytes?: number;
 	/**
 	 * For how long after a gateway leaves (restarting, or changing networks) requests wait for it
 	 * to come back, rather than get the offline page at once.
@@ -64,9 +72,24 @@ export interface RelayOptions {
 
 export interface Relay {
 	server: http.Server;
+	/**
+	 * The operator's API (admin.ts), for a Unix socket only they can open: the gateways, and
+	 * blocking, unblocking and removing one.
+	 */
+	admin: http.Server;
 	/** Whether a gateway is connected now. */
 	online(name: string): boolean;
 	close(): Promise<void>;
+}
+
+/** A gateway as the operator sees it (`GET /gateways` on the admin socket). */
+export interface GatewayInfo {
+	name: string;
+	createdAt: string;
+	lastSeenAt: string | null;
+	online: boolean;
+	trafficBytes: number;
+	blocked: string | null;
 }
 
 interface Connection {
@@ -98,15 +121,30 @@ function json(res: ServerResponse, status: number, body?: unknown): void {
 	res.end(text);
 }
 
+/** Seconds until the next month starts (UTC), when traffic is counted afresh. */
+function secondsToNextMonth(now = new Date()): number {
+	const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+	return Math.ceil((next - now.getTime()) / 1000);
+}
+
 function showPage(req: IncomingMessage, res: ServerResponse, status: number, kind: PageKind): void {
 	const html = page(kind, req.headers['accept-language']);
+	const retryAfter =
+		kind === 'offline' ? '20' : kind === 'quota' ? String(secondsToNextMonth()) : undefined;
 	res.writeHead(status, {
 		'content-type': 'text/html; charset=utf-8',
 		'content-length': Buffer.byteLength(html),
 		'cache-control': 'no-store',
-		...(kind === 'offline' ? { 'retry-after': '20' } : {})
+		...(retryAfter ? { 'retry-after': retryAfter } : {})
 	});
 	res.end(req.method === 'HEAD' ? undefined : html);
+}
+
+/** A WebSocket close reason fits in 123 bytes. */
+function closeReason(text: string): string {
+	const characters = [...text];
+	while (Buffer.byteLength(characters.join('')) > 123) characters.pop();
+	return characters.join('');
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -128,6 +166,8 @@ export function createRelay(options: RelayOptions): Relay {
 	const scheme = options.scheme ?? 'https';
 	const store = options.store ?? new GatewayStore();
 	const registrationsPerHour = options.registrationsPerHour ?? 10;
+	const maxPerNetwork = options.maxGatewaysPerNetwork ?? 10;
+	const monthlyLimit = options.monthlyTrafficBytes ?? 30 * 1024 ** 3;
 	const graceMs = options.reconnectGraceMs ?? 15_000;
 	const log = options.log ?? (() => {});
 
@@ -136,7 +176,7 @@ export function createRelay(options: RelayOptions): Relay {
 	const leftAt = new Map<string, number>();
 	/** Requests waiting for a gateway to come back. */
 	const waiting = new Map<string, Set<(connection: Connection | null) => void>>();
-	/** Recent registrations by client address. */
+	/** Recent registrations by network. */
 	const registrations = new Map<string, number[]>();
 
 	const urlOf = (name: string) => `${scheme}://${name}.${domain}`;
@@ -159,13 +199,17 @@ export function createRelay(options: RelayOptions): Relay {
 		return (req.socket.remoteAddress ?? '').replace(/^::ffff:/, '');
 	}
 
-	function mayRegister(address: string): boolean {
+	function mayRegister(from: string): boolean {
 		const now = Date.now();
-		const recent = (registrations.get(address) ?? []).filter((at) => now - at < HOUR_MS);
+		const recent = (registrations.get(from) ?? []).filter((at) => now - at < HOUR_MS);
 		const allowed = recent.length < registrationsPerHour;
 		if (allowed) recent.push(now);
-		registrations.set(address, recent);
+		registrations.set(from, recent);
 		return allowed;
+	}
+
+	function overQuota(name: string): boolean {
+		return monthlyLimit > 0 && store.trafficThisMonth(name) >= monthlyLimit;
 	}
 
 	const pruning = setInterval(() => {
@@ -176,6 +220,9 @@ export function createRelay(options: RelayOptions): Relay {
 		for (const [name, at] of leftAt) if (now - at >= graceMs) leftAt.delete(name);
 	}, HOUR_MS);
 	pruning.unref();
+	// Traffic and when gateways were last seen change all the time: they're written once a minute.
+	const flushing = setInterval(() => store.flush(), 60_000);
+	flushing.unref();
 
 	// --- The relay's own API ---
 
@@ -186,8 +233,14 @@ export function createRelay(options: RelayOptions): Relay {
 		} catch {
 			return json(res, 400, { error: 'send JSON like {"name": "smiths"}, or nothing' });
 		}
-		if (!mayRegister(clientAddress(req))) {
+		const from = network(clientAddress(req));
+		if (!mayRegister(from)) {
 			return json(res, 429, { error: 'too many new addresses from here; try again in an hour' });
+		}
+		if (maxPerNetwork > 0 && store.countFrom(from) >= maxPerNetwork) {
+			return json(res, 429, {
+				error: `this network already has ${maxPerNetwork} addresses, as many as one may; \`nolune relay disable\` on another computer gives one back`
+			});
 		}
 		let name: string;
 		if (body?.name !== undefined && body.name !== '') {
@@ -208,7 +261,7 @@ export function createRelay(options: RelayOptions): Relay {
 			}
 		}
 		const token = randomBytes(32).toString('base64url');
-		store.add(name, token);
+		store.add(name, token, from);
 		log(`registered ${name}`);
 		json(res, 201, { name, url: urlOf(name), token } satisfies Registration);
 	}
@@ -225,10 +278,17 @@ export function createRelay(options: RelayOptions): Relay {
 				return json(res, 401, { error: 'no such gateway, or the wrong token' });
 			}
 			if (req.method === 'GET') {
+				const blocked = store.get(name)?.blocked;
 				return json(res, 200, {
 					name,
 					url: urlOf(name),
-					online: connections.has(name)
+					online: connections.has(name),
+					traffic: {
+						month: currentMonth(),
+						bytes: store.trafficThisMonth(name),
+						limit: monthlyLimit > 0 ? monthlyLimit : null
+					},
+					...(blocked ? { blocked: blocked.reason } : {})
 				} satisfies GatewayStatus);
 			}
 			if (req.method === 'DELETE') {
@@ -310,9 +370,9 @@ export function createRelay(options: RelayOptions): Relay {
 				return socket.close(CLOSE.protocol, `this relay speaks protocol ${RELAY_PROTOCOL}`);
 			}
 			const name = String(hello.name ?? '');
-			if (!store.verify(name, String(hello.token ?? ''))) {
-				return socket.close(CLOSE.unknown, 'no such gateway, or the wrong token');
-			}
+			const record = store.verify(name, String(hello.token ?? ''));
+			if (!record) return socket.close(CLOSE.unknown, 'no such gateway, or the wrong token');
+			if (record.blocked) return socket.close(CLOSE.blocked, closeReason(record.blocked.reason));
 			attach(name, socket);
 		});
 	});
@@ -365,8 +425,11 @@ export function createRelay(options: RelayOptions): Relay {
 			log(`${connection.name}: ${(err as Error).message}`);
 			return showPage(req, res, 502, 'failed');
 		}
+		const count = (chunk: Buffer) => store.addTraffic(connection.name, chunk.length);
+		req.on('data', count);
 		upstream.on('response', (answer) => {
 			res.writeHead(Number(answer[':status']), endToEnd(answer));
+			upstream.on('data', count);
 			upstream.pipe(res);
 		});
 		// The gateway couldn't answer, or stopped in the middle of an answer.
@@ -384,6 +447,9 @@ export function createRelay(options: RelayOptions): Relay {
 	}
 
 	async function gateway(name: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+		const record = store.get(name);
+		if (record?.blocked) return showPage(req, res, 410, 'blocked');
+		if (record && overQuota(name)) return showPage(req, res, 429, 'quota');
 		const connection = await connectionFor(name, req);
 		if (res.destroyed) return;
 		if (connection) return forward(req, res, connection);
@@ -420,11 +486,66 @@ export function createRelay(options: RelayOptions): Relay {
 		socket.end('HTTP/1.1 501 Not Implemented\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
 	});
 
+	// --- The operator's API ---
+
+	function info(record: GatewayRecord): GatewayInfo {
+		return {
+			name: record.name,
+			createdAt: record.createdAt,
+			lastSeenAt: record.lastSeenAt ?? null,
+			online: connections.has(record.name),
+			trafficBytes: store.trafficThisMonth(record.name),
+			blocked: record.blocked?.reason ?? null
+		};
+	}
+
+	async function administer(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		const { pathname } = new URL(req.url ?? '/', 'http://relay');
+		if (pathname === '/gateways' && req.method === 'GET') {
+			return json(res, 200, store.list().map(info));
+		}
+		const match = /^\/gateways\/([^/]+)(?:\/(block|unblock))?$/.exec(pathname);
+		const name = match ? decodeURIComponent(match[1]) : '';
+		if (!match || !store.has(name)) return json(res, 404, { error: `no gateway ${name}` });
+		const action = match[2];
+		if (action === 'block' && req.method === 'POST') {
+			const { reason } = (await readJson(req)) as { reason?: unknown };
+			const why = String(reason ?? '').trim() || 'blocked by the relay';
+			store.block(name, why);
+			connections.get(name)?.socket.close(CLOSE.blocked, closeReason(why));
+			log(`blocked ${name}: ${why}`);
+		} else if (action === 'unblock' && req.method === 'POST') {
+			store.unblock(name);
+			log(`unblocked ${name}`);
+		} else if (!action && req.method === 'DELETE') {
+			store.remove(name);
+			connections.get(name)?.socket.close(CLOSE.released, 'removed by the relay');
+			leftAt.delete(name);
+			log(`removed ${name}`);
+			return json(res, 204);
+		} else if (!action && req.method === 'GET') {
+			// shown below
+		} else {
+			return json(res, 405, { error: 'not something the admin API does' });
+		}
+		json(res, 200, info(store.get(name)!));
+	}
+
+	const admin = http.createServer((req, res) => {
+		administer(req, res).catch((err: unknown) => {
+			if (!res.headersSent) json(res, 400, { error: (err as Error).message });
+			else res.destroy();
+		});
+	});
+
 	return {
 		server,
+		admin,
 		online: (name) => connections.has(name),
 		async close() {
 			clearInterval(pruning);
+			clearInterval(flushing);
+			store.flush();
 			for (const waiters of waiting.values()) for (const resume of waiters) resume(null);
 			for (const { socket } of connections.values()) socket.terminate();
 			wss.close();
@@ -432,6 +553,7 @@ export function createRelay(options: RelayOptions): Relay {
 				server.close(() => resolve());
 				server.closeAllConnections();
 			});
+			if (admin.listening) await new Promise((resolve) => admin.close(resolve));
 		}
 	};
 }

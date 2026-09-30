@@ -61,6 +61,12 @@ class RelayRefusal extends Error {
 	}
 }
 
+function size(bytes: number): string {
+	const gb = bytes / 1024 ** 3;
+	if (gb >= 1) return `${gb >= 10 ? Math.round(gb) : Number(gb.toFixed(1))} GB`;
+	return `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
 /** A request to the relay's API, with its error in words when it refuses. */
 async function relayApi<T>(server: string, path: string, init: RequestInit = {}): Promise<T> {
 	let res: Response;
@@ -181,14 +187,26 @@ could. \`nolune relay disable\` stops using it.`);
 			}
 			io.log(`Address  ${relay.url}`);
 			io.log(`Relay    ${relay.server}`);
+			let status: GatewayStatus;
 			try {
-				const { online } = await gatewayStatus(relay);
-				io.log(
-					`Gateway  ${online ? 'connected' : 'not connected: is nolune running? (`nolune service status`)'}`
-				);
+				status = await gatewayStatus(relay);
 			} catch (err) {
 				io.log(`Gateway  unknown: ${(err as Error).message}`);
+				return;
 			}
+			const { online, traffic, blocked } = status;
+			io.log(
+				`Gateway  ${online ? 'connected' : 'not connected: is nolune running? (`nolune service status`)'}`
+			);
+			// Before the relay counted traffic, it didn't say.
+			if (traffic) {
+				const limit = traffic.limit === null ? '' : ` of ${size(traffic.limit)}`;
+				const over = traffic.limit !== null && traffic.bytes >= traffic.limit;
+				io.log(
+					`Traffic  ${size(traffic.bytes)}${limit} this month${over ? ": used up, so the address doesn't work until the 1st" : ''}`
+				);
+			}
+			if (blocked) io.log(`Blocked  by the relay: ${blocked}`);
 			return;
 		}
 		case 'disable': {
@@ -364,6 +382,9 @@ export function connectRelay(
 				return log(
 					'the relay address was given back, so nolune stopped using it. `nolune relay enable` gets a new one.'
 				);
+			}
+			if (code === CLOSE.blocked) {
+				return log(`the relay blocked this address (${reason}), so nolune stopped using it.`);
 			}
 			if (code === CLOSE.protocol) {
 				return log(`the relay needs a newer nolune (${reason}): update nolune and restart it.`);

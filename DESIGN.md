@@ -1546,10 +1546,9 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
   the token (`relay`, with the relay's URL); the relay keeps its SHA-256. While `relay` is set, its
   address is the origin (`publicOrigin()`): `ORIGIN` for adapter-node and better-auth, and webhook
   URLs. `nolune relay disable` gives the name back. Names are 3 to 32 letters, digits and single
-  dashes; the relay keeps the likes of `www` and `login` for itself and limits each client address
-  to 10 registrations an hour. The addresses have a domain of their own, apart from the site and
-  the relay on `nolune.dev`, so a browser blocklist that takes in an abused address, or a cookie an
-  address sets for its domain, can't reach them.
+  dashes; the relay keeps the likes of `www` and `login` for itself. The addresses have a domain
+  of their own, apart from the site and the relay on `nolune.dev`, so a browser blocklist that
+  takes in an abused address, or a cookie an address sets for its domain, can't reach them.
 - **The connection.** `nolune start` (`connectRelay()` in `packages/cli/src/relay.ts`) opens a
   WebSocket to the relay and says `hello` with the name and token. Once the relay answers `ready`,
   the binary messages carry HTTP/2 with the relay as the client: each request to the address is a
@@ -1568,6 +1567,15 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
   browser's language, that reloads itself. A second connection with the same token takes over, and
   the first stops rather than take it back. SIGINT and SIGTERM close the link before adapter-node's
   shutdown, which would otherwise wait 30 s for the event streams it carries.
+- **Limits.** The relay is free and anyone can register, or write a client of their own, so it
+  keeps what one person can take in check rather than trust what connects. Each address may pass
+  30 GB a month (UTC calendar months, both ways, `RELAY_MONTHLY_GB`); past it, the relay shows a
+  page saying so until the 1st instead of passing requests on, and `nolune relay status` shows the
+  month's traffic. Each network (an IPv4 address, or an IPv6 /64, which a home usually has all of)
+  may register 10 addresses an hour and have 10 at once. The operator lists, blocks, unblocks and
+  removes addresses over a Unix socket (`packages/relay/src/admin.ts`), never over the web; a
+  blocked address shows a page saying so, and its gateway is told why and stops. Traffic is counted
+  in memory and written with the gateways file once a minute.
 - **Trust.** TLS ends at the relay (Caddy in front, with a wildcard certificate), so its operator
   could read the traffic, as with any hosted tunnel; the relay logs only registrations and
   connections. End-to-end encryption would need each gateway to hold the certificate for its own

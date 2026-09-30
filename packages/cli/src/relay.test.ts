@@ -1,9 +1,12 @@
+import { mkdtempSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { initConfig, readConfig, webhookUrl } from '@nolune/core';
 import type { Registration } from '@nolune/relay/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRelay, type Relay } from '../../relay/src/relay.ts';
+import { createRelay, type Relay, type RelayOptions } from '../../relay/src/relay.ts';
 import { connectRelay, type RelayLink } from './relay.ts';
 import { runCli } from './run.ts';
 import { testIo } from './test/io.ts';
@@ -23,16 +26,23 @@ const links: RelayLink[] = [];
 let received: { req: http.IncomingMessage; body: Buffer; open: boolean }[] = [];
 let respond: (req: http.IncomingMessage, res: http.ServerResponse, body: Buffer) => void;
 
-beforeEach(async () => {
-	initConfig();
+/** Starts the relay, in place of the one running, with these options. */
+async function startRelay(options: Partial<RelayOptions> = {}): Promise<void> {
+	await relay?.close();
 	relay = createRelay({
 		domain: 'nolune.test',
 		host: '127.0.0.1',
 		scheme: 'http',
-		reconnectGraceMs: 2000
+		reconnectGraceMs: 2000,
+		...options
 	});
 	await new Promise<void>((resolve) => relay.server.listen(0, '127.0.0.1', resolve));
 	relayUrl = `http://127.0.0.1:${(relay.server.address() as AddressInfo).port}`;
+}
+
+beforeEach(async () => {
+	initConfig();
+	await startRelay();
 
 	received = [];
 	respond = (_req, res) => res.end('hello');
@@ -251,6 +261,48 @@ describe('the connection', () => {
 				timeout: 5000
 			}
 		);
+	});
+});
+
+describe('limits', () => {
+	it("shows a page once an address has used its month's traffic, and says so in the status", async () => {
+		await startRelay({ monthlyTrafficBytes: 50_000 });
+		const { io } = testIo();
+		await runCli(['relay', 'enable', '--name', 'smiths', '--server', relayUrl], io);
+		await connect(readConfig().relay!);
+		respond = (_req, res) => res.end(Buffer.alloc(60_000));
+
+		expect((await request('/')).body.length).toBe(60_000);
+		const over = await request('/', { headers: { 'accept-language': 'ru' } });
+		expect(over.status).toBe(429);
+		expect(over.body.toString()).toContain('закончился трафик');
+		expect(Number(over.headers['retry-after'])).toBeGreaterThan(0);
+		expect(received).toHaveLength(1);
+
+		const status = testIo();
+		await runCli(['relay', 'status'], status.io);
+		expect(status.out()).toMatch(/Traffic {2}0 MB of 0 MB this month: used up/);
+	});
+
+	it('stops when the operator blocks its address', async () => {
+		const socket = join(mkdtempSync(join(tmpdir(), 'nolune-relay-')), 'admin.sock');
+		await new Promise<void>((resolve) => relay.admin.listen(socket, resolve));
+		const registration = await register('smiths');
+		const { log } = await connect(registration);
+
+		await new Promise((resolve) => {
+			const req = http.request(
+				{ socketPath: socket, method: 'POST', path: '/gateways/smiths/block' },
+				resolve
+			);
+			req.end(JSON.stringify({ reason: 'phishing' }));
+		});
+		await vi.waitFor(() =>
+			expect(log.at(-1)).toBe(
+				'the relay blocked this address (phishing), so nolune stopped using it.'
+			)
+		);
+		expect((await request('/')).status).toBe(410);
 	});
 });
 

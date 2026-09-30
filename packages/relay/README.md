@@ -30,6 +30,13 @@ browser ──HTTPS──▶ Caddy ──▶ relay ══ WebSocket (HTTP/2 insi
   answer; the gateway pings the relay too, and reconnects after a moment, then less and less often
   while the relay can't be reached. A second connection with the same token takes over from the
   first, which then stops, so two computers can't fight over one address.
+- **Limits.** Anyone can register, and anyone can write a client that speaks the protocol, so the
+  relay keeps what one person can take in check. Each address may pass 30 GB a month through the
+  relay, both ways, counted by calendar month in UTC; a family rarely comes near it. Past it, the
+  address shows a page saying its traffic is used up until the 1st, and `nolune relay status` says
+  so. Each network (an IPv4 address, or an IPv6 /64) may register 10 addresses an hour and have 10
+  at once. Names that belong to a site, like `www`, `api` or `login`, are reserved
+  (`src/names.ts`).
 
 ## Privacy
 
@@ -70,14 +77,17 @@ grows). The relay runs from its TypeScript source on Node 22.18 or later, with o
 `compose.yaml` runs the relay (`Dockerfile`) behind Caddy (`Caddy.Dockerfile`, Caddy with the
 Cloudflare DNS module, and `Caddyfile`). The relay's settings:
 
-| Variable            | Meaning                                                               |
-| ------------------- | --------------------------------------------------------------------- |
-| `RELAY_DOMAIN`      | Gateways get `<name>.<domain>`. Required.                             |
-| `RELAY_HOST`        | Where gateways register and connect. The domain itself by default.    |
-| `RELAY_DATA`        | The gateways file. `/data/gateways.json` in the image.                |
-| `RELAY_TRUST_PROXY` | `1`: the client's address is the last in `X-Forwarded-For` (Caddy's). |
-| `RELAY_SCHEME`      | `http` to try it without TLS; addresses are `https` otherwise.        |
-| `HOST`, `PORT`      | Where it listens. `0.0.0.0:8080` by default.                          |
+| Variable                | Meaning                                                               |
+| ----------------------- | --------------------------------------------------------------------- |
+| `RELAY_DOMAIN`          | Gateways get `<name>.<domain>`. Required.                             |
+| `RELAY_HOST`            | Where gateways register and connect. The domain itself by default.    |
+| `RELAY_DATA`            | The gateways file. `/data/gateways.json` in the image.                |
+| `RELAY_MONTHLY_GB`      | Traffic each address may pass in a month. 30 by default; 0: no limit. |
+| `RELAY_MAX_PER_NETWORK` | Addresses one network may have. 10 by default; 0: no limit.           |
+| `RELAY_ADMIN_SOCKET`    | The operator's socket. `admin.sock` next to the gateways file.        |
+| `RELAY_TRUST_PROXY`     | `1`: the client's address is the last in `X-Forwarded-For` (Caddy's). |
+| `RELAY_SCHEME`          | `http` to try it without TLS; addresses are `https` otherwise.        |
+| `HOST`, `PORT`          | Where it listens. `0.0.0.0:8080` by default.                          |
 
 To try it on your own computer, without TLS:
 
@@ -93,10 +103,25 @@ curl -H 'Host: smiths.nolune.localhost' http://127.0.0.1:8090/login
 - **Back up** the gateways file (the `relay-data` volume). Without it, every family would have to
   run `nolune relay enable` again (it asks for the same name back) and restart nolune; until then
   their gateways try every 5 minutes, in case the file comes back.
-- **Taking an address away** (abuse): delete its entry from the gateways file and restart the
-  relay.
-- Each client address can register 10 addresses an hour. Names that belong to a site, like `www`,
-  `api` or `login`, are reserved (`src/names.ts`).
+- **The operator's commands** talk to the running relay over a Unix socket that only its own user
+  can open, never over the web:
+
+  ```sh
+  docker compose exec relay node --no-warnings src/admin.ts list
+  pnpm --filter @nolune/relay admin list      # a relay run from source, from the repository
+  ```
+
+  | Command                    | What it does                                                                                                                                      |
+  | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `list`                     | Every address: connected or not, its traffic this month, when it was last seen.                                                                   |
+  | `show <name>`              | One address.                                                                                                                                      |
+  | `block <name> [reason...]` | Takes an address off the relay: visitors see that it's blocked, and its nolune can't connect. Its owner sees the reason in `nolune relay status`. |
+  | `unblock <name>`           | Lets it back.                                                                                                                                     |
+  | `remove <name>`            | Forgets an address, so its name is free again.                                                                                                    |
+
+- **Families behind one address.** Mobile networks and some home ISPs put many customers behind
+  one IPv4 address (CGNAT), and they share its 10 addresses. If people run into it, raise
+  `RELAY_MAX_PER_NETWORK`.
 - Add the domain to the [Public Suffix List](https://publicsuffix.org/), as tunnel providers do,
   so browsers treat every address as a site of its own: one family's nolune then can't set cookies
   for another's, and a blocklist takes in only the address it's about. Nothing but families'

@@ -10,7 +10,8 @@
 	},
 	"scripts": {
 		"check": "tsc -p .",
-		"start": "node --no-warnings src/main.ts"
+		"start": "node --no-warnings src/main.ts",
+		"admin": "node --no-warnings src/admin.ts"
 	},
 	"dependencies": {
 		"ws": "^8.18.3"

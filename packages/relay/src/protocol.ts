@@ -29,7 +29,15 @@ export type Ready = { type: 'ready'; url: string };
 export type Registration = { name: string; url: string; token: string };
 
 /** What `GET /api/gateways/<name>` answers to the gateway's token. */
-export type GatewayStatus = { name: string; url: string; online: boolean };
+export type GatewayStatus = {
+	name: string;
+	url: string;
+	online: boolean;
+	/** What passed through the relay this month (UTC), and how much may; null: no limit. */
+	traffic: { month: string; bytes: number; limit: number | null };
+	/** Why the relay's operator blocked it, when they have. */
+	blocked?: string;
+};
 
 /** Why the relay closed a gateway's WebSocket (application close codes, 4000-4999). */
 export const CLOSE = {
@@ -41,8 +49,10 @@ export const CLOSE = {
 	protocol: 4002,
 	/** Another connection with the same name and token took over. */
 	replaced: 4003,
-	/** The gateway gave its name back (`DELETE /api/gateways/<name>`). */
-	released: 4004
+	/** The gateway gave its name back (`DELETE /api/gateways/<name>`), or the operator removed it. */
+	released: 4004,
+	/** The relay's operator blocked the gateway; the reason is the close reason. */
+	blocked: 4005
 } as const;
 
 /**
