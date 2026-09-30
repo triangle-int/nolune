@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { userInfo } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
@@ -75,7 +76,7 @@ import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
 	installService,
 	logFile,
-	renderPlist,
+	renderServiceFile,
 	restartService,
 	serviceStatus,
 	uninstallService
@@ -90,7 +91,7 @@ Getting started
                                              web asks for one, or use key set and preset add below
   nolune start                               run the gateway in the foreground
   nolune service install|uninstall|restart|status|logs [-f]
-                                             run it in the background at login (macOS)
+                                             run it in the background (macOS, or Linux with systemd)
 
 Settings (${paths.home})
   nolune config                                 show address, port and what's configured
@@ -333,8 +334,10 @@ function listenAddress() {
 	};
 }
 
+/** macOS keeps background processes out of these folders; elsewhere there's nothing to say. */
 function fullDiskAccessHint(): string {
-	return `To let the agent reach Documents, Desktop, Downloads, Photos and Mail, give Full Disk Access to
+	if (process.platform !== 'darwin') return '';
+	return `\n\nTo let the agent reach Documents, Desktop, Downloads, Photos and Mail, give Full Disk Access to
   ${process.execPath}
   in System Settings > Privacy & Security > Full Disk Access (click +, press Cmd+Shift+G, paste the path).
   Note: this applies to every script run with that node binary.`;
@@ -395,9 +398,7 @@ then the model). Or add one under Models & keys, or with \`nolune key set\` and 
 
 The gateway listens on http://${current.host}:${port}. To reach it from outside your home, point a
 tunnel at that address (Tailscale Funnel, Cloudflare Tunnel, or your own VPS) and set its URL with
-\`nolune config set origin https://...\`.
-
-${fullDiskAccessHint()}`);
+\`nolune config set origin https://...\`.${fullDiskAccessHint()}`);
 }
 
 /** Runs the gateway in this process, so it only makes sense in a process of its own. */
@@ -429,17 +430,21 @@ async function service(io: Io, action: string | undefined, args: string[]): Prom
 			if (!existsSync(paths.server))
 				fail('no server build. In a source checkout, run `pnpm build` first.');
 			if (args.includes('--dry-run')) {
-				io.log(renderPlist());
+				io.log(renderServiceFile());
 				return;
 			}
-			const plist = await installService();
+			const { file, atBoot } = await installService();
 			const { origin } = listenAddress();
-			io.log(`Installed ${plist}
-The gateway starts now and at every login: ${origin}
+			// A Linux user whose services don't linger has them stopped at their last logout.
+			const linger =
+				atBoot || process.platform !== 'linux'
+					? ''
+					: `\n\nIt stops when you log out. To keep it running whenever this computer is on, run
+  sudo loginctl enable-linger ${userInfo().username}`;
+			io.log(`Installed ${file}
+The gateway starts now and ${atBoot ? 'whenever this computer starts' : 'at every login'}: ${origin}
 Logs: ${logFile}
-It runs with ${process.execPath}; run \`nolune service install\` again after switching Node versions.
-
-${fullDiskAccessHint()}`);
+It runs with ${process.execPath}; run \`nolune service install\` again after switching Node versions.${fullDiskAccessHint()}${linger}`);
 			return;
 		}
 		case 'uninstall':
