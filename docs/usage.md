@@ -1,6 +1,6 @@
 # Setup and usage
 
-Needs macOS (Linux works without the background service), Node 22.18+ and an
+Needs macOS or Linux (the background service needs systemd there), Node 22.18+ and an
 [Anthropic API key](https://console.anthropic.com/), an
 [OpenAI API key](https://platform.openai.com/api-keys), an
 [OpenRouter API key](https://openrouter.ai/settings/keys) (chats run on Claude, on OpenAI's GPT
@@ -97,6 +97,12 @@ nolune service restart
 you give the `node` binary Full Disk Access (System Settings > Privacy & Security > Full Disk
 Access). `nolune setup` prints the exact path.
 
+**On Linux**, `nolune service install` writes a systemd user service
+(`~/.config/systemd/user/nolune.service`, systemd 240 or later) and turns on lingering for your
+user, so it runs from boot whether you're logged in or not. Where that needs an admin, it prints
+the `sudo loginctl enable-linger` command. Run it from your own login, not with `sudo` or `su`,
+which leave no user systemd to talk to. `systemctl --user status nolune` works too.
+
 **Keep the Mac awake** if people should reach it at any time (System Settings > Energy).
 
 ## Using it
@@ -178,6 +184,18 @@ Access). `nolune setup` prints the exact path.
   conversation of its own that starts with only its task, and reports back to the chat. While they
   work, the chat lists them under "Working in the background", where you can open a subagent's own
   chat or stop everything. Logs: `~/.nolune/profiles/<profile>/agents`.
+- **Auto mode.** Before a command runs, a model checks it and blocks what could do harm nobody in
+  the chat asked for: deleting more than you asked, sending files or passwords out, changing
+  security settings, installing things from unknown places, buying or posting for you. Commands
+  that only look (`ls`, `cat`, `grep`, `nolune memory search`...) run without a check. A blocked
+  command doesn't run; nolune says what it wanted to do, and a yes from you in the chat lets it
+  through. Checks use the chat's own model unless an admin picks a faster preset for them;
+  every command that does more than look costs a short call to it. Admins switch to
+  **Unrestricted** (commands run unchecked, not recommended) under Commands in Models & keys, or
+  with `nolune config set command-mode unrestricted`; `nolune config set safety-model <preset>`
+  picks the model. nolune can't change either itself. A single chat can differ: the shield in its
+  message box switches it between Auto and Unrestricted (only admins can pick Unrestricted there),
+  and the subagents it starts follow it.
 - Extra environment variables for the agent's commands, e.g. for a firecrawl web-search skill:
   `nolune env set FIRECRAWL_API_KEY fc-...`
 - Logs: `nolune service logs -f`. Data: `~/.nolune` (override with `NOLUNE_HOME`).

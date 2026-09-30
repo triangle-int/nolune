@@ -266,7 +266,9 @@ export function runSubagent(input: {
 			title: `${chosen}: ${firstLine(prompt)}`,
 			hidden: true,
 			folderId: parent.folderId,
-			cacheTtl: '5m'
+			cacheTtl: '5m',
+			// Its work is the parent's, so its commands run as the parent's do.
+			commandMode: parent.commandMode
 		});
 		const row: Subagent = {
 			id: randomUUID(),

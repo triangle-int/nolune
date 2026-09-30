@@ -4,3 +4,8 @@ allowBuilds:
   # Ships prebuilt binaries; its binding.gyp would make pnpm run node-gyp.
   better-sqlite3: false
   esbuild: true
+packageExtensions:
+  # drizzle-kit imports drizzle-orm without declaring it. As a peer, it gets @nolune/core's.
+  drizzle-kit:
+    peerDependencies:
+      drizzle-orm: '*'

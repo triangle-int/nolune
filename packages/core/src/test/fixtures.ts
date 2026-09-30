@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
+import { initConfig, updateConfig } from '../config.ts';
 import { getDb } from '../db/index.ts';
 import { modelPreset, user } from '../db/schema.ts';
 import type { Provider } from '../models.ts';
@@ -37,6 +38,14 @@ export function makePreset(
 	};
 	getDb().insert(modelPreset).values(preset).run();
 	return preset;
+}
+
+/** Commands run without auto mode's check, for tests about something else. */
+export function runCommandsUnchecked(): void {
+	initConfig();
+	updateConfig((c) => {
+		c.commandMode = 'unrestricted';
+	});
 }
 
 /** A user with a profile of their own, the usual starting point. */

@@ -181,6 +181,8 @@ beforeEach(() => {
 	initConfig();
 	updateConfig((c) => {
 		c.codexPath = codex ?? undefined;
+		// These are about the plan, not auto mode's checks (command-safety.test.ts).
+		c.commandMode = 'unrestricted';
 	});
 	useStandIn();
 	seen.length = 0;

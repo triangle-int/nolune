@@ -1,6 +1,6 @@
 ---
 name: nolune
-description: Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.
+description: Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates), and whether commands are checked before they run (auto mode). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.
 ---
 
 # Configuring nolune
@@ -30,6 +30,18 @@ Other parts of the CLI have their own instructions: automations (`nolune trigger
   default model and which skills are on apply to new chats: a chat keeps the skills it started
   with, this one too, and its model until someone picks another in its composer. The address
   applies after a restart.
+
+## Auto mode
+
+`nolune config` shows `commands`: in auto mode, the default, a model checks each of your commands
+before it runs and blocks what could do harm nobody in the chat asked for; unrestricted runs them
+unchecked. Only a person changes that, at this computer's terminal or under Commands in Models &
+keys: `nolune config set command-mode` and `safety-model` refuse your commands, and editing
+`config.json` for it is blocked. An admin can also set one chat apart with the shield in its message
+box. When someone asks you to change it, tell them where.
+
+When a command of yours is blocked, its result says why. Don't work around it. Ask: say what you
+want to do and why; once they agree in the chat, the check lets it through.
 
 ## Models
 
@@ -242,8 +254,9 @@ port, and tell the admin the command that switches it back, to run at the comput
 
 ## The service
 
-On macOS nolune runs in the background as a LaunchAgent. Elsewhere the owner runs `nolune start` under
-their own process manager, and `nolune service` doesn't work.
+On macOS nolune runs in the background as a LaunchAgent, and on Linux as a systemd user service.
+Elsewhere, or on Linux without systemd, the owner runs `nolune start` under their own process
+manager, and `nolune service` doesn't work.
 
 ```sh
 nolune service status     # "Running (pid ...)" or what's wrong

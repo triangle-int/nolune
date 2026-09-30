@@ -10,6 +10,8 @@
 	},
 	"scripts": {
 		"check": "tsc -p .",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"start": "node --no-warnings src/main.ts",
 		"admin": "node --no-warnings src/admin.ts"
 	},
@@ -17,6 +19,7 @@
 		"ws": "^8.18.3"
 	},
 	"devDependencies": {
-		"@types/ws": "^8.18.1"
+		"@types/ws": "^8.18.1",
+		"vitest": "^5.0.2"
 	}
 }
