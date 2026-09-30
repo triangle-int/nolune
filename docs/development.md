@@ -39,9 +39,9 @@ and on pushes to `main`.
 ## Publishing
 
 `npm pack` builds and packs `packages/web/build/` (without source maps), `dist/cli.js` and the
-migrations. The LaunchAgent that `nolune service install` writes points at `dist/cli.js`, so keep it
-where it is: if it moved, an update would leave the LaunchAgent unable to start the gateway until
-`nolune service install` ran again.
+migrations. The service that `nolune service install` writes (a LaunchAgent on macOS, a systemd
+user unit on Linux) points at `dist/cli.js`, so keep it where it is: if it moved, an update would
+leave the service unable to start the gateway until `nolune service install` ran again.
 
 To release, set `version` in `package.json`, merge it to `main`, then push a matching tag:
 `git tag v0.1.0 && git push origin v0.1.0`. The Publish workflow (`.github/workflows/publish.yml`)
