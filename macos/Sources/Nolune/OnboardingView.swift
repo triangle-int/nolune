@@ -10,24 +10,28 @@ struct OnboardingView: View {
 
 	var body: some View {
 		ZStack {
+			// The sky fills the window, whatever its size; what's on it keeps the design's.
 			SkyView(sky: onboarding.sky)
 				// Quieter behind the questions, as on the web.
 				.opacity(Onboarding.steps.contains(onboarding.phase) ? 0.6 : 1)
 				.animation(.easeInOut(duration: 0.7), value: onboarding.phase)
 
-			screen
-				.id(onboarding.phase)
-				.transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 16)), removal: .opacity))
+			ZStack {
+				screen
+					.id(onboarding.phase)
+					.transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 16)), removal: .opacity))
 
-			header
+				header
 
-			// Esc skips the intro.
-			Button("") { onboarding.skipIntro() }
-				.keyboardShortcut(.cancelAction)
-				.opacity(0)
-				.allowsHitTesting(false)
+				// Esc skips the intro.
+				Button("") { onboarding.skipIntro() }
+					.keyboardShortcut(.cancelAction)
+					.opacity(0)
+					.allowsHitTesting(false)
+			}
+			.frame(width: Self.size.width, height: Self.size.height)
 		}
-		.frame(width: Self.size.width, height: Self.size.height)
+		.frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
 		.background(Theme.space)
 		// Under the see-through title bar too: the window is all sky.
 		.ignoresSafeArea()

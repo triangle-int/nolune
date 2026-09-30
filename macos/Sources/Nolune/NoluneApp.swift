@@ -79,6 +79,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		window.backgroundColor = NSColor(Theme.space)
 		window.isReleasedWhenClosed = false
 		window.contentView = NSHostingView(rootView: OnboardingView(onboarding: onboarding))
+		// The content goes under the title bar, so the design's size is the whole window's.
+		window.setFrame(NSRect(origin: .zero, size: OnboardingView.size), display: false)
 		window.center()
 		self.window = window
 
