@@ -223,6 +223,8 @@ export const de: Messages = {
 		reconnecting: 'Verbindung wird wiederhergestellt…',
 		empty: 'Bitte um etwas, um loszulegen.',
 		readsAfterStep: 'nolune liest das nach seinem aktuellen Schritt',
+		typing: (names: string[]) =>
+			`${list(names)} ${names.length === 1 ? 'schreibt' : 'schreiben'} gerade`,
 		working: 'nolune arbeitet',
 		thinking: 'Denkt nach',
 		writing: 'Schreibt',
