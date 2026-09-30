@@ -99,6 +99,8 @@ enum Snapshot {
 		let frame = CGRect(origin: .zero, size: size ?? hosting.fittingSize)
 		hosting.frame = frame
 		let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+		// Swift owns it: closed, AppKit would release it a second time.
+		window.isReleasedWhenClosed = false
 		window.appearance = NSAppearance(named: .darkAqua)
 		window.contentView = hosting
 		hosting.layoutSubtreeIfNeeded()
