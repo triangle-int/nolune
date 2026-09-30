@@ -150,8 +150,8 @@ The installed gateway listens on `127.0.0.1:5780`. Other devices reach it in one
 
 Keep the host awake when the family needs access. On macOS, access to protected folders may
 require Full Disk Access for the Node binary; setup prints its path. The macOS app in
-[`macos/`](macos/README.md) does the setup and Full Disk Access for you, with its own Node, and
-runs nolune while it's open in the menu bar.
+[`macos/`](macos/README.md) does the setup, the relay's address and Full Disk Access for you, with
+its own Node, and runs nolune while it's open in the menu bar.
 
 See the [documentation](https://nolune.dev/docs/) (its pages are in
 [docs/src/content/docs](docs/src/content/docs)) for model connections, subscription integrations,

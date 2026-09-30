@@ -8,7 +8,8 @@ ways in from other devices.
 
 ## Through nolune's relay
 
-The easiest: `nolune setup` offers it, or turn it on later.
+The easiest: `nolune setup` offers it, and so does the macOS app's onboarding (or, later, **Open
+it from anywhere…** in its menu bar). Or turn it on from a terminal:
 
 ```sh
 nolune relay enable --name smiths   # https://smiths.nolune.family (a random name without --name)

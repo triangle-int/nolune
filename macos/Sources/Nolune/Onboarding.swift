@@ -3,7 +3,8 @@ import SwiftUI
 
 /**
  * The first run: the intro in space, then one question per screen, like the web welcome
- * (packages/web/src/routes/p/[slug]/welcome). Who's setting it up, Full Disk Access, and the gateway started.
+ * (packages/web/src/routes/p/[slug]/welcome). Who's setting it up, where the family opens it (an
+ * address through nolune's relay, or this Mac only), Full Disk Access, and the gateway started.
  */
 @MainActor
 final class Onboarding: ObservableObject {
@@ -11,11 +12,11 @@ final class Onboarding: ObservableObject {
 	private nonisolated static let phaseKey = "onboarding.phase"
 
 	enum Phase: String {
-		case intro, welcome, account, files, service
+		case intro, welcome, account, address, files, service
 	}
 
 	/// The steps after the welcome, for the bars at the top.
-	nonisolated static let steps: [Phase] = [.account, .files, .service]
+	nonisolated static let steps: [Phase] = [.account, .address, .files, .service]
 
 	enum ServiceState: Equatable {
 		case starting
@@ -37,6 +38,8 @@ final class Onboarding: ObservableObject {
 	@Published private(set) var granted = false
 	@Published private(set) var service = ServiceState.starting
 
+	/// The address step's: the name asked for, and the address once there is one.
+	let relay: RelaySetup
 	let sky = Sky()
 	let music: Music
 	var onFinish: (() -> Void)?
@@ -46,6 +49,7 @@ final class Onboarding: ObservableObject {
 
 	init() {
 		music = Music()
+		relay = RelaySetup()
 		if !Snapshot.active {
 			admin = Task { await Runtime.shared.people()?.contains(where: \.isAdmin) ?? false }
 		}
@@ -131,7 +135,7 @@ final class Onboarding: ObservableObject {
 		music.duck(to: Music.under, over: 2.5)
 		Task {
 			let skip = await admin?.value ?? false
-			if phase == .welcome { go(skip ? .files : .account) }
+			if phase == .welcome { go(skip ? .address : .account) }
 		}
 	}
 
@@ -140,7 +144,7 @@ final class Onboarding: ObservableObject {
 	/// Set up already, from an npm install or a run that stopped halfway: skip to the next step.
 	func checkAccount() async {
 		guard !Snapshot.active, let people = await Runtime.shared.people(), people.contains(where: \.isAdmin) else { return }
-		if phase == .account { go(.files) }
+		if phase == .account { go(.address) }
 	}
 
 	/// Continue is never greyed out: a field being typed in hands its text over only when it's
@@ -166,7 +170,7 @@ final class Onboarding: ObservableObject {
 		])
 		working = false
 		if output.succeeded {
-			go(.files)
+			go(.address)
 		} else {
 			problem = output.problem
 		}
@@ -185,6 +189,30 @@ final class Onboarding: ObservableObject {
 		let alphabet = Array("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
 		return (0..<4).map { _ in String((0..<6).map { _ in alphabet.randomElement()! }) }
 			.joined(separator: "-")
+	}
+
+	// MARK: Address
+
+	/**
+	 * Has an address already, the relay's or a public URL of its own (an npm install with a
+	 * tunnel): skip to the next step.
+	 */
+	func checkAddress() {
+		guard !Snapshot.active else { return }
+		let config = Runtime.shared.config
+		let local = ["localhost", "127.0.0.1"]
+		let ownURL = config.origin.flatMap { URL(string: $0)?.host }.map { !local.contains($0) } ?? false
+		if config.relay != nil || ownURL, phase == .address { go(.files) }
+	}
+
+	/// An address through the relay. The gateway starts on the last step, and connects to it then.
+	func useRelay() async {
+		if await relay.enable(), phase == .address { go(.files) }
+	}
+
+	/// This Mac only, for now: the menu bar's "Open it from anywhere…" gets an address later.
+	func skipRelay() {
+		go(.files)
 	}
 
 	// MARK: Files

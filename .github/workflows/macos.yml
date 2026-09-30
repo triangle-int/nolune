@@ -64,6 +64,8 @@ jobs:
           trap 'cat "$log" 2>/dev/null' EXIT
           echo '::group::The bundled Node runs the CLI'
           nolune setup --name CI --email ci@example.com --password 'Launcher-Check-42' --origin http://localhost:5780
+          # The onboarding's address step runs `nolune relay`: the bundled CLI has it.
+          nolune relay status | grep -q 'The relay is off'
           echo '::endgroup::'
           echo '::group::The launcher keeps the gateway, as the app runs it'
           "$app/Contents/MacOS/Nolune" --gateway &

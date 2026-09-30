@@ -1,9 +1,9 @@
 # nolune for macOS
 
 `nolune.app`: nolune set up and running without a Terminal. It carries its own Node and the npm
-package, walks through a first-run onboarding (a big bang, then who's setting it up, Full Disk
-Access, and the gateway started), and stays in the menu bar after, running nolune while it's
-there.
+package, walks through a first-run onboarding (a big bang, then who's setting it up, an address
+that works from anywhere, Full Disk Access, and the gateway started), and stays in the menu bar
+after, running nolune while it's there.
 
 ## Build it
 
@@ -52,6 +52,13 @@ onboarding over.
   change. `nolune service restart|status|logs` work with the app's gateway (the keeper's pid is in
   `$NOLUNE_HOME/gateway.pid`); the app removes a LaunchAgent left by `nolune service install`,
   which would fight it for the port.
+- **An address from anywhere** (`Relay.swift`). The onboarding's second step gets one through
+  nolune's relay (`packages/relay`), like `https://smiths.nolune.family`, with
+  `nolune relay enable [--name]`: the family opens it on any phone or laptop, with nothing to set
+  up on the router. "Only on this Mac for now" skips it, and the menu bar's "Open it from
+  anywhere…" shows the same step later, then restarts the gateway to connect. The step is skipped
+  when nolune has an address already (the relay's, or a public URL of its own). While there's one,
+  it's what "Open nolune" opens and the menu shows (`Runtime.origin`, as `publicOrigin` in core).
 - **Full Disk Access** (`DiskAccess.swift`). There's no API to ask for it. The app opens the right
   pane, reads a protected file so it usually shows up in the list switched off, offers its icon to
   drag in when it doesn't, and checks in a new process every second until the switch is on: a

@@ -41,11 +41,17 @@ final class Runtime: @unchecked Sendable {
 	var isBundled: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 	var logFile: URL { home.appendingPathComponent("logs/gateway.log") }
 
-	/// Host, port and public URL, as `nolune setup` and `nolune config` keep them.
+	/// Host, port and public URL, as `nolune setup` and `nolune config` keep them, and the relay's
+	/// address, as `nolune relay enable` does.
 	struct Config: Decodable {
 		var host: String?
 		var port: Int?
 		var origin: String?
+		var relay: Relay?
+
+		struct Relay: Decodable {
+			var url: String
+		}
 	}
 
 	var config: Config {
@@ -58,8 +64,11 @@ final class Runtime: @unchecked Sendable {
 	static let defaultPort = 5780
 	var port: Int { config.port ?? Runtime.defaultPort }
 
-	/// Where people open it: the configured public URL, else this computer.
+	/// Where people open it: the relay's address while there is one, else the configured public
+	/// URL, else this computer (`publicOrigin` in packages/core/src/config.ts).
 	var origin: URL {
+		let config = self.config
+		if let relay = config.relay, let url = URL(string: relay.url) { return url }
 		if let origin = config.origin, let url = URL(string: origin) { return url }
 		return localURL
 	}
