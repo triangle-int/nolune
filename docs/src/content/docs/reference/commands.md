@@ -145,6 +145,16 @@ projects/&lt;name&gt;, other. Facts go only into these; a note from before them 
 rewritten until it's moved. The note core is pinned: every new chat starts with it, so it holds at
 most 4000 characters.
 
+Each member also has a card, `cards/<name>`: a note about them that goes with them into all their
+profiles (at most 2000 characters). `show`, `search`, `add`, `replace` and `forget` work on it; a
+change is refused unless its owner wrote one of the messages the agent is answering.
+
+## Cards
+
+- `nolune card [<name|email>]`: print someone's card, or list everyone's
+
+People edit their own card on its page in the web app (Your card, in the menu under their name).
+
 ## Soul
 
 Who nolune is for a profile: character, values, tone; at most 4000 characters.

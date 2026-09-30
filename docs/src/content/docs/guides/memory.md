@@ -4,7 +4,8 @@ description: What nolune remembers about the family, how it finds it, and how to
 ---
 
 nolune keeps what it learns about the family (preferences, who's who, where things are) in small
-notes. Files: `~/.nolune/profiles/<profile>/memories`.
+notes. Each profile has its own, and each person has a card that goes with them into all their
+profiles. Files: `~/.nolune/profiles/<profile>/memories` and `~/.nolune/cards`.
 
 ![Editable family memory in nolune](../../../../screenshots/memory.png)
 
@@ -17,6 +18,26 @@ note under people, so nolune knows who "I" is. When you add someone memory may k
 
 The pinned `core` note (who's who, languages, allergies, anything you want it to always keep in
 mind) is in every chat from the start, so keep it short: at most 4,000 characters.
+
+## Your card
+
+If you're in several profiles (your own, the family's, one with a partner, one with friends), you
+don't have to tell each of them who you are. What you say about yourself that you'd tell anyone
+(the languages you speak, what you eat, your allergies, how you like answers) goes on your card,
+which goes with you into every profile you're in. Every chat there starts with it.
+
+Profiles still keep their circles apart: nothing moves from one profile to another by itself.
+
+- Only your own messages put things on your card. What someone else says about you, what you
+  share with one circle, and anything you ask nolune to keep there stays in your note in that
+  profile. When in doubt, nolune keeps it in the profile.
+- Everyone in any of your profiles can read your card, but only you see which profiles those
+  are, and only you can change it.
+- **Your card**, in the menu under your name, is where you edit it, see what nolune put on it in
+  any of your profiles, and undo that, or keep it only in the profile it came from.
+- Start it with **Bring in from your notes** there: it shows what your notes in each profile
+  already say about you and checks what several of them repeat. What you add moves onto your card.
+- A card holds a few things, not everything: at most 2,000 characters.
 
 ## How nolune finds facts
 
