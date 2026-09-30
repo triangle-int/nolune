@@ -81,10 +81,15 @@ enum Snapshot {
 				Runtime.Person(name: "Grandma", email: "grandma@example.com", isAdmin: false)
 			]
 		)
-		let menu = StatusMenu(status: status)
-			.background(Color(hex: 0x2A2A2A))
-			.preferredColorScheme(.dark)
-		await save(menu, size: nil, as: "15-menu", in: folder)
+		// The menu follows the system's appearance: both.
+		await save(
+			StatusMenu(status: status).background(Color(hex: 0x2A2A2A)).environment(\.colorScheme, .dark),
+			size: nil, as: "15-menu-dark", in: folder
+		)
+		await save(
+			StatusMenu(status: status).background(Color(hex: 0xF2F2F2)).environment(\.colorScheme, .light),
+			size: nil, as: "16-menu-light", in: folder
+		)
 	}
 
 	/**
@@ -101,7 +106,7 @@ enum Snapshot {
 		let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
 		// Swift owns it: closed, AppKit would release it a second time.
 		window.isReleasedWhenClosed = false
-		window.appearance = NSAppearance(named: .darkAqua)
+		window.appearance = NSAppearance(named: name.hasSuffix("-light") ? .aqua : .darkAqua)
 		window.contentView = hosting
 		hosting.layoutSubtreeIfNeeded()
 		try? await Task.sleep(nanoseconds: 500_000_000)

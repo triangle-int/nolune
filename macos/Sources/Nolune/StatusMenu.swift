@@ -77,7 +77,7 @@ struct StatusMenu: View {
 			HStack {
 				Text(address)
 					.font(Theme.mono(12))
-					.foregroundStyle(Theme.muted)
+					.foregroundStyle(.secondary)
 					.lineLimit(1)
 					.truncationMode(.middle)
 				Spacer()
@@ -88,7 +88,7 @@ struct StatusMenu: View {
 					DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
 				} label: {
 					Image(systemName: copied ? "checkmark" : "doc.on.doc")
-						.foregroundStyle(Theme.muted)
+						.foregroundStyle(.secondary)
 				}
 				.buttonStyle(.plain)
 				.help("Copy the address")
@@ -120,7 +120,7 @@ struct StatusMenu: View {
 			MenuRow(title: "Quit", icon: "power") { NSApp.terminate(nil) }
 			Text("nolune keeps running in the background.")
 				.font(Theme.font(11))
-				.foregroundStyle(Theme.muted.opacity(0.8))
+				.foregroundStyle(.secondary)
 				.padding(.horizontal, 14)
 				.padding(.top, 2)
 				.padding(.bottom, 12)
@@ -142,7 +142,7 @@ struct StatusMenu: View {
 		switch status.running {
 		case .some(true): return Color(hex: 0x4ADE80)
 		case .some(false): return Color(hex: 0xFBBF24)
-		case .none: return Theme.muted
+		case .none: return .secondary
 		}
 	}
 }
@@ -158,7 +158,7 @@ private struct MenuRow: View {
 			HStack(spacing: 10) {
 				Image(systemName: icon)
 					.frame(width: 16)
-					.foregroundStyle(Theme.muted)
+					.foregroundStyle(.secondary)
 				Text(title)
 					.font(Theme.font(13))
 				Spacer()
