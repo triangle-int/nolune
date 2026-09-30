@@ -12,12 +12,20 @@
 	const NPM = 'https://www.npmjs.com/package/nolune';
 </script>
 
+<!-- The docs are a separate site that this domain serves at /docs (site/vercel.json), so their
+     links skip SvelteKit's router and resolve(). -->
+{#snippet docsLink()}
+	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- another site on this domain -->
+	<a href="/docs/" data-sveltekit-reload>Docs</a>
+{/snippet}
+
 <header class="bar">
 	<div class="wrap bar-row">
 		<a href={home} class="home"><Wordmark class="wordmark" /></a>
 		<nav>
 			<a href="{home}#features">Features</a>
 			<a href="{home}#how">How it works</a>
+			{@render docsLink()}
 			<a href={GITHUB}>GitHub</a>
 		</nav>
 		<a href="{home}#how" class="pill">Install</a>
@@ -30,6 +38,7 @@
 	<div class="wrap footer-row">
 		<Wordmark class="wordmark" />
 		<nav>
+			{@render docsLink()}
 			<a href={GITHUB}>GitHub</a>
 			<a href={NPM}>npm</a>
 			<a href="{GITHUB}/blob/main/LICENSE">MIT license</a>

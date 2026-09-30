@@ -230,6 +230,11 @@
 					</li>
 				{/each}
 			</ol>
+			<p class="more">
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the docs, another site on this domain -->
+				<a href="/docs/getting-started/" data-sveltekit-reload>The full setup guide</a>
+				covers models, adding the family and reaching nolune from outside your home.
+			</p>
 		</div>
 	</section>
 
@@ -584,6 +589,15 @@
 	.steps p:last-child {
 		line-height: 1.65;
 		font-size: 0.95rem;
+	}
+	.more {
+		margin-top: 40px;
+		color: var(--muted);
+		font-size: 0.95rem;
+	}
+	.more a {
+		color: var(--rust);
+		text-underline-offset: 4px;
 	}
 
 	/* strip */

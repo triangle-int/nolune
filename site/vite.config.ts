@@ -7,7 +7,14 @@ export default defineConfig({
 		sveltekit({
 			compilerOptions: { runes: true },
 			// Every page is prerendered. On Vercel, adapter-static writes Vercel's output format by itself.
-			adapter: adapter()
+			adapter: adapter(),
+			prerender: {
+				handleHttpError: ({ path, message }) => {
+					// /docs is the docs site, which this domain serves from another project (vercel.json).
+					if (path === '/docs' || path.startsWith('/docs/')) return;
+					throw new Error(message);
+				}
+			}
 		})
 	]
 });

@@ -1,0 +1,57 @@
+---
+import { AVATARS, avatarSvg, type Avatar } from '@nolune/core/avatars';
+
+// The app's --avatar-* colors (src/routes/layout.css): light for the light theme, dark for dark.
+const COLORS: Record<Avatar, [string, string]> = {
+	probe: ['#039a80', '#70e0c4'],
+	campfire: ['#d66a03', '#fe9042'],
+	lantern: ['#ad7f00', '#fee57f'],
+	planet: ['#8c74f7', '#a293fd'],
+	quantum: ['#0b9b6d', '#85ebbd'],
+	comet: ['#3490c3', '#8ed2fd'],
+	moon: ['#9a8363', '#fcedd2'],
+	satellite: ['#f44959', '#fd767b']
+};
+---
+
+<ul class="avatars not-content">
+	{
+		AVATARS.map((avatar) => (
+			<li style={`--light: ${COLORS[avatar][0]}; --dark: ${COLORS[avatar][1]}`}>
+				<Fragment set:html={avatarSvg(avatar, 'currentColor', `avatar-${avatar}-`)} />
+				<code>{avatar}</code>
+			</li>
+		))
+	}
+</ul>
+
+<style>
+	.avatars {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+		gap: 1rem;
+		margin-block: 1.5rem;
+		padding: 0;
+		list-style: none;
+	}
+	li {
+		display: grid;
+		gap: 0.5rem;
+		justify-items: center;
+		padding: 1rem 0.5rem 0.75rem;
+		border: 1px solid var(--sl-color-hairline-light);
+		border-radius: 0.75rem;
+		color: var(--dark);
+	}
+	:global([data-theme='light']) li {
+		color: var(--light);
+	}
+	li :global(svg) {
+		width: 2.5rem;
+		height: 2.5rem;
+	}
+	code {
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-xs);
+	}
+</style>

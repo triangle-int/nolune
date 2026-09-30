@@ -9,6 +9,8 @@ node_modules
 /build
 /site/.svelte-kit
 /site/build
+/docs/.astro
+/docs/dist
 
 # OS
 .DS_Store

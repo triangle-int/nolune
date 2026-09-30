@@ -33,6 +33,8 @@ jobs:
             run: pnpm build
           - name: Site
             run: pnpm --filter @nolune/site check && pnpm --filter @nolune/site build
+          - name: Docs
+            run: pnpm --filter @nolune/docs check && pnpm --filter @nolune/docs build
     steps:
       - uses: actions/checkout@v5
         with:

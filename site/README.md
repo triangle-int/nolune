@@ -17,5 +17,10 @@ pnpm --filter @nolune/site build    # writes site/build
 To deploy on Vercel, set the project's Root Directory to `site`. adapter-static notices Vercel and
 writes its output format, so there's nothing else to configure.
 
+`/docs` is a separate site ([docs/](../docs)), deployed as its own Vercel project. `vercel.json`
+forwards `/docs` and everything under it to that project's address, so it opens on this domain. Its
+links here skip SvelteKit's router, and the prerender ignores them. Locally, run the docs with
+`pnpm --filter @nolune/docs dev`.
+
 `static/og.png`, the picture shown when someone shares a link, is a 1200×630 screenshot of the hero
 with reduced motion on. Take a new one when the hero changes.
