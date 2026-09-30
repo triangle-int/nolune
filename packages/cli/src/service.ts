@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -30,8 +30,8 @@ const LABEL = 'dev.nolune.gateway';
 const plistPath = join(homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
 
 /**
- * Run from nolune.app (macos/): its Node sits inside the app, and the app registers this
- * LaunchAgent itself, from its bundle, under the same label.
+ * Run from nolune.app (macos/): its Node sits inside the app, and the app runs the gateway itself
+ * while it's open, with no LaunchAgent.
  */
 export function appManaged(execPath = process.execPath): boolean {
 	return /\.app\/Contents\/MacOS\/node$/.test(execPath);
@@ -115,7 +115,7 @@ const launchAgent: ServiceManager = {
 		const result = launchctl('print', target());
 		const pid = /\bpid = (\d+)/.exec(result.stdout ?? '')?.[1];
 		return {
-			installed: existsSync(plistPath) || (appManaged() && result.status === 0),
+			installed: existsSync(plistPath),
 			loaded: result.status === 0,
 			pid: pid ? Number(pid) : null
 		};
@@ -244,8 +244,48 @@ const systemdUnit: ServiceManager = {
 	}
 };
 
+/**
+ * nolune.app's: the app runs `Nolune --gateway` as its child while it's open, which keeps
+ * `nolune start` running and writes its own pid here. SIGHUP has it start the gateway again.
+ */
+const appPidFile = join(paths.home, 'gateway.pid');
+
+/** The app's gateway keeper, when it's running. */
+export function appKeeperPid(pidFile = appPidFile): number | null {
+	let pid: number;
+	try {
+		pid = Number(readFileSync(pidFile, 'utf8').trim());
+	} catch {
+		return null;
+	}
+	if (!Number.isInteger(pid) || pid <= 0) return null;
+	// A keeper that was killed left its file, and the pid may be another program's by now.
+	const ps = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' });
+	return ps.status === 0 && /(^|\/)Nolune$/.test(ps.stdout.trim()) ? pid : null;
+}
+
+function runByApp(): never {
+	throw new Error('the nolune app runs the gateway while it is open.');
+}
+
+const appGateway: ServiceManager = {
+	file: appPidFile,
+	render: runByApp,
+	install: runByApp,
+	uninstall: runByApp,
+	restart() {
+		const pid = appKeeperPid();
+		if (pid === null) throw new Error("nolune isn't running. Open the nolune app.");
+		process.kill(pid, 'SIGHUP');
+	},
+	status() {
+		const pid = appKeeperPid();
+		return { installed: true, loaded: pid !== null, pid };
+	}
+};
+
 function manager(): ServiceManager {
-	if (process.platform === 'darwin') return launchAgent;
+	if (process.platform === 'darwin') return appManaged() ? appGateway : launchAgent;
 	if (process.platform === 'linux') return systemdUnit;
 	throw new Error(
 		'`nolune service` runs nolune in the background on macOS (a LaunchAgent) and Linux (a systemd user service). Here, run `nolune start` under your own process manager.'

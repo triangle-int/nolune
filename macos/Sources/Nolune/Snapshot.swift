@@ -61,8 +61,7 @@ enum Snapshot {
 				$0.sky.bloom = 1
 			}),
 			("12-starting", { $0.pose(.service) }),
-			("13-login-items", { $0.pose(.service, service: .needsApproval) }),
-			("14-ready", { $0.pose(.service, service: .ready) })
+			("13-ready", { $0.pose(.service, service: .ready) })
 		]
 		for (name, pose) in screens {
 			let onboarding = Onboarding()

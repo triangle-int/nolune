@@ -1,7 +1,8 @@
 name: macOS app
 
 # Builds nolune.app (macos/) on a Mac, ad-hoc signed, and checks the bundle works: its Node runs
-# the CLI, and the launcher's gateway mode, as launchd runs it, starts a gateway that answers.
+# the CLI, and the launcher's gateway mode, as the app runs it, keeps a gateway that answers,
+# restarts it for `nolune service restart` and stops it in time.
 # The DMG is kept as an artifact for trying the onboarding.
 
 on:
@@ -9,11 +10,13 @@ on:
     paths:
       - 'macos/**'
       - 'packages/cli/src/service.ts'
+      - 'packages/cli/src/run.ts'
       - '.github/workflows/macos.yml'
   pull_request:
     paths:
       - 'macos/**'
       - 'packages/cli/src/service.ts'
+      - 'packages/cli/src/run.ts'
       - '.github/workflows/macos.yml'
 
 concurrency:
@@ -45,23 +48,41 @@ jobs:
       - name: Check the app
         run: |
           app=macos/dist/arm64/nolune.app
+          nolune() { "$app/Contents/MacOS/node" "$app/Contents/Resources/app/node_modules/nolune/dist/cli.js" "$@"; }
           export NOLUNE_HOME="$RUNNER_TEMP/nolune-home"
+          log="$NOLUNE_HOME/logs/gateway.log"
+          up() {
+            for _ in $(seq 1 60); do
+              curl -s -o /dev/null http://localhost:5780/ && break
+              sleep 1
+            done
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5780/)
+            echo "HTTP $code"
+            [[ "$code" =~ ^(200|30[0-9])$ ]]
+          }
+          started() { grep -c 'nolune gateway:' "$log" || true; }
+          trap 'cat "$log" 2>/dev/null' EXIT
           echo '::group::The bundled Node runs the CLI'
-          "$app/Contents/MacOS/node" "$app/Contents/Resources/app/node_modules/nolune/dist/cli.js" setup \
-            --name CI --email ci@example.com --password 'Launcher-Check-42' --origin http://localhost:5780
+          nolune setup --name CI --email ci@example.com --password 'Launcher-Check-42' --origin http://localhost:5780
           echo '::endgroup::'
-          echo '::group::The launcher starts the gateway'
+          echo '::group::The launcher keeps the gateway, as the app runs it'
           "$app/Contents/MacOS/Nolune" --gateway &
-          for _ in $(seq 1 60); do
-            curl -s -o /dev/null http://localhost:5780/ && break
-            sleep 1
-          done
-          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5780/)
-          echo "HTTP $code"
-          cat "$NOLUNE_HOME/logs/gateway.log"
-          kill %1
-          wait || true
-          [[ "$code" =~ ^(200|30[0-9])$ ]]
+          keeper=$!
+          up
+          [ "$(cat "$NOLUNE_HOME/gateway.pid")" = "$keeper" ]
+          nolune service status
+          # As the agent restarts it: the gateway stops and starts again.
+          nolune service restart
+          for _ in $(seq 1 30); do [ "$(started)" -ge 2 ] && break; sleep 1; done
+          [ "$(started)" -eq 2 ]
+          up
+          # As the app quits: the gateway stops, well before it would be killed (ten seconds).
+          kill -TERM "$keeper"
+          for _ in $(seq 1 8); do [ -e "$NOLUNE_HOME/gateway.pid" ] || break; sleep 1; done
+          [ ! -e "$NOLUNE_HOME/gateway.pid" ]
+          wait "$keeper" || true
+          if curl -s -o /dev/null http://localhost:5780/; then echo 'still answering'; exit 1; fi
+          nolune service status
           echo '::endgroup::'
           echo '::group::The Full Disk Access check runs'
           if "$app/Contents/MacOS/Nolune" --probe-disk-access; then echo granted; else echo 'not granted'; fi

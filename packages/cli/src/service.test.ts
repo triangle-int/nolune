@@ -1,6 +1,10 @@
 import { cliCommand, paths } from '@nolune/core';
 import { describe, expect, it, vi } from 'vitest';
-import { appManaged, logFile, renderUnit } from './service.ts';
+import { spawn } from 'node:child_process';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { appKeeperPid, appManaged, logFile, renderUnit } from './service.ts';
 
 vi.mock('@nolune/core', async (importOriginal) => {
 	const core = await importOriginal<typeof import('@nolune/core')>();
@@ -37,7 +41,7 @@ describe('the systemd unit', () => {
 });
 
 describe('appManaged', () => {
-	it("is the Node inside nolune.app, which runs the gateway from the app's own LaunchAgent", () => {
+	it('is the Node inside nolune.app, which runs the gateway while it is open', () => {
 		expect(appManaged('/Applications/nolune.app/Contents/MacOS/node')).toBe(true);
 		expect(appManaged('/Users/tim/Applications/nolune.app/Contents/MacOS/node')).toBe(true);
 	});
@@ -46,5 +50,29 @@ describe('appManaged', () => {
 		expect(appManaged('/opt/homebrew/bin/node')).toBe(false);
 		expect(appManaged('/Users/tim/.nvm/versions/node/v24.11.1/bin/node')).toBe(false);
 		expect(appManaged('/Applications/nolune.app/Contents/Resources/node')).toBe(false);
+	});
+});
+
+describe('appKeeperPid', () => {
+	it("is the pid in the app's file while that process is the app's keeper", () => {
+		const dir = mkdtempSync(join(tmpdir(), 'nolune-keeper-'));
+		// Any program named like the app's executable will do.
+		const keeper = join(dir, 'Nolune');
+		copyFileSync('/bin/sleep', keeper);
+		const child = spawn(keeper, ['30'], { stdio: 'ignore' });
+		try {
+			const file = join(dir, 'gateway.pid');
+			writeFileSync(file, `${child.pid}\n`);
+			expect(appKeeperPid(file)).toBe(child.pid);
+			// Its file left behind, the pid another program's.
+			writeFileSync(file, `${process.pid}\n`);
+			expect(appKeeperPid(file)).toBeNull();
+			writeFileSync(file, 'not a pid\n');
+			expect(appKeeperPid(file)).toBeNull();
+			expect(appKeeperPid(join(dir, 'missing.pid'))).toBeNull();
+		} finally {
+			child.kill();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

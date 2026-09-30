@@ -1,56 +1,63 @@
-import Foundation
+import AppKit
 import ServiceManagement
 
 /**
- * The gateway in the background: a LaunchAgent inside the app
- * (Contents/Library/LaunchAgents/dev.nolune.gateway.plist) that runs `nolune --gateway` at login
- * and keeps it running. Registered with SMAppService, so it shows as nolune in Login Items.
- *
- * It keeps the label `nolune service install` uses, so `nolune service restart|status|logs` and
- * the agent restarting itself work the same with the app.
+ * The gateway runs with the app: the app starts `Nolune --gateway` (Gateway.swift), its own
+ * executable, as its child when it opens, and stops it when it quits. The app opens at login, so
+ * nolune is up whenever it's in the menu bar, and only then. As the app's child the gateway counts
+ * as the app for Full Disk Access.
  */
+@MainActor
 enum Service {
 	static let label = "dev.nolune.gateway"
-	static var agent: SMAppService { .agent(plistName: "\(label).plist") }
+	private static var keeper: Process?
 
-	enum State {
-		case running
-		/// Turned off under Login Items: people have to allow it there.
-		case needsApproval
-		case failed(String)
-	}
-
-	/// Starts the gateway now and at every login, and the menu bar extra with it.
-	static func start() -> State {
-		removeCommandLineAgent()
+	/// Starts the gateway, or, running already, has it start again now.
+	static func start() {
+		// Run from a checkout (`swift run`) the gateway is yours: `nolune start` or `pnpm dev`.
+		guard Runtime.shared.isBundled, let executable = Bundle.main.executableURL else { return }
+		if let keeper, keeper.isRunning { return restart() }
+		clearLaunchAgents()
+		let process = Process()
+		process.executableURL = executable
+		process.arguments = ["--gateway"]
+		process.standardInput = FileHandle.nullDevice
 		do {
-			if agent.status != .enabled { try agent.register() }
+			try process.run()
+			keeper = process
 		} catch {
-			if agent.status == .requiresApproval { return .needsApproval }
-			return .failed(error.localizedDescription)
+			NSLog("nolune: couldn't start the gateway: \(error.localizedDescription)")
 		}
-		// The menu bar extra comes back at login too. Not needed for the gateway, so no fuss.
-		if SMAppService.mainApp.status != .enabled { try? SMAppService.mainApp.register() }
-		return agent.status == .requiresApproval ? .needsApproval : .running
-	}
-
-	static func openLoginItems() {
-		SMAppService.openSystemSettingsLoginItems()
 	}
 
 	static func restart() {
-		launchctl(["kickstart", "-k", "gui/\(getuid())/\(label)"])
+		guard let keeper, keeper.isRunning else { return start() }
+		kill(keeper.processIdentifier, SIGHUP)
+	}
+
+	/// When the app quits. Waits a few seconds for the gateway to stop, so the app opened again
+	/// finds its port free.
+	static func stop() {
+		guard let keeper, keeper.isRunning else { return }
+		keeper.terminate()
+		let deadline = Date().addingTimeInterval(5)
+		while keeper.isRunning, Date() < deadline { usleep(50_000) }
+	}
+
+	/// The app opens at login, and the gateway with it. People can turn it off under Login Items.
+	static func openAtLogin() {
+		if SMAppService.mainApp.status != .enabled { try? SMAppService.mainApp.register() }
 	}
 
 	/**
-	 * `nolune service install` from an npm install left its own LaunchAgent with the same label.
-	 * The app's takes over: two would fight over the port.
+	 * A LaunchAgent with the gateway's label, from `nolune service install` or an earlier build of
+	 * the app, would run a second gateway that fights this one for the port: the app's takes over.
 	 */
-	private static func removeCommandLineAgent() {
+	private static func clearLaunchAgents() {
+		let target = "gui/\(getuid())/\(label)"
+		if launchctl(["print", target]) == 0 { launchctl(["bootout", target]) }
 		let plist = FileManager.default.homeDirectoryForCurrentUser
 			.appendingPathComponent("Library/LaunchAgents/\(label).plist")
-		guard FileManager.default.fileExists(atPath: plist.path) else { return }
-		launchctl(["bootout", "gui/\(getuid())/\(label)"])
 		try? FileManager.default.removeItem(at: plist)
 	}
 
@@ -71,7 +78,7 @@ enum Service {
 	}
 
 	/// Whether the gateway answers on this computer: any HTTP response will do.
-	static func isUp() async -> Bool {
+	nonisolated static func isUp() async -> Bool {
 		var request = URLRequest(url: Runtime.shared.localURL)
 		request.timeoutInterval = 2
 		request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -80,7 +87,7 @@ enum Service {
 	}
 
 	/// Waits for the gateway to answer, up to `timeout` seconds.
-	static func waitUntilUp(timeout: TimeInterval = 45) async -> Bool {
+	nonisolated static func waitUntilUp(timeout: TimeInterval = 45) async -> Bool {
 		let deadline = Date().addingTimeInterval(timeout)
 		while Date() < deadline {
 			if await isUp() { return true }

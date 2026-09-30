@@ -96,11 +96,10 @@ LAUNCHER="$(swift build -c release --package-path "$MACOS" --arch "$ARCH" --show
 
 step "Assembling $APP"
 CONTENTS="$APP/Contents"
-mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources" "$CONTENTS/Library/LaunchAgents"
+mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" "$MACOS/Resources/Info.plist" >"$CONTENTS/Info.plist"
 cp "$LAUNCHER" "$CONTENTS/MacOS/Nolune"
 cp "$NODE_BIN/node" "$CONTENTS/MacOS/node"
-cp "$MACOS/Resources/dev.nolune.gateway.plist" "$CONTENTS/Library/LaunchAgents/"
 cp "$MACOS/Resources/Fonts/Figtree.ttf" "$CONTENTS/Resources/"
 cp "$MACOS/Resources/Fonts/OFL.txt" "$CONTENTS/Resources/Figtree-OFL.txt"
 cp "$WORK/$NODE_DIR/LICENSE" "$CONTENTS/Resources/Node-LICENSE.txt"

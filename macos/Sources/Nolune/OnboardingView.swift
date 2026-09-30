@@ -205,7 +205,7 @@ private struct FilesScreen: View {
 	}
 }
 
-/// The gateway starting in the background, then "You're all set."
+/// The gateway starting, then "You're all set."
 private struct ServiceScreen: View {
 	@ObservedObject var onboarding: Onboarding
 
@@ -215,18 +215,10 @@ private struct ServiceScreen: View {
 			case .starting:
 				StepTitle(
 					title: "Starting nolune…",
-					subtitle: "From now on it runs in the background, even with this window closed."
+					subtitle: "It runs while nolune is in your menu bar, with this window closed too."
 				)
 				ProgressView()
 					.controlSize(.small)
-					.padding(.top, 26)
-			case .needsApproval:
-				StepTitle(
-					title: "One more switch.",
-					subtitle: "Allow nolune under Login Items, so it can run in the background."
-				)
-				Button("Open Login Items") { Service.openLoginItems() }
-					.buttonStyle(PillButtonStyle())
 					.padding(.top, 26)
 			case let .failed(message):
 				StepTitle(title: "nolune didn't start.", subtitle: message)
@@ -238,7 +230,7 @@ private struct ServiceScreen: View {
 				}
 				.padding(.top, 26)
 			case .ready:
-				StepTitle(title: "You're all set.", subtitle: "nolune starts with your Mac. It lives up here ↗")
+				StepTitle(title: "You're all set.", subtitle: "nolune opens with your Mac. It lives up here ↗")
 				Button {
 					onboarding.openNolune()
 				} label: {

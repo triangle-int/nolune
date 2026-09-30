@@ -442,7 +442,7 @@ async function start(io: Io): Promise<void> {
 async function service(io: Io, action: string | undefined, args: string[]): Promise<void> {
 	switch (action) {
 		case 'install': {
-			if (appManaged()) fail('the nolune app runs the gateway in the background already.');
+			if (appManaged()) fail('the nolune app runs the gateway while it is open.');
 			requireInit();
 			if (!existsSync(paths.server))
 				fail('no server build. In a source checkout, run `pnpm build` first.');
@@ -467,7 +467,7 @@ It runs with ${process.execPath}; run \`nolune service install\` again after swi
 		case 'uninstall':
 			if (appManaged()) {
 				fail(
-					'the nolune app runs the gateway. Turn nolune off under System Settings > General > Login Items, or delete the app.'
+					'the nolune app runs the gateway while it is open. Quit it from the menu bar, and turn it off under System Settings > General > Login Items so it stays closed.'
 				);
 			}
 			uninstallService();
@@ -479,7 +479,7 @@ It runs with ${process.execPath}; run \`nolune service install\` again after swi
 			return;
 		case 'status': {
 			const status = serviceStatus();
-			if (!status.installed && appManaged()) io.log('Not running. Open the nolune app.');
+			if (appManaged() && !status.loaded) io.log('Not running. Open the nolune app.');
 			else if (!status.installed) io.log('Not installed. Run `nolune service install`.');
 			else if (!status.loaded) io.log('Installed but not loaded. Run `nolune service install`.');
 			else

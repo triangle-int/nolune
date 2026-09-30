@@ -18,7 +18,7 @@ enum Relocation {
 		NSApp.activate(ignoringOtherApps: true)
 		let alert = NSAlert()
 		alert.messageText = "Move nolune to Applications?"
-		alert.informativeText = "It runs in the background from now on, so it lives in your Applications folder."
+		alert.informativeText = "It stays in your menu bar from now on, so it lives in your Applications folder."
 		alert.addButton(withTitle: "Move to Applications")
 		alert.addButton(withTitle: "Quit")
 		guard alert.runModal() == .alertFirstButtonReturn else {

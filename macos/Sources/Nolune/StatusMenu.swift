@@ -102,7 +102,7 @@ struct StatusMenu: View {
 			}
 			if status.running == false {
 				MenuRow(title: "Start", icon: "play") {
-					_ = Service.start()
+					Service.start()
 					Task { await status.refresh(people: false) }
 				}
 			} else {
@@ -118,7 +118,7 @@ struct StatusMenu: View {
 			Divider().padding(.vertical, 6)
 
 			MenuRow(title: "Quit", icon: "power") { NSApp.terminate(nil) }
-			Text("nolune keeps running in the background.")
+			Text("Quitting stops nolune until you open it again.")
 				.font(Theme.font(11))
 				.foregroundStyle(.secondary)
 				.padding(.horizontal, 14)

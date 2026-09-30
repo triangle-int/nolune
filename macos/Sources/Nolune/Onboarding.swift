@@ -3,8 +3,7 @@ import SwiftUI
 
 /**
  * The first run: the intro in space, then one question per screen, like the web welcome
- * (packages/web/src/routes/p/[slug]/welcome). Who's setting it up, Full Disk Access, and the gateway started
- * in the background.
+ * (packages/web/src/routes/p/[slug]/welcome). Who's setting it up, Full Disk Access, and the gateway started.
  */
 @MainActor
 final class Onboarding: ObservableObject {
@@ -20,7 +19,6 @@ final class Onboarding: ObservableObject {
 
 	enum ServiceState: Equatable {
 		case starting
-		case needsApproval
 		case failed(String)
 		case ready
 	}
@@ -225,25 +223,13 @@ final class Onboarding: ObservableObject {
 	func startService() async {
 		guard !Snapshot.active else { return }
 		service = .starting
-		// Run from a checkout (`swift run`) there's no app to register: `nolune start` instead.
+		Service.start()
+		// Run from a checkout (`swift run`) there's no gateway of the app's to wait for.
 		guard Runtime.shared.isBundled else {
 			finish()
 			return
 		}
-		switch Service.start() {
-		case .running:
-			break
-		case .needsApproval:
-			service = .needsApproval
-			while phase == .service, Service.agent.status == .requiresApproval {
-				try? await Task.sleep(nanoseconds: 1_000_000_000)
-			}
-			guard phase == .service else { return }
-			service = .starting
-		case let .failed(message):
-			service = .failed(message)
-			return
-		}
+		Service.openAtLogin()
 		if await Service.waitUntilUp() {
 			finish()
 		} else {

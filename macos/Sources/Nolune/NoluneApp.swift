@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// One executable, three jobs: the app people open, the gateway's supervisor that launchd runs in
-/// the background (`--gateway`), and a one-shot Full Disk Access check (`--probe-disk-access`).
+/// One executable, three jobs: the app people open, the gateway's keeper that the app runs as its
+/// child (`--gateway`), and a one-shot Full Disk Access check (`--probe-disk-access`).
 /// And `--snapshot <folder>`, which draws the screens to PNGs (Snapshot.swift).
 @main
 enum Main {
@@ -50,7 +50,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			Relocation.offer()
 			return
 		}
-		if !UserDefaults.standard.bool(forKey: Onboarding.doneKey) { showOnboarding() }
+		// The gateway runs while the app does: from the onboarding's last step the first time.
+		if UserDefaults.standard.bool(forKey: Onboarding.doneKey) { Service.start() } else { showOnboarding() }
+	}
+
+	func applicationWillTerminate(_ notification: Notification) {
+		Service.stop()
 	}
 
 	/// Opened again (from Finder, Launchpad or Spotlight) once it's set up: to nolune in the browser.
