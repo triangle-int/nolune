@@ -921,6 +921,120 @@ in fixed categories (`plans.md`, `people/anna.md`). There is no memory tool: lik
   is refused if the agent changed the note after it was opened; saving again then replaces the
   agent's version.
 
+## Cards
+
+_Planned, not built yet: this is the design to build it from, in the three steps at the end._
+
+Memory belongs to a profile, and a person is usually in several: their own, the family's, one
+with a partner, one with a brother, one with friends. Each profile has its own note about them
+(`profile_member.person_note`), so they tell each one the same things (the languages they speak,
+what they don't eat, how they like answers) and the notes drift apart. One memory for everything
+would carry what's said in one profile into the others, and profiles are how people keep their
+circles apart: a birthday surprise is planned in a profile without the person it's for. So one
+rule: **nothing moves from one profile to another by itself.** Only what someone says about
+themselves, and would tell any of their circles, goes with them, on their card.
+
+- **The card** is one note per user, `~/.nolune/cards/<name>.md`, with its own `.facts.json` and
+  `.embeddings.json` next to it, like a profile's `memories/`. Its name (`user.card`) is picked
+  when it's first needed and fixed after that, like a profile's slug: the first name
+  (`cards/anna`), else the whole name (`cards/anna-smith`), else with a number. It is titled with
+  the person's name, may have headings, and holds at most 2,000 characters, since it goes whole
+  into every prompt (below): `nolune memory` and the page refuse more, as for core.
+- **Who reads it:** everyone in every profile its owner is a member of. In each of those profiles
+  it is a note like the others, `cards/anna`, for the agent, the note-taker, search and the Memory
+  page; `cards/` in a profile's own folder is reserved, and a note from before under it is renamed
+  on first use. Someone who leaves a profile takes their card out of its new chats (open ones keep
+  the copy their prompt has). Which profiles a card is in is shown only to its owner, since a
+  profile's name can say more than its owner wants said ("Ben's surprise party"). As with the rest
+  of memory, that's about the web app and the prompts: commands can still read the file.
+- **What goes on it:** what its owner says about themselves that they'd tell anyone in any of their
+  profiles: the languages they speak, their birthday, the city they live in, their job or
+  school, diet and allergies, standing tastes, and how they want nolune to talk to them (short
+  answers, metric units). And whatever they ask nolune to remember everywhere.
+- **What stays in the profile:** everything else about them, in their note there (`people/anna`),
+  as today: what others say about them, who they are to the people in it (`- Who:`) and what
+  they're called there (`- Also called:`), relationships, plans, feelings, health beyond
+  allergies, anything that sounds meant for this circle, and anything they ask to keep here. When
+  in doubt, the profile: a fact put there by mistake costs a repeat, one put on the card by
+  mistake reaches everyone in all their profiles.
+- **Only its owner's words write it.**
+  - In the web UI, only its owner edits it; the others see it read-only.
+  - The agent's `nolune memory add|replace|forget|write cards/anna` is refused unless Anna wrote
+    one of the messages it is answering: those since its last final reply in the chat
+    (`NOLUNE_CONVERSATION_ID`). So automation runs and subagents, whose chats have nobody's
+    messages, never write a card, and neither does a web page or an email the agent read. `rm`,
+    `mv` and `merge` are refused on cards: they would move facts between circles in bulk.
+  - The note-taker (`memory-learning.ts`) changes Anna's card only from a stretch in which Anna
+    wrote something; card changes from a stretch where only others did are dropped, and logged.
+  - When Anna and Ben both wrote in the same stretch, the checks can't tell whose words a fact
+    came from. The rule in the prompts does that, and Anna sees every change to her card (below).
+- **In the prompt:** the list of members says where each one's things go
+  (`- Anna Smith: card cards/anna, note people/anna`), and each member's card is copied whole
+  after core, as it was when the conversation started, in `<card name="cards/anna">…</card>`. A
+  card that changes reaches new chats, like core, and never rebuilds an open chat's prompt. The
+  prompt says what goes on a card and what stays, that only its owner's own messages put things
+  there, and never to move a fact from a note onto a card unless its owner asks. A prompt still
+  depends only on the profile (its members' cards now part of it), so chats outside folders keep
+  sharing one.
+- **Recall and search** go through the profile's notes and its members' cards together
+  (`memoryFacts`, `meaningHits`). A card fact that changed since the chat started comes along
+  with a message like any other; one the prompt has already doesn't. The sender's words
+  (`memberWords`) include their card's title.
+- **The note-taker** gets the members' cards in `<memory>` right after core, each with the room
+  left on it, and the same rules as the agent. A full card refuses the add, like a full core, and
+  the prompt tells it to put the fact in the person's note instead.
+- **Seeing what changed.** Every change to a card that its owner didn't make on the page, the
+  agent's and the note-taker's, is a `memory_change` row with the profile and chat it came from
+  (`memory_change.source`: `learning` or `agent`; a chat's "Saved 3 memories" row shows only
+  `learning` ones, since the agent's show as its commands). Its owner sees them all on `/card`,
+  each with Undo and **Keep only in Family** (the profile's name), which moves the fact off the
+  card into their note in the profile it came from. Others see a card change in a chat without
+  either button. A profile's "Saved from chats" lists only changes from its own chats, so a card
+  never says where it learned something to someone who isn't in that profile.
+- **On the Memory page** the members' cards come right after core, pinned like it: a row each,
+  with the member's avatar and a mark saying it goes with them everywhere. The owner's opens in
+  an editor that counts characters against the limit and says who can read it (the names of
+  their profiles).
+- **`/card`**, linked from the owner's row on every Memory page and from `/profiles`, is the
+  card's own page: the editor, the profiles it's in, its changes from all of them, and **Bring in
+  from my notes**.
+- **Starting a card** from the notes people already have: once, and never without them. A member
+  whose notes in their profiles have facts sees "Make your card" on the Memory page. Bring in
+  from my notes lists the facts in their note in each profile they're in, and the lines of each
+  profile's core that start with their name (`Anna: keep answers short`, from an import),
+  grouped by profile, each with a box. Checked at first: what two or more of those notes say
+  (matched as `.facts.json` matches facts: by words, ignoring case and spacing) and those core
+  lines; the rest unchecked. `- Who:` and `- Also called:` lines aren't offered. Adding moves the
+  checked facts onto the card, with the earliest date any copy had, and forgets them in the
+  notes they came from, which read the card now. What doesn't fit in 2,000 characters stays.
+- **The welcome's import** (`importMemoryExport`) is about the person importing, so their
+  instructions, then identity, then preferences go on their card while it has room (without their
+  name in front: it's their card), and the rest goes where it goes today. The memory step says
+  which went where.
+- **`nolune memory`** takes `cards/<name>` for the members' cards: `list` shows them apart
+  ("Cards, which go with each member into all their profiles"), `show` and `search` read them,
+  and the writes above come with their checks. From a terminal, `nolune card [<user>]` prints a
+  card; editing one is for its owner, in the web UI.
+- **Deleting a user** moves their card to `~/.nolune/trash/`, like a deleted profile.
+
+Not in this: notes shared between profiles, for people who aren't users (a grandmother, in the
+family's profile and in Anna and her mother's), which someone would share on purpose and only
+between profiles they're in; and a switch for an owner to stop the agent and the note-taker from
+writing their card.
+
+**Building it**, in three pull requests:
+
+1. **Memory on a folder instead of a slug.** `memory.ts`, `memory-facts.ts`,
+   `memory-embeddings.ts`, `memory-search.ts` and `memory-changes.ts` take the folder
+   (`openMemory(root)`), so the same code keeps cards. Nothing changes for anyone; the tests
+   pass as they are.
+2. **Cards in the core and the CLI.** `user.card` and `memory_change.source` (a migration), and
+   `memory-cards.ts`: a card's name, which cards a profile has, where a `cards/` topic goes, and
+   the checks on writing. Then the prompt, recall and search, the note-taker, the welcome's
+   import, `nolune memory` and `nolune card`.
+3. **Cards in the web UI.** The rows on the Memory page, `/card` with Bring in from my notes, and
+   card changes in chats with Undo and Keep only in the profile.
+
 ## Soul
 
 Each profile can give nolune a soul, like [SOUL.md](https://soul.md): who it is for this family (its
@@ -1667,6 +1781,7 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
 
 ## Not done yet
 
+- **Cards**, memory that goes with a person into all their profiles: designed in [Cards](#cards).
 - **Compaction.** The context window is already stored on each conversation and shown in the UI.
   The next step is server-side compaction (beta `compact-2026-01-12`), triggered at about 85% of the
   window.
