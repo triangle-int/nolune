@@ -28,7 +28,11 @@ struct IntroView: View {
 
 	var body: some View {
 		ZStack {
-			if let start = onboarding.introStart {
+			if let clock = Snapshot.clock {
+				Canvas { context, _ in
+					IntroWordmark.draw(&context, layout: layout, t: clock)
+				}
+			} else if let start = onboarding.introStart {
 				TimelineView(.animation) { timeline in
 					Canvas { context, _ in
 						IntroWordmark.draw(&context, layout: layout, t: timeline.date.timeIntervalSince(start))
@@ -41,7 +45,7 @@ struct IntroView: View {
 					.font(Theme.font(12))
 					.foregroundStyle(Theme.muted.opacity(0.55))
 					.padding(.bottom, 22)
-					.opacity(hintShown ? 1 : 0)
+					.opacity(hintShown || Snapshot.active ? 1 : 0)
 			}
 		}
 		.contentShape(Rectangle())

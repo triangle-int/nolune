@@ -373,9 +373,10 @@ private struct FlyIn: ViewModifier {
 	@State private var shown = false
 
 	func body(content: Content) -> some View {
+		let visible = shown || Snapshot.active
 		content
-			.opacity(shown ? 1 : 0)
-			.offset(y: shown ? 0 : 14)
+			.opacity(visible ? 1 : 0)
+			.offset(y: visible ? 0 : 14)
 			.onAppear {
 				withAnimation(.easeOut(duration: 0.6).delay(delay)) { shown = true }
 			}

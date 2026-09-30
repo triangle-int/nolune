@@ -73,7 +73,7 @@ echo '{ "private": true }' >"$WORK/app/package.json"
 (
 	cd "$WORK/app"
 	PATH="$NODE_BIN:$PATH" "$NODE_BIN/node" "$NODE_BIN/../lib/node_modules/npm/bin/npm-cli.js" install \
-		--omit=dev --no-audit --no-fund --no-package-lock --os=darwin --cpu="$NODE_ARCH" "$TARBALL"
+		--omit=dev --ignore-scripts --no-audit --no-fund --no-package-lock --os=darwin --cpu="$NODE_ARCH" "$TARBALL"
 )
 # better-sqlite3 ships every platform's addon and SQLite's source: keep this Mac's addon.
 SQLITE="$WORK/app/node_modules/better-sqlite3"

@@ -58,5 +58,6 @@ onboarding over.
   animation, redrawn with SwiftUI's `Canvas` on the web's timings and song. The wordmark's path is
   copied from `src/lib/assets/logo.svg`; keep them in step.
 
-The CI workflow `macos.yml` builds the app on every change here and checks the bundle starts a
-gateway that answers.
+The CI workflow `macos.yml` builds the app on every change here, checks the bundle starts a
+gateway that answers, and keeps every screen as a PNG (`Nolune --snapshot <folder>`, which draws
+the intro at fixed moments, each step and the menu without doing anything).

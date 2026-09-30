@@ -10,11 +10,18 @@ final class GatewayStatus: ObservableObject {
 
 	/// Checks now and every few seconds while the menu is open.
 	func watch() {
+		guard !Snapshot.active else { return }
 		Task { await refresh(people: true) }
 		timer?.invalidate()
 		timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
 			Task { @MainActor in await self?.refresh(people: false) }
 		}
+	}
+
+	/// For `--snapshot`.
+	func pose(running: Bool, people: [Runtime.Person]) {
+		self.running = running
+		self.people = people
 	}
 
 	func stopWatching() {

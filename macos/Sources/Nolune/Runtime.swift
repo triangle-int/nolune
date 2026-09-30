@@ -7,7 +7,7 @@ import Foundation
  * Run outside an app bundle (`swift run` in a checkout), it uses the checkout's CLI from source
  * and the first `node` it finds, so the onboarding can be worked on without building the app.
  */
-final class Runtime {
+final class Runtime: @unchecked Sendable {
 	static let shared = Runtime()
 
 	let home: URL

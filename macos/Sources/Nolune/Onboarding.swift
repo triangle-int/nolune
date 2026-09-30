@@ -72,6 +72,7 @@ final class Onboarding: ObservableObject {
 	 * as the song lifts. About 24 seconds, as on the web; a click or Esc skips it.
 	 */
 	func startIntro(layout: IntroLayout) async {
+		guard !Snapshot.active else { return }
 		guard phase == .intro, introStart == nil else {
 			if skipped, !music.isPlaying { music.play(level: Music.under) }
 			return
@@ -131,7 +132,7 @@ final class Onboarding: ObservableObject {
 
 	/// Set up already, from an npm install or a run that stopped halfway: skip to the next step.
 	func checkAccount() async {
-		guard let people = await Runtime.shared.people(), people.contains(where: \.isAdmin) else { return }
+		guard !Snapshot.active, let people = await Runtime.shared.people(), people.contains(where: \.isAdmin) else { return }
 		if phase == .account { go(.files) }
 	}
 
@@ -172,6 +173,7 @@ final class Onboarding: ObservableObject {
 
 	/// Waits for the switch: checks every second until it's on, or the step is left.
 	func watchAccess() async {
+		guard !Snapshot.active else { return }
 		DiskAccess.appearInList()
 		while phase == .files, !granted {
 			if await DiskAccess.isGranted() {
@@ -201,6 +203,7 @@ final class Onboarding: ObservableObject {
 	// MARK: Service
 
 	func startService() async {
+		guard !Snapshot.active else { return }
 		service = .starting
 		// Run from a checkout (`swift run`) there's no app to register: `nolune start` instead.
 		guard Runtime.shared.isBundled else {
@@ -234,6 +237,18 @@ final class Onboarding: ObservableObject {
 		UserDefaults.standard.set(true, forKey: Onboarding.doneKey)
 		UserDefaults.standard.removeObject(forKey: Onboarding.phaseKey)
 		music.stop(over: 6)
+	}
+
+	/// For `--snapshot`: a screen as it would be, without getting there.
+	func pose(_ phase: Phase, granted: Bool = false, service: ServiceState = .starting) {
+		self.phase = phase
+		self.granted = granted
+		self.service = service
+		if phase != .intro {
+			sky.still = true
+			sky.space = false
+			sky.stage = .aurora
+		}
 	}
 
 	func openNolune() {

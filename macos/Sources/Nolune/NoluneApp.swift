@@ -3,12 +3,16 @@ import SwiftUI
 
 /// One executable, three jobs: the app people open, the gateway's supervisor that launchd runs in
 /// the background (`--gateway`), and a one-shot Full Disk Access check (`--probe-disk-access`).
+/// And `--snapshot <folder>`, which draws the screens to PNGs (Snapshot.swift).
 @main
 enum Main {
 	static func main() {
 		let arguments = CommandLine.arguments
 		if arguments.contains("--gateway") { Gateway.run() }
 		if arguments.contains("--probe-disk-access") { exit(DiskAccess.canReadProtectedFiles() ? 0 : 1) }
+		if let flag = arguments.firstIndex(of: "--snapshot"), flag + 1 < arguments.count {
+			Snapshot.run(into: URL(fileURLWithPath: arguments[flag + 1], isDirectory: true))
+		}
 		NoluneApp.main()
 	}
 }

@@ -442,9 +442,18 @@ struct SkyView: View {
 	let sky: Sky
 
 	var body: some View {
-		TimelineView(.animation) { timeline in
-			Canvas { context, size in
-				sky.draw(&context, size: size, now: timeline.date.timeIntervalSinceReferenceDate)
+		Group {
+			if let clock = Snapshot.clock {
+				let intro = Snapshot.intro
+				Canvas { context, size in
+					Snapshot.drawSky(sky, &context, size: size, clock: clock, intro: intro)
+				}
+			} else {
+				TimelineView(.animation) { timeline in
+					Canvas { context, size in
+						sky.draw(&context, size: size, now: timeline.date.timeIntervalSinceReferenceDate)
+					}
+				}
 			}
 		}
 		.allowsHitTesting(false)

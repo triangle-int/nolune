@@ -66,8 +66,16 @@ jobs:
           echo '::group::The Full Disk Access check runs'
           if "$app/Contents/MacOS/Nolune" --probe-disk-access; then echo granted; else echo 'not granted'; fi
           echo '::endgroup::'
+      - name: Draw the screens
+        # Every screen of the onboarding and the menu, as PNGs (Snapshot.swift).
+        run: perl -e 'alarm 180; exec @ARGV' macos/dist/arm64/nolune.app/Contents/MacOS/Nolune --snapshot "$RUNNER_TEMP/snapshots"
       - uses: actions/upload-artifact@v4
         with:
           name: nolune-macos-arm64
           path: macos/dist/*.dmg
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-screens
+          path: ${{ runner.temp }}/snapshots
           retention-days: 14
