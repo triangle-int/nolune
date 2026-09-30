@@ -14,8 +14,11 @@ import {
 	type PreparedMedia
 } from './media.ts';
 import { makeFamily, makePreset } from './test/fixtures.ts';
+import { clearUserPicture, setUserPicture } from './users.ts';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+/** The start of a 256-pixel square PNG: all inspectImage reads. */
+const PNG_256 = Buffer.concat([PNG, Buffer.from('000001000000010008060000001f15c4', 'hex')]);
 
 function prepared(
 	src: string,
@@ -125,5 +128,19 @@ describe('pruneMedia', () => {
 		pruneMedia();
 		expect(existsSync(blobPath(shown))).toBe(false);
 		expect(existsSync(blobPath(preview))).toBe(false);
+	});
+
+	it("keeps people's profile pictures until they change them", async () => {
+		const { user } = makeFamily();
+		const picture = setUserPicture(user.id, PNG_256);
+		const then = new Date(Date.now() - 2 * 60 * 60 * 1000);
+		utimesSync(blobPath(picture), then, then);
+
+		pruneMedia();
+		expect(existsSync(blobPath(picture))).toBe(true);
+
+		clearUserPicture(user.id);
+		pruneMedia();
+		expect(existsSync(blobPath(picture))).toBe(false);
 	});
 });

@@ -88,6 +88,8 @@ export type DisplayMessage =
 	| {
 			id: number;
 			kind: 'human';
+			/** Null once they're deleted. */
+			senderId: string | null;
 			senderName: string;
 			text: string;
 			attachments: DisplayAttachment[];
@@ -844,6 +846,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 		return {
 			id: row.id,
 			kind: 'human',
+			senderId: row.senderId,
 			senderName: row.senderName ?? 'Someone',
 			text: row.text ?? '',
 			attachments: displayAttachments(row, mediaRows),

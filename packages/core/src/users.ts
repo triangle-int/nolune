@@ -1,10 +1,58 @@
 import { randomInt, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { hashPassword } from 'better-auth/crypto';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
 import { account, user } from './db/schema.ts';
+import { inspectImage } from './images.ts';
+import { blobPath, storeBytes } from './media.ts';
+import { noticeProfileChanges } from './profiles.ts';
 
 export const MIN_PASSWORD_LENGTH = 14;
+export const MAX_NAME_LENGTH = 64;
+/** The Settings page sends a 256-pixel square, a small part of this. */
+export const MAX_PICTURE_BYTES = 512 * 1024;
+export const MAX_PICTURE_EDGE = 1024;
+
+/** Why a name can't be someone's: the web UI says it in its language, the CLI in `message`. */
+export class UserNameError extends Error {
+	readonly reason: 'required' | 'tooLong' | 'email' | 'taken';
+	constructor(message: string, reason: UserNameError['reason']) {
+		super(message);
+		this.reason = reason;
+	}
+}
+
+export class PictureError extends Error {
+	readonly reason: 'notPicture' | 'tooLarge';
+	constructor(message: string, reason: PictureError['reason']) {
+		super(message);
+		this.reason = reason;
+	}
+}
+
+/**
+ * The name, trimmed, if it can be someone's: names are unique ignoring case, since the CLI and
+ * People & profile find people by them, and have no `@`, which findUser takes for an email.
+ * `userId`: whose name it's going to be, who may keep their own.
+ */
+function checkName(name: string, userId?: string): string {
+	const trimmed = name.trim();
+	if (!trimmed) throw new UserNameError('Name is required', 'required');
+	if ([...trimmed].length > MAX_NAME_LENGTH) {
+		throw new UserNameError(`Name must be at most ${MAX_NAME_LENGTH} characters`, 'tooLong');
+	}
+	if (trimmed.includes('@')) throw new UserNameError("Name can't contain @", 'email');
+	const taken = getDb()
+		.select({ id: user.id })
+		.from(user)
+		.where(
+			and(sql`lower(${user.name}) = lower(${trimmed})`, userId ? ne(user.id, userId) : undefined)
+		)
+		.get();
+	if (taken) throw new UserNameError(`A user named "${trimmed}" already exists`, 'taken');
+	return trimmed;
+}
 
 /** Returns why a password is too weak, or null if it's fine. */
 export function passwordProblem(password: string): string | null {
@@ -53,10 +101,8 @@ export async function createUser(input: {
 	password: string;
 	isAdmin?: boolean;
 }): Promise<{ id: string }> {
-	const name = input.name.trim();
+	const name = checkName(input.name);
 	const email = input.email.trim().toLowerCase();
-	if (!name) throw new Error('Name is required');
-	if (findUserByName(name)) throw new Error(`A user named "${name}" already exists`);
 	if (findUserByEmail(email)) throw new Error(`A user with email ${email} already exists`);
 	const problem = passwordProblem(input.password);
 	if (problem) throw new Error(`Password ${problem}`);
@@ -96,6 +142,59 @@ export async function setPassword(nameOrEmail: string, password: string): Promis
 		.where(and(eq(account.userId, found.id), eq(account.providerId, 'credential')))
 		.run();
 	if (result.changes === 0) throw new Error('User has no password account');
+}
+
+/**
+ * What everyone sees them as from now on, and what nolune reads before what they write. Messages
+ * already sent keep the name they were sent with.
+ */
+export function renameUser(userId: string, name: string): string {
+	const trimmed = checkName(name, userId);
+	getDb().update(user).set({ name: trimmed }).where(eq(user.id, userId)).run();
+	// Members' names show on the profiles' pages.
+	noticeProfileChanges();
+	return trimmed;
+}
+
+/**
+ * Keeps a picture (PNG, JPEG, GIF or WebP) in the media store as their profile picture, in place
+ * of their initial. Returns its SHA-256; the old one goes with the next prune.
+ */
+export function setUserPicture(userId: string, data: Buffer): string {
+	const tooLarge = `The picture must be at most ${MAX_PICTURE_EDGE}×${MAX_PICTURE_EDGE} pixels and ${MAX_PICTURE_BYTES / 1024} KB`;
+	if (data.length > MAX_PICTURE_BYTES) throw new PictureError(tooLarge, 'tooLarge');
+	const info = inspectImage(data);
+	if (!info) throw new PictureError('Not a PNG, JPEG, GIF or WebP picture', 'notPicture');
+	if (info.width > MAX_PICTURE_EDGE || info.height > MAX_PICTURE_EDGE) {
+		throw new PictureError(tooLarge, 'tooLarge');
+	}
+	const { sha256 } = storeBytes(data);
+	getDb().update(user).set({ picture: sha256 }).where(eq(user.id, userId)).run();
+	noticeProfileChanges();
+	return sha256;
+}
+
+/** Back to their initial. */
+export function clearUserPicture(userId: string): void {
+	getDb().update(user).set({ picture: null }).where(eq(user.id, userId)).run();
+	noticeProfileChanges();
+}
+
+/**
+ * The stored picture with this SHA-256, while it's someone's profile picture. Anything else in the
+ * media store (chats' pictures and files) is only reachable through its chat.
+ */
+export function userPictureFile(sha256: string): { path: string; mime: string } | null {
+	if (!/^[0-9a-f]{64}$/.test(sha256)) return null;
+	const found = getDb().select({ id: user.id }).from(user).where(eq(user.picture, sha256)).get();
+	if (!found) return null;
+	const path = blobPath(sha256);
+	try {
+		const info = inspectImage(readFileSync(path));
+		return info && { path, mime: info.mediaType };
+	} catch {
+		return null;
+	}
 }
 
 export function setAdmin(nameOrEmail: string, isAdmin: boolean): void {
