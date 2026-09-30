@@ -27,11 +27,6 @@ export interface Config {
 	 */
 	claudePath?: string;
 	/**
-	 * The Codex executable that chats on the ChatGPT plan run (chatgpt-plan.ts). Found on the PATH
-	 * and in the usual install folders when not set.
-	 */
-	codexPath?: string;
-	/**
 	 * What `nolune generate image` uses, as `<provider>/<model>`. Defaults to
 	 * `openai/gpt-image-2.5-flare`.
 	 */

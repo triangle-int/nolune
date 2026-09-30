@@ -22,7 +22,8 @@
 		 */
 		customProviders: { id: string; name: string; api: 'openai' | 'anthropic'; url: string }[];
 		claudeInstalled: boolean;
-		codexInstalled: boolean;
+		/** Whether someone is signed in with ChatGPT, for the ChatGPT plan. */
+		chatgptSignedIn: boolean;
 		/** The preset being changed, with its own context window if it has one; a new one without. */
 		preset?: { id: string; name: string; provider: string; model: string; override: number | null };
 		/** Why the last save failed. */
@@ -37,7 +38,7 @@
 		keys,
 		customProviders,
 		claudeInstalled,
-		codexInstalled,
+		chatgptSignedIn,
 		preset,
 		problem,
 		class: className,
@@ -100,12 +101,12 @@
 	);
 	const label = $derived(providers.find((p) => p.id === provider)?.label ?? provider);
 	const key = $derived(keys.find((k) => k.provider === provider));
-	/** Whether it can be used: a key, the plan's agent (Claude Code, Codex), or a custom provider. */
+	/** Whether it can be used: a key, a plan's sign-in or agent, or a custom provider. */
 	const ready = $derived(
 		provider === 'claude-plan'
 			? claudeInstalled
 			: provider === 'chatgpt-plan'
-				? codexInstalled
+				? chatgptSignedIn
 				: isCustom(provider)
 					? !!custom
 					: !!key?.source
@@ -144,9 +145,9 @@
 				: { text: t.noClaudeCode, warn: true };
 		}
 		if (provider === 'chatgpt-plan') {
-			return codexInstalled
+			return chatgptSignedIn
 				? { text: t.onChatGptPlan, warn: false }
-				: { text: t.noCodex, warn: true };
+				: { text: t.noChatGpt, warn: true };
 		}
 		if (isCustom(provider)) {
 			return custom
@@ -171,7 +172,7 @@
 		return provider === 'claude-plan'
 			? 'Claude Code'
 			: provider === 'chatgpt-plan'
-				? 'Codex'
+				? 'ChatGPT'
 				: (custom?.name ?? label);
 	}
 
@@ -371,11 +372,7 @@
 			{:else if !checks}
 				{t.saving}
 			{:else}
-				{provider === 'claude-plan'
-					? t.checkingClaude
-					: provider === 'chatgpt-plan'
-						? t.checkingCodex
-						: t.checkingModel}
+				{provider === 'claude-plan' ? t.checkingClaude : t.checkingModel}
 			{/if}
 		</Button>
 		<Button type="button" variant="ghost" class="h-10" onclick={onclose}>

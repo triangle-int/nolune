@@ -769,7 +769,7 @@ export const es: Messages = {
 				},
 				'chatgpt-plan': {
 					title: 'Plan de ChatGPT',
-					about: 'Un plan Plus, Pro o Business, con Codex en este ordenador'
+					about: 'Un plan Plus o Pro, con inicio de sesión de ChatGPT'
 				},
 				anthropic: { title: 'Clave de API de Anthropic', about: 'Modelos Claude, pago por uso' },
 				openai: { title: 'Clave de API de OpenAI', about: 'Modelos GPT, pago por uso' },
@@ -886,20 +886,30 @@ export const es: Messages = {
 		plan: 'Plan de Claude',
 		plans: 'Planes',
 		plansHint:
-			'Los chats con un preajuste de plan funcionan con la suscripción propia de alguien en lugar de con una clave de API, a través del agente de quien ofrece el plan en este ordenador. nolune lo ejecuta y nunca ve el inicio de sesión. Los límites de los planes suponen el uso normal de una persona, así que deja las automatizaciones intensivas y los subagentes en un preajuste con clave de API.',
+			'Los chats con un preajuste de plan funcionan con la suscripción propia de alguien en lugar de con una clave de API: el plan de Claude a través de Claude Code en este ordenador, que guarda su inicio de sesión; el plan de ChatGPT a través de «Iniciar sesión con ChatGPT», cuyo inicio de sesión guarda nolune en este ordenador. Los límites de los planes suponen el uso normal de una persona, así que deja las automatizaciones intensivas y los subagentes en un preajuste con clave de API.',
 		claudePlanAbout: 'Pro o Max, a través de Claude Code.',
 		chatgptPlan: 'Plan de ChatGPT',
-		chatgptPlanAbout: 'Plus, Pro o Business, a través de Codex de OpenAI.',
-		chatgptInstall:
-			'En una terminal de este ordenador, ejecuta {setup}: instala Codex con npm, preguntando antes, e inicia sesión con ChatGPT. O instálalo tú y luego inicia sesión aquí:',
-		chatgptSignIn: 'Iniciar sesión con ChatGPT',
+		chatgptPlanAbout: 'Plus o Pro, con inicio de sesión de ChatGPT.',
+		chatgptSignIn: 'Continuar con ChatGPT',
+		chatgptContinueAs: (account: string) => `Continuar como ${account}`,
+		chatgptAnotherAccount: 'Usar otra cuenta',
 		chatgptSignInAgain: 'Volver a iniciar sesión',
-		chatgptAsking: 'Preguntando a ChatGPT…',
+		chatgptStarting: 'Iniciando…',
 		signOut: 'Cerrar sesión',
-		chatgptOpen: 'Abre {link} en cualquier dispositivo e inicia sesión en ChatGPT.',
-		chatgptCode: 'Introduce este código: {code}',
-		chatgptCodeHint:
-			'El código sirve durante 15 minutos. Esta página se actualiza en cuanto se introduce.',
+		chatgptOpen: 'Abre {link} e inicia sesión, permitiendo que nolune use tu plan de ChatGPT.',
+		chatgptSignInPage: 'la página de inicio de sesión de ChatGPT',
+		chatgptHere:
+			'En un navegador de este ordenador, no hace falta nada más: esta página se actualiza en cuanto inicies sesión.',
+		chatgptElsewhere:
+			'En otro dispositivo, la página a la que ChatGPT te devuelve no cargará. Copia su dirección (empieza por http://127.0.0.1) y pégala aquí:',
+		chatgptFinish: 'Terminar',
+		chatgptSignedIn:
+			'Sesión iniciada. Los chats con preajustes del plan de ChatGPT ahora usan este plan.',
+		chatgptUsing: 'Los chats con preajustes del plan de ChatGPT usan este plan. {link}',
+		chatgptManageUsage: 'Gestionar el uso',
+		chatgptNobody: 'Nadie ha iniciado sesión con ChatGPT.',
+		chatgptSignedOutLocally:
+			'Sesión cerrada aquí, pero no se pudo avisar a OpenAI: para asegurarte, desconecta nolune en los ajustes de ChatGPT.',
 		chatgptSignOutTitle: '¿Cerrar la sesión de ChatGPT?',
 		chatgptSignOutBody:
 			'Los chats con preajustes del plan de ChatGPT dejarán de funcionar hasta que alguien vuelva a iniciar sesión.',
@@ -947,12 +957,14 @@ export const es: Messages = {
 				'custom-anthropic':
 					'Auto usa la ventana que el servidor indica para el modelo, si la indica (vLLM lo hace); si no, queda como desconocida.',
 				'claude-plan': 'Claude Code no la indica: Auto solo conoce sus modelos de 1M de contexto.',
-				'chatgpt-plan': 'Codex no la indica, así que Auto la deja como desconocida.'
+				'chatgpt-plan':
+					'Auto usa la ventana que ChatGPT indica para el modelo, si la indica; si no, queda como desconocida.'
 			},
 			onPlan: 'Funciona con el plan Pro o Max con el que inició sesión Claude Code.',
 			noClaudeCode: 'Claude Code aún no está instalado: consulta «Plan de Claude», arriba.',
-			onChatGptPlan: 'Funciona con el plan de ChatGPT con el que inició sesión Codex.',
-			noCodex: 'Codex aún no está instalado: consulta «Plan de ChatGPT», arriba.',
+			onChatGptPlan:
+				'Funciona con el plan de ChatGPT de quien haya iniciado sesión con ChatGPT, arriba.',
+			noChatGpt: 'Aún nadie ha iniciado sesión con ChatGPT: consulta «Plan de ChatGPT», arriba.',
 			onKey: (provider: string) => `Funciona con la clave de API de ${provider}.`,
 			noKey: (provider: string) =>
 				`Todavía no hay clave de API de ${provider}: añade una en «Claves de API», arriba.`,
@@ -964,7 +976,6 @@ export const es: Messages = {
 			couldNotList: (status: number) => `nolune no pudo obtener los modelos (${status}).`,
 			unreachable: 'No se pudo contactar con nolune.',
 			checkingClaude: 'Comprobando Claude Code…',
-			checkingCodex: 'Comprobando Codex…',
 			checkingModel: 'Comprobando el modelo…',
 			saving: 'Guardando…',
 			pick: 'Elige un modelo',

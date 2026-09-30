@@ -2,7 +2,6 @@ import { error, fail } from '@sveltejs/kit';
 import {
 	ApiKeyError,
 	CLAUDE_INSTALL_COMMAND,
-	CODEX_INSTALL_COMMAND,
 	EXPORT_PROMPT,
 	MAX_EXPORT_CHARS,
 	addPreset,
@@ -80,16 +79,16 @@ export const actions: Actions = {
 		requireAdmin(locals);
 		const plan = (await request.formData()).get('plan')?.toString() ?? '';
 		if (!isPlan(plan)) error(400, 'Unknown plan');
-		const status = plan === 'claude-plan' ? await claudePlanStatus() : await chatGptPlanStatus();
+		const status =
+			plan === 'claude-plan' ? await claudePlanStatus() : await chatGptPlanStatus({ check: true });
 		if (status.signedIn && !status.problem) return { plan, signedIn: status.signedIn };
+		const { m } = translations(locals.locale);
 		return fail(400, {
 			plan,
-			planError: status.problem ?? translations(locals.locale).m.admin.claudeNoAnswer,
-			installCommand: status.installed
-				? null
-				: plan === 'claude-plan'
-					? CLAUDE_INSTALL_COMMAND
-					: CODEX_INSTALL_COMMAND
+			planError:
+				status.problem ?? (plan === 'claude-plan' ? m.admin.claudeNoAnswer : m.admin.chatgptNobody),
+			// Only Claude Code is installed; the ChatGPT plan is signed in to on Models & keys.
+			installCommand: status.installed ? null : CLAUDE_INSTALL_COMMAND
 		});
 	},
 

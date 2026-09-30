@@ -32,10 +32,10 @@ export const paths = {
 	home,
 	config: join(home, 'config.json'),
 	/**
-	 * Codex's home for chats on the ChatGPT plan (chatgpt-plan.ts), apart from ~/.codex: its
-	 * ChatGPT sign-in, which only Codex reads, and the chats' threads.
+	 * The ChatGPT sign-in for chats on the ChatGPT plan (chatgpt-sign-in.ts): this computer's host
+	 * id, and each account's registration and tokens. Readable by this user only.
 	 */
-	codexHome: join(home, 'codex'),
+	chatgpt: join(home, 'chatgpt.json'),
 	db: join(home, 'nolune.db'),
 	bin: join(home, 'bin'),
 	logs: join(home, 'logs'),

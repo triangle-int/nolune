@@ -54,7 +54,8 @@ background. Members can also manage the profile and its membership.
   page, a postcard, or a sticker pack. Choose a template or describe an idea, then ask for changes
   in the chat. Image generation needs an OpenAI API key.
 - **Your choice of models.** Use Anthropic, OpenAI, OpenRouter, or your own model server. The project
-  also integrates with Claude Code and Codex sign-ins. Switch models within a conversation while
+  also runs on a Claude plan through Claude Code, or on a ChatGPT plan with Sign in with ChatGPT.
+  Switch models within a conversation while
   keeping its history.
 - **Built for everyday use.** Pick an avatar and personality for each profile. Bring over a summary
   of what another assistant knows about you during onboarding. The interface supports English,

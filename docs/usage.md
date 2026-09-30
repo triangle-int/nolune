@@ -7,8 +7,7 @@ Needs macOS or Linux (the background service needs systemd there), Node 22.18+ a
 models, or on any model OpenRouter serves that can call tools; you can have all three), a model
 server of your own (Ollama, LM Studio, oMLX, vLLM...) with a model that can call tools, a Claude
 Pro or Max plan signed in to [Claude Code](https://claude.com/claude-code) on the same computer, or
-a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
-[Codex](https://developers.openai.com/codex/cli) there (see below).
+a ChatGPT Plus or Pro plan, signed in with ChatGPT (see below).
 
 ```sh
 npm install -g nolune
@@ -45,24 +44,25 @@ keys). `nolune <plan> status` says who the plan is signed in as. Plan limits ass
 ordinary use: keep busy automations and subagents on an API key preset. See
 [DESIGN.md](../DESIGN.md#plans) for what works differently.
 
-Either way, nolune runs the plan maker's own agent on this computer, unmodified, which keeps the
-sign-in and uses the plan's limits; nolune never sees the sign-in. Without the agent, setup offers
-to install it, asking first, so run it in a terminal on this computer.
-
 - **`claude-plan`: Claude Pro or Max.** Chats run through
-  [Claude Code](https://claude.com/claude-code), signed in to your Claude account. Setup installs
-  it with Anthropic's installer and starts Claude Code's own sign-in, in your browser. Anthropic
+  [Claude Code](https://claude.com/claude-code) on this computer, unmodified, signed in to your
+  Claude account; Claude Code keeps the sign-in and nolune never sees it. Setup installs it with
+  Anthropic's installer, asking first, and starts Claude Code's own sign-in in your browser, so run
+  it in a terminal on this computer. Anthropic
   [counts this](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
   as Agent SDK use of your subscription.
-- **`chatgpt-plan`: ChatGPT Plus, Pro or Business.** Chats run through OpenAI's
-  [Codex](https://developers.openai.com/codex/cli) (`npm install -g @openai/codex`), through the
-  [app server](https://developers.openai.com/codex/app-server) Codex's own IDE extension uses, on
-  the plan's Codex limits. Setup, or Sign in with ChatGPT under Models & keys, has Codex show a
-  link and a one-time code: open the link on any device, sign in to ChatGPT and enter the code.
-  Codex keeps that sign-in in a home of its own for nolune (`~/.nolune/codex`), apart from yours
-  in `~/.codex`. `nolune chatgpt-plan models` lists what the plan offers, and
-  `nolune chatgpt-plan logout` signs Codex out. Codex takes no PDFs, so the model gets their path,
-  which it opens with commands.
+- **`chatgpt-plan`: ChatGPT Plus or Pro.** Nothing to install: nolune uses OpenAI's
+  [Sign in with ChatGPT](https://developers.openai.com/siwc) for open-source apps (in preview), and
+  its requests count toward your plan's usage, shared with ChatGPT and Codex. **Continue with
+  ChatGPT** under Models & keys, or `nolune chatgpt-plan setup`, opens ChatGPT's sign-in page, where
+  you allow nolune to use your plan. OpenAI sends the browser back to `127.0.0.1`, this computer:
+  in a browser here that's all, and from a phone or another computer the page it ends on doesn't
+  load, so copy its address and paste it under Models & keys (or into `setup` at a terminal).
+  nolune keeps the sign-in in `~/.nolune/chatgpt.json`, readable by you only. See and limit what
+  nolune uses in [ChatGPT's usage settings](https://chatgpt.com/settings/usage), where you can also
+  disconnect it. `nolune chatgpt-plan models` lists what the plan offers, and
+  `nolune chatgpt-plan logout` signs out. Earlier versions ran Codex for this: its folder,
+  `~/.nolune/codex`, isn't used any more and can be deleted.
 
 **Reaching it from outside your home.** The gateway listens on `127.0.0.1:5780`. Put a tunnel in
 front of it, e.g. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel),

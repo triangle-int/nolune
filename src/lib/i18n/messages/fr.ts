@@ -766,7 +766,7 @@ export const fr: Messages = {
 				},
 				'chatgpt-plan': {
 					title: 'Abonnement ChatGPT',
-					about: 'Un abonnement Plus, Pro ou Business, via Codex sur cet ordinateur'
+					about: 'Un abonnement Plus ou Pro, connecté avec ChatGPT'
 				},
 				anthropic: { title: 'Clé d’API Anthropic', about: 'Modèles Claude, payés à l’usage' },
 				openai: { title: 'Clé d’API OpenAI', about: 'Modèles GPT, payés à l’usage' },
@@ -885,20 +885,32 @@ export const fr: Messages = {
 		plan: 'Abonnement Claude',
 		plans: 'Abonnements',
 		plansHint:
-			'Les discussions avec un préréglage d’abonnement utilisent l’abonnement de quelqu’un au lieu d’une clé d’API, par l’agent de l’éditeur installé sur cet ordinateur. nolune le lance et ne voit jamais la connexion. Les limites des abonnements supposent l’usage ordinaire d’une seule personne : gardez donc les automatisations chargées et les sous-agents sur un préréglage avec clé d’API.',
+			'Les discussions avec un préréglage d’abonnement utilisent l’abonnement de quelqu’un au lieu d’une clé d’API : l’abonnement Claude via Claude Code sur cet ordinateur, qui garde sa connexion ; l’abonnement ChatGPT via « Se connecter avec ChatGPT », dont nolune garde la connexion sur cet ordinateur. Les limites des abonnements supposent l’usage ordinaire d’une seule personne : gardez donc les automatisations chargées et les sous-agents sur un préréglage avec clé d’API.',
 		claudePlanAbout: 'Pro ou Max, via Claude Code.',
 		chatgptPlan: 'Abonnement ChatGPT',
-		chatgptPlanAbout: 'Plus, Pro ou Business, via Codex d’OpenAI.',
-		chatgptInstall:
-			'Dans un terminal sur cet ordinateur, lancez {setup} : il installe Codex avec npm, après vous l’avoir demandé, et le connecte à ChatGPT. Ou installez-le vous-même, puis connectez-vous ici :',
-		chatgptSignIn: 'Se connecter avec ChatGPT',
+		chatgptPlanAbout: 'Plus ou Pro, connecté avec ChatGPT.',
+		chatgptSignIn: 'Continuer avec ChatGPT',
+		chatgptContinueAs: (account: string) => `Continuer en tant que ${account}`,
+		chatgptAnotherAccount: 'Utiliser un autre compte',
 		chatgptSignInAgain: 'Se reconnecter',
-		chatgptAsking: 'Demande à ChatGPT…',
+		chatgptStarting: 'Démarrage…',
 		signOut: 'Se déconnecter',
-		chatgptOpen: 'Ouvrez {link} sur n’importe quel appareil et connectez-vous à ChatGPT.',
-		chatgptCode: 'Saisissez ce code : {code}',
-		chatgptCodeHint:
-			'Le code est valable 15 minutes. Cette page se met à jour dès qu’il est saisi.',
+		chatgptOpen:
+			'Ouvrez {link} et connectez-vous en autorisant nolune à utiliser votre abonnement ChatGPT.',
+		chatgptSignInPage: 'la page de connexion de ChatGPT',
+		chatgptHere:
+			'Dans un navigateur sur cet ordinateur, c’est tout : cette page se met à jour dès que vous êtes connecté.',
+		chatgptElsewhere:
+			'Sur un autre appareil, la page vers laquelle ChatGPT vous renvoie ne se chargera pas. Copiez son adresse (elle commence par http://127.0.0.1) et collez-la ici :',
+		chatgptFinish: 'Terminer',
+		chatgptSignedIn:
+			'Connecté. Les discussions avec un préréglage d’abonnement ChatGPT utilisent maintenant cet abonnement.',
+		chatgptUsing:
+			'Les discussions avec un préréglage d’abonnement ChatGPT utilisent cet abonnement. {link}',
+		chatgptManageUsage: 'Gérer l’utilisation',
+		chatgptNobody: 'Personne n’est connecté avec ChatGPT.',
+		chatgptSignedOutLocally:
+			'Déconnecté ici, mais OpenAI n’a pas pu être prévenu : par précaution, déconnectez nolune dans les réglages de ChatGPT.',
 		chatgptSignOutTitle: 'Se déconnecter de ChatGPT ?',
 		chatgptSignOutBody:
 			'Les discussions avec un préréglage d’abonnement ChatGPT ne fonctionneront plus tant que personne ne se sera reconnecté.',
@@ -947,12 +959,15 @@ export const fr: Messages = {
 					'Auto utilise la fenêtre que le serveur indique pour le modèle, s’il en indique une (vLLM le fait) ; sinon elle reste inconnue.',
 				'claude-plan':
 					'Claude Code ne l’indique pas : Auto ne connaît que ses modèles à 1M de contexte.',
-				'chatgpt-plan': 'Codex ne l’indique pas : Auto la laisse donc inconnue.'
+				'chatgpt-plan':
+					'Auto utilise la fenêtre que ChatGPT indique pour le modèle, s’il en indique une ; sinon elle reste inconnue.'
 			},
 			onPlan: 'Utilise l’abonnement Pro ou Max auquel Claude Code est connecté.',
 			noClaudeCode: 'Claude Code n’est pas encore installé : voir « Abonnement Claude » plus haut.',
-			onChatGptPlan: 'Utilise l’abonnement ChatGPT auquel Codex est connecté.',
-			noCodex: 'Codex n’est pas encore installé : voir « Abonnement ChatGPT » plus haut.',
+			onChatGptPlan:
+				'Utilise l’abonnement ChatGPT de la personne connectée avec ChatGPT, plus haut.',
+			noChatGpt:
+				'Personne n’est encore connecté avec ChatGPT : voir « Abonnement ChatGPT » plus haut.',
 			onKey: (provider: string) => `Utilise la clé d’API ${provider}.`,
 			noKey: (provider: string) =>
 				`Pas encore de clé d’API ${provider} : ajoutez-en une dans « Clés d’API » plus haut.`,
@@ -964,7 +979,6 @@ export const fr: Messages = {
 			couldNotList: (status: number) => `nolune n’a pas pu obtenir les modèles (${status}).`,
 			unreachable: 'nolune est injoignable.',
 			checkingClaude: 'Vérification de Claude Code…',
-			checkingCodex: 'Vérification de Codex…',
 			checkingModel: 'Vérification du modèle…',
 			saving: 'Enregistrement…',
 			pick: 'Choisissez un modèle',

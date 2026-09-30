@@ -686,7 +686,7 @@ export const en = {
 				},
 				'chatgpt-plan': {
 					title: 'ChatGPT plan',
-					about: 'A Plus, Pro or Business plan, through Codex on this computer'
+					about: 'A Plus or Pro plan, signed in with ChatGPT'
 				},
 				anthropic: { title: 'Anthropic API key', about: 'Claude models, paid as you go' },
 				openai: { title: 'OpenAI API key', about: 'GPT models, paid as you go' },
@@ -801,19 +801,29 @@ export const en = {
 		plan: 'Claude plan',
 		plans: 'Plans',
 		plansHint:
-			"Chats on a plan preset run on someone's own subscription instead of an API key, through the plan maker's own agent on this computer. nolune runs it and never sees its sign-in. Plan limits assume one person's ordinary use, so keep busy automations and subagents on an API key preset.",
+			"Chats on a plan preset run on someone's own subscription instead of an API key: the Claude plan through Claude Code on this computer, which keeps its sign-in; the ChatGPT plan through Sign in with ChatGPT, whose sign-in nolune keeps on this computer. Plan limits assume one person's ordinary use, so keep busy automations and subagents on an API key preset.",
 		claudePlanAbout: 'Pro or Max, through Claude Code.',
 		chatgptPlan: 'ChatGPT plan',
-		chatgptPlanAbout: "Plus, Pro or Business, through OpenAI's Codex.",
-		chatgptInstall:
-			'In a terminal on this computer, run {setup}: it installs Codex with npm, asking first, and signs it in with ChatGPT. Or install it yourself, then sign in here:',
-		chatgptSignIn: 'Sign in with ChatGPT',
+		chatgptPlanAbout: 'Plus or Pro, signed in with ChatGPT.',
+		chatgptSignIn: 'Continue with ChatGPT',
+		chatgptContinueAs: (account: string) => `Continue as ${account}`,
+		chatgptAnotherAccount: 'Use another account',
 		chatgptSignInAgain: 'Sign in again',
-		chatgptAsking: 'Asking ChatGPT…',
+		chatgptStarting: 'Starting…',
 		signOut: 'Sign out',
-		chatgptOpen: 'Open {link} on any device and sign in to ChatGPT.',
-		chatgptCode: 'Enter this code: {code}',
-		chatgptCodeHint: "The code works for 15 minutes. This page updates once it's entered.",
+		chatgptOpen: 'Open {link} and sign in, allowing nolune to use your ChatGPT plan.',
+		chatgptSignInPage: "ChatGPT's sign-in page",
+		chatgptHere:
+			"In a browser on this computer, that's it: this page updates once you're signed in.",
+		chatgptElsewhere:
+			"On another device, the page ChatGPT sends you back to won't load. Copy its address (it starts with http://127.0.0.1) and paste it here:",
+		chatgptFinish: 'Finish',
+		chatgptSignedIn: 'Signed in. Chats on ChatGPT plan presets now use this plan.',
+		chatgptUsing: 'Chats on ChatGPT plan presets use this plan. {link}',
+		chatgptManageUsage: 'Manage usage',
+		chatgptNobody: 'Nobody is signed in with ChatGPT.',
+		chatgptSignedOutLocally:
+			"Signed out here, but OpenAI couldn't be told: to be sure, disconnect nolune in ChatGPT's settings.",
 		chatgptSignOutTitle: 'Sign out of ChatGPT?',
 		chatgptSignOutBody: 'Chats on ChatGPT plan presets stop working until someone signs in again.',
 		signedOut: 'Signed out.',
@@ -860,12 +870,13 @@ export const en = {
 				'custom-anthropic':
 					'Auto uses the window the server lists for the model, if it lists one (vLLM does); otherwise it stays unknown.',
 				'claude-plan': "Claude Code doesn't report it: Auto knows only its 1M-context models'.",
-				'chatgpt-plan': "Codex doesn't report it, so Auto leaves it unknown."
+				'chatgpt-plan':
+					'Auto uses the window ChatGPT lists for the model, if it lists one; otherwise it stays unknown.'
 			},
 			onPlan: 'Runs on the Pro or Max plan Claude Code is signed in to.',
 			noClaudeCode: "Claude Code isn't installed yet: see Claude plan, above.",
-			onChatGptPlan: 'Runs on the ChatGPT plan Codex is signed in to.',
-			noCodex: "Codex isn't installed yet: see ChatGPT plan, above.",
+			onChatGptPlan: 'Runs on the ChatGPT plan of whoever is signed in with ChatGPT, above.',
+			noChatGpt: 'Nobody is signed in with ChatGPT yet: see ChatGPT plan, above.',
 			onKey: (provider: string) => `Runs on the ${provider} API key.`,
 			noKey: (provider: string) => `No ${provider} API key yet: add one under API keys, above.`,
 			onCustom: (api: string, url: string) =>
@@ -876,7 +887,6 @@ export const en = {
 			couldNotList: (status: number) => `nolune couldn't get the models (${status}).`,
 			unreachable: "nolune couldn't be reached.",
 			checkingClaude: 'Checking Claude Code…',
-			checkingCodex: 'Checking Codex…',
 			checkingModel: 'Checking the model…',
 			saving: 'Saving…',
 			pick: 'Pick a model',
