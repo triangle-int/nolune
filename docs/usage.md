@@ -68,7 +68,7 @@ to install it, asking first, so run it in a terminal on this computer.
 in from anywhere is nolune's relay, which setup offers:
 
 ```sh
-nolune relay enable --name smiths   # https://smiths.nolune.dev (a random name without --name)
+nolune relay enable --name smiths   # https://smiths.nolune.family (a random name without --name)
 nolune service restart              # the gateway connects to the relay; its address is nolune's now
 nolune relay status                 # the address, and whether the gateway is connected
 nolune relay disable                # stop using it and give the name back

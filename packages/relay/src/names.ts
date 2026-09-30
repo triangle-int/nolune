@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto';
 
 /*
- * Gateway names: the first label of a family's address, like cozy-otter-42.nolune.dev.
+ * Gateway names: the first label of a family's address, like cozy-otter-42.nolune.family.
  */
 
 /**

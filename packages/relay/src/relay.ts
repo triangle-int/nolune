@@ -241,7 +241,7 @@ export function createRelay(options: RelayOptions): Relay {
 			return json(res, 405, { error: 'GET or DELETE' });
 		}
 		if (pathname === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
-			const text = 'nolune relay. See https://github.com/triangle-int/nolune\n';
+			const text = 'nolune relay. See https://nolune.dev\n';
 			res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
 			return void res.end(req.method === 'HEAD' ? undefined : text);
 		}

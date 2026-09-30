@@ -2,8 +2,9 @@
 	email {$ACME_EMAIL}
 }
 
-# The relay's own host, and every gateway's address, with one wildcard certificate for the
-# domain. Let's Encrypt checks it through a DNS record, which Caddy makes with a Cloudflare token.
+# The relay's own host (relay.nolune.dev), and every gateway's address with one wildcard
+# certificate for their domain (*.nolune.family). Let's Encrypt checks both through DNS records,
+# which Caddy makes with a Cloudflare token.
 {$RELAY_HOST}, *.{$RELAY_DOMAIN} {
 	tls {
 		dns cloudflare {env.CLOUDFLARE_API_TOKEN}

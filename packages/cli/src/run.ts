@@ -441,9 +441,9 @@ async function setupRelay(
 	if (wanted === undefined && io.stdinIsTTY) {
 		io.log(`
 How will your family open nolune? nolune's relay gives it an address like
-https://smiths.nolune.dev that works on any device, at home or away, with no tunnel or port
-forwarding. It passes their traffic to this computer, and could see it, as any tunnel could.
-Or keep nolune to this computer, or give a URL of your own.`);
+https://smiths.nolune.family that works on any device, at home or away, with no tunnel or
+port forwarding. It passes their traffic to this computer, and could see it, as any tunnel
+could. Or keep nolune to this computer, or give a URL of your own.`);
 		wanted = /^y/i.test(await ask(io, 'Use the relay? (y/n)', 'y'));
 	}
 	if (!wanted) return false;

@@ -223,13 +223,13 @@ nolune user rm Anna                               # can't be undone: ask first
 `nolune config` shows `listen`, where the gateway listens (`127.0.0.1:5780` unless changed), and
 `origin`, the address people open: nolune's relay's while `relay` is on, else usually a tunnel
 (Tailscale Funnel, Cloudflare Tunnel) pointed at `listen`. The relay gives an address like
-`https://smiths.nolune.dev` that works from anywhere with nothing to set up; it could see the
-traffic it passes on, as any tunnel could.
+`https://smiths.nolune.family` that works from anywhere with nothing to set up; it could see
+the traffic it passes on, as any tunnel could.
 
 ```sh
-nolune relay status                                        # the address, and whether nolune is connected
-nolune relay enable --name smiths                          # https://smiths.nolune.dev from the next restart
-nolune relay disable                                       # back to the origin below, from the next restart
+nolune relay status                                        # the address; is nolune connected?
+nolune relay enable --name smiths                          # smiths.nolune.family, after a restart
+nolune relay disable                                       # back to the origin, after a restart
 nolune config set origin https://nolune.example.com
 nolune config set port 5781                                # the tunnel must point at it too
 nolune config set image-model openai/gpt-image-2.5-flare   # applies right away

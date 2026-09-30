@@ -1,6 +1,6 @@
 # nolune relay
 
-Gives each family's nolune a public HTTPS address, like `https://smiths.nolune.dev`, without a
+Gives each family's nolune a public HTTPS address, like `https://smiths.nolune.family`, without a
 tunnel, port forwarding or a domain of their own. The family runs `nolune relay enable` (or answers
 yes in `nolune setup`), and their gateway keeps a connection open to the relay. When anyone opens
 the address, the relay passes the request down that connection and the answer back.
@@ -44,18 +44,20 @@ On a small server with a public IP (1 vCPU and 1 GB is plenty for many families;
 grows). The relay runs from its TypeScript source on Node 22.18 or later, with one dependency
 (`ws`).
 
-1. **DNS.** Point `*.<domain>` (and the relay's host, if it isn't under the domain) at the server,
-   with an A (and AAAA) record. For nolune's own relay: `*.nolune.dev` → the server, which also
-   covers `relay.nolune.dev`. Records that exist already, like `www`, keep winning over the
-   wildcard. In Cloudflare, leave them **DNS only** (grey cloud): proxied, Cloudflare would end
-   TLS itself and limit uploads to 100 MB.
-2. **A Cloudflare API token** that can edit DNS in the zone (Zone → DNS → Edit), for the wildcard
-   certificate: Let's Encrypt checks it with a DNS record, which Caddy makes.
+1. **DNS.** Point `*.<domain>` and the relay's host at the server, with A (and AAAA) records. For
+   nolune's own relay: `*.nolune.family` and `relay.nolune.dev`. The families' addresses have a
+   domain of their own, apart from the site on `nolune.dev`: a browser blocklist that takes in one
+   abused address can take its whole domain with it, and an address can set cookies for its
+   domain. In Cloudflare, leave the records **DNS only** (grey cloud): proxied, Cloudflare would
+   end TLS itself and limit uploads to 100 MB.
+2. **A Cloudflare API token** that can edit DNS in both zones (Zone → DNS → Edit, for
+   `nolune.family` and `nolune.dev`): Let's Encrypt checks the certificates with DNS records, which
+   Caddy makes.
 3. **Start it**, from this folder:
 
    ```sh
    cat > .env <<'END'
-   RELAY_DOMAIN=nolune.dev
+   RELAY_DOMAIN=nolune.family
    RELAY_HOST=relay.nolune.dev
    ACME_EMAIL=you@example.com
    CLOUDFLARE_API_TOKEN=...
@@ -89,12 +91,13 @@ curl -H 'Host: smiths.nolune.localhost' http://127.0.0.1:8090/login
 ## Looking after it
 
 - **Back up** the gateways file (the `relay-data` volume). Without it, every family would have to
-  run `nolune relay enable` again and share a new address; their gateways keep trying every
-  5 minutes in case the file comes back.
+  run `nolune relay enable` again (it asks for the same name back) and restart nolune; until then
+  their gateways try every 5 minutes, in case the file comes back.
 - **Taking an address away** (abuse): delete its entry from the gateways file and restart the
   relay.
 - Each client address can register 10 addresses an hour. Names that belong to a site, like `www`,
   `api` or `login`, are reserved (`src/names.ts`).
-- Consider adding the domain to the [Public Suffix List](https://publicsuffix.org/), as tunnel
-  providers do, so browsers treat every address as a site of its own: one family's nolune then
-  can't set cookies for the others or for the domain.
+- Add the domain to the [Public Suffix List](https://publicsuffix.org/), as tunnel providers do,
+  so browsers treat every address as a site of its own: one family's nolune then can't set cookies
+  for another's, and a blocklist takes in only the address it's about. Nothing but families'
+  addresses lives on `nolune.family`, so nothing else is affected.

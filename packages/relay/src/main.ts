@@ -4,7 +4,7 @@ import { GatewayStore } from './store.ts';
 /*
  * Runs the relay (see README.md next to this folder):
  *
- *   RELAY_DOMAIN=nolune.dev RELAY_HOST=relay.nolune.dev node src/main.ts
+ *   RELAY_DOMAIN=nolune.family RELAY_HOST=relay.nolune.dev node src/main.ts
  *
  * RELAY_DOMAIN   gateways get <name>.<domain> (required)
  * RELAY_HOST     where gateways register and connect; the domain itself by default
@@ -16,7 +16,7 @@ import { GatewayStore } from './store.ts';
 
 const domain = process.env.RELAY_DOMAIN;
 if (!domain) {
-	console.error('Set RELAY_DOMAIN: gateways get addresses under it, like <name>.nolune.dev.');
+	console.error('Set RELAY_DOMAIN: gateways get addresses under it, like <name>.nolune.family.');
 	process.exit(1);
 }
 

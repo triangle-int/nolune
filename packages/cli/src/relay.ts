@@ -35,9 +35,9 @@ import { fail, type Io } from './io.ts';
  */
 
 export const RELAY_HELP = `Reaching nolune from anywhere (no tunnel, port forwarding or domain of your own)
-  nolune relay enable [--name NAME]             get a public address, like https://NAME.nolune.dev
-                                             (a random name without --name), through nolune's
-                                             relay. It passes the family's traffic to this
+  nolune relay enable [--name NAME]             get a public address through nolune's relay, like
+                                             https://NAME.nolune.family (a random name without
+                                             --name). It passes the family's traffic to this
                                              computer, and could see it, as any tunnel could.
                                              --server URL uses a relay of your own
   nolune relay status                           the address, and whether the gateway is connected

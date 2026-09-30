@@ -94,7 +94,7 @@ nolune service install
 On Linux, use `nolune start` instead of `nolune service install`.
 
 Setup asks how your family will open nolune. Say yes to the **nolune relay** and you get an address
-like `https://smiths.nolune.dev` that works on any phone or laptop, at home or away, with no
+like `https://smiths.nolune.family` that works on any phone or laptop, at home or away, with no
 tunnel, port forwarding or domain to set up. You can turn it on later with `nolune relay enable`.
 
 Open the address from setup, sign in, and create your first profile. Its welcome helps you pick a

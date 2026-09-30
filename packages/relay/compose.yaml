@@ -5,7 +5,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.dev}
+      RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.family}
       RELAY_HOST: ${RELAY_HOST:-relay.nolune.dev}
     volumes:
       - relay-data:/data
@@ -19,7 +19,7 @@ services:
       - '80:80'
       - '443:443'
     environment:
-      RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.dev}
+      RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.family}
       RELAY_HOST: ${RELAY_HOST:-relay.nolune.dev}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN}
