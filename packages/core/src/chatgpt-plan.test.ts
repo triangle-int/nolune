@@ -541,8 +541,15 @@ function runs(command: string): Item {
 	};
 }
 
-/** A streamed response that sends `output` item by item, as the Responses API does. */
-function streamed(output: Item[], failure?: { code: string; message: string }): Answer {
+/**
+ * A streamed response that sends `output` item by item, as the Responses API does. `bare`: its
+ * last event leaves the output out, as the plan's route does, with only the items' own events.
+ */
+function streamed(
+	output: Item[],
+	failure?: { code: string; message: string },
+	opts: { bare?: boolean } = {}
+): Answer {
 	const events: object[] = [{ type: 'response.created', response: { status: 'in_progress' } }];
 	output.forEach((item, index) => {
 		events.push({ type: 'response.output_item.added', output_index: index, item });
@@ -560,7 +567,7 @@ function streamed(output: Item[], failure?: { code: string; message: string }): 
 					type: 'response.completed',
 					response: {
 						status: 'completed',
-						output,
+						output: opts.bare ? [] : output,
 						usage: {
 							input_tokens: 1000,
 							input_tokens_details: { cached_tokens: 800 },
@@ -751,6 +758,33 @@ describe('chats on the ChatGPT plan', () => {
 			},
 			{ type: 'input_text', text: 'Anna: What are these?' }
 		]);
+	});
+
+	it("keeps the reply when the stream's last event leaves its output out", async () => {
+		await signIn();
+		const { user, chat } = planChat();
+		answer = (request) =>
+			isTitleRequest(request)
+				? streamed([said('Disk space')], undefined, { bare: true })
+				: chatCalls().length === 1
+					? streamed([thought('Checking the disk.'), runs('df -h /')], undefined, { bare: true })
+					: streamed([said('About 120 GB are free.')], undefined, { bare: true });
+		vi.mocked(runCommand).mockResolvedValueOnce({
+			content: '/dev/disk1 500G 380G 120G\n[exit code 0]',
+			isError: false,
+			exitCode: 0
+		});
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'How much disk is free?');
+		await ended;
+
+		expect(getSnapshot(chat.id).error).toBeNull();
+		expect(vi.mocked(runCommand).mock.calls[0][0]).toMatchObject({ command: 'df -h /' });
+		const replies = committedRows(chat.id).filter((row) => row.kind === 'assistant');
+		expect(replies.map((row) => row.stopReason)).toEqual(['tool_use', 'end_turn']);
+		expect(replies[1].content).toContain('About 120 GB are free.');
+		await vi.waitFor(() => expect(getConversation(chat.id)?.title).toBe('Disk space'));
 	});
 
 	it("says where to look when the plan's limit is reached", async () => {

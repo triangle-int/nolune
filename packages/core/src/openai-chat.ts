@@ -373,11 +373,16 @@ function effortFor(api: ResponsesApi, effort: Effort): Effort {
 	return api.provider !== 'custom-openai' || !['xhigh', 'max'].includes(effort) ? effort : 'high';
 }
 
-/** Reads the stream, telling `onEvent` about each block as it grows, and returns the response. */
+/**
+ * Reads the stream, telling `onEvent` about each block as it grows, and returns the response. Its
+ * output is the last event's, or, when that leaves it out (the ChatGPT plan's route does), the
+ * items the stream finished one by one.
+ */
 async function readStream(
 	stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
 	onEvent: (event: StreamEvent) => void
 ): Promise<OpenAI.Responses.Response> {
+	const finished: OpenAI.Responses.ResponseOutputItem[] = [];
 	for await (const event of stream) {
 		switch (event.type) {
 			case 'response.output_item.added': {
@@ -404,10 +409,16 @@ async function readStream(
 					onEvent({ type: 'delta', index: event.output_index, text: '\n\n' });
 				}
 				break;
+			case 'response.output_item.done':
+				finished[event.output_index] = event.item;
+				break;
 			case 'response.completed':
-			case 'response.incomplete':
+			case 'response.incomplete': {
+				const { response } = event;
+				if (!response.output?.length) response.output = finished.filter(Boolean);
 				// Leaving the loop closes the stream.
-				return event.response;
+				return response;
+			}
 			case 'response.failed':
 				throw new ReplyError(
 					event.response.error?.message || 'The reply failed.',

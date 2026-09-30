@@ -458,7 +458,10 @@ chatgpt-plan setup` at a terminal (`finishChatGptSignIn`). An address from anoth
   tools in a namespace, so nolune's tools are in `nolune` (the model calls `run_command` with
   `namespace: "nolune"`, and every call sent back carries it, other models' too); no Files API.
   Short exchanges (titles, memory, suggestions) are streamed too, and read to their end. The
-  reply's encrypted reasoning goes back to the plan's model, and its prompt cache key is the chat.
+  stream's last event (`response.completed`) comes without its output on this route, so the reply
+  is the items the stream finished (`response.output_item.done`) whenever the last event has none.
+  The reply's encrypted reasoning goes back to the plan's model, and its prompt cache key is the
+  chat.
 - **Models** are the plan's catalog, `GET /v1/models` with the plan's token, which answers with
   `models` (`slug`, `display_name`, `visibility`, supported reasoning levels and a context window
   when it says): the admin page offers those with `visibility: "list"`, in ChatGPT's order, and
