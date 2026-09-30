@@ -27,3 +27,6 @@ vite.config.ts.timestamp-*
 # nolune
 /dist
 *.tgz
+
+# The relay run from source
+/packages/relay/data

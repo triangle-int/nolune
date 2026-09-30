@@ -1,0 +1,21 @@
+{
+	"name": "@nolune/relay",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"exports": {
+		"./headers": "./src/headers.ts",
+		"./protocol": "./src/protocol.ts",
+		"./stream": "./src/stream.ts"
+	},
+	"scripts": {
+		"check": "tsc -p .",
+		"start": "node --no-warnings src/main.ts"
+	},
+	"dependencies": {
+		"ws": "^8.18.3"
+	},
+	"devDependencies": {
+		"@types/ws": "^8.18.1"
+	}
+}

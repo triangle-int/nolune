@@ -11,7 +11,7 @@ pnpm dev
 ```
 
 ```sh
-pnpm check                          # svelte-check + tsc for packages/core and packages/cli
+pnpm check                          # svelte-check + tsc for packages/core, cli and relay
 pnpm lint                           # prettier --check + eslint (pnpm format to fix formatting)
 pnpm test                           # vitest: *.test.ts next to the code in src/ and packages/
 pnpm db:generate --name <change>    # after editing packages/core/src/db/schema.ts
@@ -20,6 +20,9 @@ pnpm start                          # run the built gateway with the settings fr
 ```
 
 Migrations are applied automatically when the gateway or the CLI opens the database.
+
+The relay (`packages/relay`) is a separate server, deployed on its own: see its
+[README](../packages/relay/README.md) for running it locally and in production.
 
 Every test starts with an empty `NOLUNE_HOME` in a temp folder (`packages/core/src/test/setup.ts`), so
 tests of the database code run against a fresh, migrated SQLite file and never touch your data.

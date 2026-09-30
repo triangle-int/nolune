@@ -1,0 +1,34 @@
+# The relay behind Caddy. Set CLOUDFLARE_API_TOKEN and ACME_EMAIL in .env next to this file,
+# then: docker compose up -d --build (README.md).
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.dev}
+      RELAY_HOST: ${RELAY_HOST:-relay.nolune.dev}
+    volumes:
+      - relay-data:/data
+
+  caddy:
+    build:
+      context: .
+      dockerfile: Caddy.Dockerfile
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.dev}
+      RELAY_HOST: ${RELAY_HOST:-relay.nolune.dev}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - relay
+
+volumes:
+  relay-data:
+  caddy-data:

@@ -12,7 +12,7 @@ a ChatGPT Plus, Pro or Business plan signed in to OpenAI's
 
 ```sh
 npm install -g nolune
-nolune setup                   # your account and the public URL
+nolune setup                   # your account, and the address: the nolune relay, or your own
 nolune key set openai          # optional: GPT models for chats, and pictures (Images page)
 nolune service install         # run in the background, start at login
 nolune user create Anna anna@example.com   # add family members (prints their password)
@@ -64,8 +64,25 @@ to install it, asking first, so run it in a terminal on this computer.
   `nolune chatgpt-plan logout` signs Codex out. Codex takes no PDFs, so the model gets their path,
   which it opens with commands.
 
-**Reaching it from outside your home.** The gateway listens on `127.0.0.1:5780`. Put a tunnel in
-front of it, e.g. [Tailscale Funnel](https://tailscale.com/kb/1223/funnel),
+**Reaching it from outside your home.** The gateway listens on `127.0.0.1:5780`. The easiest way
+in from anywhere is nolune's relay, which setup offers:
+
+```sh
+nolune relay enable --name smiths   # https://smiths.nolune.dev (a random name without --name)
+nolune service restart              # the gateway connects to the relay; its address is nolune's now
+nolune relay status                 # the address, and whether the gateway is connected
+nolune relay disable                # stop using it and give the name back
+```
+
+The gateway keeps a connection open to `relay.nolune.dev`, and the relay passes requests for the
+address down it, so there's no port to open and no tunnel to run. While the relay is on, its
+address is nolune's origin (sign-in, webhook URLs). The relay could read what passes through it,
+as any hosted tunnel could; it keeps none of it. `--server` uses a relay of your own
+([packages/relay](../packages/relay/README.md)). If the computer is off or asleep, the address
+shows a page saying nolune is offline, which reloads itself until it's back.
+
+Or put a tunnel of your own in front of the gateway, e.g.
+[Tailscale Funnel](https://tailscale.com/kb/1223/funnel),
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/),
 or your own VPS, and tell nolune the public URL:
 

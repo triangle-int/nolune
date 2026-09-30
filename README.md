@@ -93,6 +93,10 @@ nolune service install
 
 On Linux, use `nolune start` instead of `nolune service install`.
 
+Setup asks how your family will open nolune. Say yes to the **nolune relay** and you get an address
+like `https://smiths.nolune.dev` that works on any phone or laptop, at home or away, with no
+tunnel, port forwarding or domain to set up. You can turn it on later with `nolune relay enable`.
+
 Open the address from setup, sign in, and create your first profile. Its welcome helps you pick a
 model and personalize the assistant. Admins manage providers and models under **Models & keys**.
 For an API key, you can also use the CLI:
@@ -126,13 +130,20 @@ Conversations are stored in a local SQLite database; profile files, memory, and 
 under `~/.nolune` (or `NOLUNE_HOME`). When you use a hosted model or embeddings provider, relevant
 content is sent to that provider.
 
-The installed gateway listens on `127.0.0.1:5780`. To reach it from other devices, set up a tunnel
-or reverse proxy and configure its address:
+The installed gateway listens on `127.0.0.1:5780`. Other devices reach it in one of two ways:
 
-```sh
-nolune config set origin https://nolune.example.com
-nolune service restart
-```
+- **The nolune relay** (`nolune relay enable`). The gateway keeps a connection open to
+  `relay.nolune.dev`, which passes requests for your address down it, so nothing on your network
+  has to be opened. TLS ends at the relay, as it does with any hosted tunnel, so its operator could
+  read the traffic that passes through; it keeps none of it. You can
+  [run your own relay](packages/relay/README.md), too.
+- **Your own tunnel or reverse proxy**, such as Tailscale Funnel or Cloudflare Tunnel. Configure
+  its address:
+
+  ```sh
+  nolune config set origin https://nolune.example.com
+  nolune service restart
+  ```
 
 Keep the host awake when the family needs access. On macOS, access to protected folders may
 require Full Disk Access for the Node binary; setup prints its path.
@@ -162,8 +173,8 @@ pnpm test      # Vitest
 pnpm build     # Web app and CLI
 ```
 
-The web app lives in `src/`, the agent and storage in `packages/core/`, and the CLI in
-`packages/cli/`. Database migrations apply automatically. Tests use a temporary data directory.
+The web app lives in `src/`, the agent and storage in `packages/core/`, the CLI in
+`packages/cli/`, and the relay server in `packages/relay/`. Database migrations apply automatically. Tests use a temporary data directory.
 
 Read the [design notes](DESIGN.md) for architecture and tradeoffs, or the
 [development guide](docs/development.md) for database changes, CI, and publishing.

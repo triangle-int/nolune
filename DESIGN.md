@@ -10,7 +10,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Execution          | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Exposure           | Public through nolune's relay (`<name>.nolune.dev`, see [The relay](#the-relay)) or the family's own tunnel. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Sender identity    | Every human message is sent to the model as `Name: text`. Attached files come first, each as a line saying who attached it and where it was saved, followed by the picture or PDF itself when the model gets one. Display names are unique across the gateway.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -1535,6 +1535,44 @@ to (issue #42).
   may have changed since it started), and a slow command would briefly hold up its event loop;
   image conversion runs in a child process, so `nolune view` doesn't.
 
+## The relay
+
+A family shouldn't need a tunnel, an open port or a domain to open nolune away from home.
+`nolune relay enable` (or yes in `nolune setup`) gets an address from nolune's relay
+(`packages/relay`, run at `relay.nolune.dev`), and the gateway connects out to it.
+
+- **Registering.** The relay gives a name (the one asked for, or a random one like
+  `cozy-otter-42`), the address `https://<name>.nolune.dev` and a token. Only `config.json` keeps
+  the token (`relay`, with the relay's URL); the relay keeps its SHA-256. While `relay` is set, its
+  address is the origin (`publicOrigin()`): `ORIGIN` for adapter-node and better-auth, and webhook
+  URLs. `nolune relay disable` gives the name back. Names are 3 to 32 letters, digits and single
+  dashes; the relay keeps the likes of `www` and `login` for itself and limits each client address
+  to 10 registrations an hour.
+- **The connection.** `nolune start` (`connectRelay()` in `packages/cli/src/relay.ts`) opens a
+  WebSocket to the relay and says `hello` with the name and token. Once the relay answers `ready`,
+  the binary messages carry HTTP/2 with the relay as the client: each request to the address is a
+  stream. HTTP/2 brings the family's requests over the one socket, and its flow control keeps a
+  large upload from holding up an event stream, with no framing of nolune's own. Both ends run
+  `webSocketStream()` (`packages/relay/src/stream.ts`) over the part of the WebSocket API that `ws`
+  (the relay) and Node's built-in WebSocket (the gateway: no dependency) share.
+- **Requests** go from the gateway to its own web server over HTTP, like a browser's, so hooks,
+  body limits and sign-in work as they do without the relay. The relay sets `X-Forwarded-For`
+  (better-auth's rate limit reads it) and drops the browser's. Browser WebSockets aren't passed on:
+  the pages use event streams.
+- **Staying up.** Each side pings the other every 30 s. The gateway reconnects a second after
+  losing the connection, then backs off to a minute while the relay can't be reached, and logs
+  once rather than at every try. For 15 s after a gateway leaves, its requests wait at the relay,
+  so a restart doesn't show an error page; after that the relay shows an offline page, in the
+  browser's language, that reloads itself. A second connection with the same token takes over, and
+  the first stops rather than take it back. SIGINT and SIGTERM close the link before adapter-node's
+  shutdown, which would otherwise wait 30 s for the event streams it carries.
+- **Trust.** TLS ends at the relay (Caddy in front, with a wildcard certificate), so its operator
+  could read the traffic, as with any hosted tunnel; the relay logs only registrations and
+  connections. End-to-end encryption would need each gateway to hold the certificate for its own
+  address, with the relay passing TLS through by SNI, and a certificate per gateway runs into Let's
+  Encrypt's per-domain limits until the domain is on the Public Suffix List. Families who want
+  nobody in between use their own tunnel, or their own relay (`nolune relay enable --server`).
+
 ## Code layout
 
 ```
@@ -1555,7 +1593,7 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 Built-in skills in packages/core/skills, built-in templates in
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
-packages/cli    nolune: setup, start, service, config, key, claude-plan, chatgpt-plan (plans.ts), env,
+packages/cli    nolune: setup, start, service, relay (relay.ts), config, key, claude-plan, chatgpt-plan (plans.ts), env,
                 user, preset, profile, skill, trigger, wake, view, memory, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
                 its exit code; index.ts calls it with this process's io. Commands print, read stdin,
                 the environment (NOLUNE_PROFILE, …) and the working folder only through `io` (io.ts),
@@ -1568,6 +1606,11 @@ src/            SvelteKit gateway (adapter-node). @nolune/core is bundled into t
                 UI components in src/lib/components (shadcn-svelte primitives in ui/, a new
                 profile's welcome in welcome/, its sounds in src/lib/welcome), the interface's
                 languages in src/lib/i18n.
+packages/relay  @nolune/relay. The relay server (relay.ts, with its gateways file, store.ts, and its
+                pages), and what the gateway shares with it: the protocol (protocol.ts), a WebSocket
+                as a byte stream (stream.ts) and the headers that go on to the next hop
+                (headers.ts). Deployed on its own (Dockerfile, compose.yaml with Caddy), not
+                part of the npm package; the CLI bundles only the shared files.
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
 ```
 
@@ -1588,17 +1631,19 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
   `node_modules`, which is why the CLI ships as JavaScript.
   Claude Code itself isn't shipped (see [The Claude plan](#the-claude-plan)); the Agent SDK and
   zod, which core loads on first use, are in chunks of their own.
-- `nolune setup` is the first-run wizard: config, admin account, public URL. It adds no key or
-  model: a new profile's welcome asks the admin for them when there's no preset.
+- `nolune setup` is the first-run wizard: config, admin account, and the address: the relay
+  (asked at a terminal, `--relay` / `--no-relay` otherwise; no without either), else a public URL.
+  It adds no key or model: a new profile's welcome asks the admin for them when there's no preset.
 - `nolune start` reads host, port and origin from `config.json` (default `127.0.0.1:5780`), sets
-  `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`.
+  `HOST` / `PORT` / `ORIGIN` for adapter-node and imports `build/index.js`, then connects to the
+  relay when there's one.
 - `nolune service install` writes a LaunchAgent (`~/Library/LaunchAgents/dev.nolune.gateway.plist`)
   that runs `node dist/cli.js start` with `KeepAlive` and logs to `~/.nolune/logs/gateway.log`.
   It's a LaunchAgent, not a LaunchDaemon, so commands run as the user. It records the absolute
   node path, so switching Node versions needs a reinstall.
 - On shutdown, the gateway kills the process groups of commands that are still running.
-- Remote access is the user's tunnel (Tailscale Funnel, Cloudflare Tunnel, a VPS). The gateway only
-  binds to localhost by default.
+- Remote access is nolune's relay (see [The relay](#the-relay)) or the user's own tunnel (Tailscale
+  Funnel, Cloudflare Tunnel, a VPS). The gateway only binds to localhost by default.
 - macOS privacy (TCC): the background `node` process needs Full Disk Access to reach Documents,
   Desktop, Photos and Mail. Setup prints the path. Granting it applies to everything that node
   binary runs.
@@ -1620,3 +1665,4 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
+- End-to-end encryption through the relay (see [The relay](#the-relay)).

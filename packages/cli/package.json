@@ -13,6 +13,7 @@
 		"check": "tsc -p ."
 	},
 	"dependencies": {
-		"@nolune/core": "workspace:*"
+		"@nolune/core": "workspace:*",
+		"@nolune/relay": "workspace:*"
 	}
 }

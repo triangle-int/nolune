@@ -1,0 +1,20 @@
+{
+	email {$ACME_EMAIL}
+}
+
+# The relay's own host, and every gateway's address, with one wildcard certificate for the
+# domain. Let's Encrypt checks it through a DNS record, which Caddy makes with a Cloudflare token.
+{$RELAY_HOST}, *.{$RELAY_DOMAIN} {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+	reverse_proxy relay:8080 {
+		# Event streams go on as they come, not when a buffer fills.
+		flush_interval -1
+		transport http {
+			# Less than the relay keeps an idle connection (75 s), so Caddy never reuses one the
+			# relay has just closed.
+			keepalive 60s
+		}
+	}
+}
