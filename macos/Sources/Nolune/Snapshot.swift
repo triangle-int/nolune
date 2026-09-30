@@ -55,13 +55,20 @@ enum Snapshot {
 				$0.email = "tim@example.com"
 				$0.password = "ember7-quartz-42abcd-nova9k"
 			}),
-			("10-files", { $0.pose(.files) }),
-			("11-files-granted", {
+			("10-address", {
+				$0.pose(.address)
+				$0.relay.pose(name: "smiths")
+			}),
+			("11-files", { $0.pose(.files) }),
+			("12-files-granted", {
 				$0.pose(.files, granted: true)
 				$0.sky.bloom = 1
 			}),
-			("12-starting", { $0.pose(.service) }),
-			("13-ready", { $0.pose(.service, service: .ready) })
+			("13-starting", { $0.pose(.service) }),
+			("14-ready", {
+				$0.pose(.service, service: .ready)
+				$0.relay.pose(name: "smiths", url: "https://smiths.\(RelaySetup.domain)")
+			})
 		]
 		for (name, pose) in screens {
 			let onboarding = Onboarding()

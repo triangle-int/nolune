@@ -38,6 +38,8 @@ final class GatewayStatus: ObservableObject {
 /// The menu bar extra: is it running, who's in, where it lives, and a few things to do.
 struct StatusMenu: View {
 	@ObservedObject var status: GatewayStatus
+	/// Opens the address step (AppDelegate.showAddress), for a Mac without the relay's address.
+	var openFromAnywhere: @MainActor () -> Void = {}
 	@State private var copied = false
 
 	private var address: String {
@@ -99,6 +101,9 @@ struct StatusMenu: View {
 
 			MenuRow(title: "Open nolune", icon: "arrow.up.right.square") {
 				NSWorkspace.shared.open(Runtime.shared.origin)
+			}
+			if Runtime.shared.config.relay == nil {
+				MenuRow(title: "Open it from anywhere…", icon: "globe") { openFromAnywhere() }
 			}
 			if status.running == false {
 				MenuRow(title: "Start", icon: "play") {
