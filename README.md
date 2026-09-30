@@ -110,17 +110,14 @@ nolune key set openai       # or anthropic / openrouter
 
 To bring someone into the family:
 
-1. Create their account on the host computer:
+1. As an admin, open **People** from the menu under your name and **Create invite link**. Send it
+   to them: they pick their name, email and password. Or **Add a person** and send them the
+   address and the password nolune shows. (At the terminal: `nolune user invite Anna`, or
+   `nolune user create Anna anna@example.com`.)
+2. Open **People & profile** in the profile you want to share, and add them by name or email.
 
-   ```sh
-   nolune user create Anna anna@example.com
-   ```
-
-2. Give them the address and the password printed by the command.
-3. Open **People & profile** in the profile you want to share, and add them by name or email.
-
-They can create their own profiles and add existing users too. Accounts are created by the host's
-administrator; joining a profile doesn't send an email invitation.
+They can create their own profiles and add existing users too. Only admins make accounts; joining
+a profile doesn't send an email invitation.
 
 > [!IMPORTANT]
 > nolune is built for people you trust. The agent runs commands with your host account's permissions,
@@ -152,8 +149,8 @@ The installed gateway listens on `127.0.0.1:5780`. Other devices reach it in one
 
 Keep the host awake when the family needs access. On macOS, access to protected folders may
 require Full Disk Access for the Node binary; setup prints its path. The macOS app in
-[`macos/`](macos/README.md) does the setup and Full Disk Access for you, with its own Node, and
-runs nolune while it's open in the menu bar.
+[`macos/`](macos/README.md) does the setup, the relay's address and Full Disk Access for you, with
+its own Node, and runs nolune while it's open in the menu bar.
 
 See the [documentation](https://nolune.dev/docs/) (its pages are in
 [docs/src/content/docs](docs/src/content/docs)) for model connections, subscription integrations,

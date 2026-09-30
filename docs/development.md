@@ -53,6 +53,26 @@ checks the tag against `package.json`, runs format, lint, types and tests, and p
 [trusted publishing](https://docs.npmjs.com/trusted-publishers/), so there's no npm token in the
 repository's secrets, and npm adds provenance on its own.
 
+The same tag builds the macOS app (`macos/scripts/build-app.sh`) on a Mac for each architecture,
+checks that it runs, and, once npm has the version, makes the GitHub release with
+`nolune-macos-apple-silicon.dmg` and `nolune-macos-intel.dmg`. Named without the version, they're
+always at `https://github.com/triangle-int/nolune/releases/latest/download/<name>`, for the site to
+link to. Running Publish by hand (Actions > Publish > Run workflow) only builds the app, which is
+the way to try the signing without releasing anything: the disk images are in the run's artifacts.
+
+For macOS to open the app on other Macs, it's signed with a Developer ID and notarized by Apple,
+with these secrets (Settings > Secrets and variables > Actions). Without them the app is ad-hoc
+signed, the run warns, and the release says how to open it anyway.
+
+- `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD`: a Developer ID Application certificate
+  (it needs the [Apple Developer Program](https://developer.apple.com/programs/); make it in Xcode,
+  Settings > Accounts > Manage Certificates). Export it with its private key from Keychain Access
+  as a .p12 with a password, then `base64 -i certificate.p12 | pbcopy` for the first secret.
+- `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`, for notarizing: in App Store Connect,
+  Users and Access > Integrations > App Store Connect API, make a team key with the Developer
+  role. The first secret is the downloaded .p8 file's contents, the second the key's ID, the third
+  the Issuer ID above the list.
+
 Once, by hand: publish the first version from your computer (`npm login`, then `npm publish`), since
 a trusted publisher is set on a package that exists, and push its tag as usual (the workflow finds
 it on npm and only runs the checks). Then, on npmjs.com under the package's

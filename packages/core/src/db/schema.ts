@@ -108,6 +108,24 @@ export const accountRelations = relations(account, ({ one }) => ({
 
 // --- app tables ---
 
+/**
+ * A link that lets someone make their own account (`/invite/<token>`, invites.ts). Only the
+ * token's SHA-256 is kept, so the link is shown once, when it's made. Making an account uses it up.
+ */
+export const invite = sqliteTable('invite', {
+	id: text('id').primaryKey(),
+	tokenHash: text('token_hash').notNull().unique(),
+	/** Who it's for, as the admin wrote it: the name the form starts with. */
+	name: text('name'),
+	/**
+	 * The admin who made it; it works only while they're one. Null for one made with `nolune user
+	 * invite` at this computer.
+	 */
+	createdBy: text('created_by').references(() => user.id, { onDelete: 'cascade' }),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
+	expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull()
+});
+
 export const profile = sqliteTable('profile', {
 	id: text('id').primaryKey(),
 	/** Folder name under ~/.nolune/profiles. Fixed at creation. */

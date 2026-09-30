@@ -191,7 +191,11 @@ could. \`nolune relay disable\` stops using it.`);
 			try {
 				status = await gatewayStatus(relay);
 			} catch (err) {
-				io.log(`Gateway  unknown: ${(err as Error).message}`);
+				io.log(
+					err instanceof RelayRefusal && err.status === 401
+						? "Gateway  the relay doesn't know this address any more: nolune asks for it again when it connects, or `nolune relay enable` now"
+						: `Gateway  unknown: ${(err as Error).message}`
+				);
 				return;
 			}
 			const { online, traffic, blocked } = status;
@@ -244,8 +248,10 @@ const READY_TIMEOUT_MS = 30_000;
 const PING_MS = 30_000;
 const PING_TIMEOUT_MS = 15_000;
 const MAX_BACKOFF_MS = 60_000;
-/** When the relay doesn't know the gateway: rarely, in case it comes back (a restored relay). */
+/** When the relay doesn't know the gateway and it couldn't get its name back: try again later. */
 const UNKNOWN_RETRY_MS = 5 * 60_000;
+/** Asking for the name again counts as a registration, which the relay limits: once an hour. */
+const RECLAIM_EVERY_MS = 60 * 60_000;
 /** As the relay's (packages/relay/src/relay.ts): uploads don't crawl over a long distance. */
 const STREAM_WINDOW_BYTES = 1024 * 1024;
 const SESSION_WINDOW_BYTES = 16 * 1024 * 1024;
@@ -274,6 +280,61 @@ export function connectRelay(
 	let failures = 0;
 	let reported = false;
 	let wasOnline = false;
+	let reclaimedAt = 0;
+
+	/** config.json's address, when it's still the one this connection is for. */
+	const sameAddress = (c: RelayConfig | undefined): c is RelayConfig =>
+		c?.server === relay.server && c.name === relay.name;
+
+	/**
+	 * The relay doesn't know the address: it let the name go while nolune was away for months (or
+	 * its operator removed it). Asks for the same name again, and keeps the new token in
+	 * config.json. When someone else has the name now, nolune stops using it, so nothing opens their
+	 * nolune for this one: 'stop'. 'later' when the relay couldn't be asked, or was asked lately.
+	 */
+	async function reclaim(): Promise<'back' | 'stop' | 'later'> {
+		const current = readConfig().relay;
+		if (!sameAddress(current)) {
+			log(
+				'the relay address in config.json changed, so nolune stopped using this one. ' +
+					RESTART_HINT
+			);
+			return 'stop';
+		}
+		// `nolune relay enable` asked for it again already.
+		if (current.token !== hello.token) {
+			hello.token = current.token;
+			return 'back';
+		}
+		if (Date.now() - reclaimedAt < RECLAIM_EVERY_MS) return 'later';
+		reclaimedAt = Date.now();
+		try {
+			const registration = await registerGateway(relay.server, relay.name);
+			hello.token = registration.token;
+			updateConfig((c) => {
+				if (sameAddress(c.relay)) c.relay = { ...c.relay, token: registration.token };
+			});
+			log(`the relay had let ${relay.url} go while nolune was away, so nolune asked for it again`);
+			return 'back';
+		} catch (err) {
+			if (err instanceof RelayRefusal && err.status === 409) {
+				updateConfig((c) => {
+					if (sameAddress(c.relay)) delete c.relay;
+				});
+				log(
+					`the relay let ${relay.url} go while nolune was away, and someone else has it now, so nolune stopped using it. \`nolune relay enable\` gets a new address; then restart nolune.`
+				);
+				return 'stop';
+			}
+			if (!reported) {
+				log(
+					`the relay doesn't know this address (${relay.name}) any more, and nolune couldn't ask for it again (${(err as Error).message}). It tries again every hour, or run \`nolune relay enable\` and restart nolune.`
+				);
+			}
+			reported = true;
+			return 'later';
+		}
+	}
 
 	/** Passes one request to the web server, and its answer back, both streamed. */
 	function forward(stream: ServerHttp2Stream, headers: Http2Headers): void {
@@ -390,13 +451,14 @@ export function connectRelay(
 				return log(`the relay needs a newer nolune (${reason}): update nolune and restart it.`);
 			}
 			if (code === CLOSE.unknown) {
-				if (!reported) {
-					log(
-						`the relay doesn't know this address (${relay.name}) or its token. Run \`nolune relay enable\` and restart nolune; until then it tries every 5 minutes.`
-					);
-				}
-				reported = true;
-				return retryIn(UNKNOWN_RETRY_MS);
+				// A config.json it can't read or write is tried again later, as a relay that can't be asked.
+				void reclaim()
+					.catch(() => 'later' as const)
+					.then((outcome) => {
+						if (stopped || outcome === 'stop') return;
+						retryIn(outcome === 'back' ? 0 : UNKNOWN_RETRY_MS);
+					});
+				return;
 			}
 			if (connected) {
 				log('lost the connection to the relay; reconnecting');

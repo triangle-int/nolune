@@ -18,7 +18,9 @@ To deploy on Vercel, set the project's Root Directory to `site`. adapter-static 
 writes its output format, so there's nothing else to configure.
 
 `/docs` is a separate site ([docs/](../docs)), deployed as its own Vercel project. `vercel.json`
-forwards `/docs` and everything under it to that project's address, so it opens on this domain. Its
+forwards `/docs` and everything under it to that project's address, so it opens on this domain.
+The rule is `/docs/:path(.*)` rather than `/docs/:path*`, which on Vercel doesn't match a path
+ending in a slash, as every docs page does. Its
 links here skip SvelteKit's router, and the prerender ignores them. Locally, run the docs with
 `pnpm --filter @nolune/docs dev`.
 

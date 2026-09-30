@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 
 /**
- * `nolune --snapshot <folder>`: draws the intro at fixed moments, each screen after it, and the
- * menu bar extra to PNGs, without doing anything (no CLI, no service, no Full Disk Access checks).
- * CI keeps them, to see the app without running it.
+ * `nolune --snapshot <folder>`: draws the intro at fixed moments (in the window, and bursting out
+ * of it over a desktop), each screen after it, and the menu bar extra to PNGs, without doing
+ * anything (no CLI, no service, no Full Disk Access checks). CI keeps them, to see the app without
+ * running it.
  */
 enum Snapshot {
 	/// Set while snapshotting: the moment the sky and the intro are drawn at, in seconds.
@@ -45,6 +46,28 @@ enum Snapshot {
 			await save(OnboardingView(onboarding: onboarding), size: size, as: "intro-\(name)", in: folder)
 		}
 
+		// And out of the window, over a desktop: the same sparks at each moment.
+		let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+		let window = CGRect(
+			x: screen.midX - size.width / 2, y: screen.midY - size.height / 2,
+			width: size.width, height: size.height
+		)
+		let scene = OutburstScene(window: window, screen: screen)
+		let outside: [(String, Double)] = [
+			("01-gather", IntroTiming.bang - 0.15),
+			("02-bang", IntroTiming.bang + 0.1),
+			("03-burst", IntroTiming.bang + 0.4),
+			("04-sparks", IntroTiming.bang + 0.9),
+			("05-embers", IntroTiming.bang + 1.6)
+		]
+		for (name, t) in outside {
+			clock = t
+			let onboarding = Onboarding()
+			onboarding.pose(.intro, burstsOut: true)
+			let desktop = Desktop(onboarding: onboarding, scene: scene, screen: screen, t: t)
+			await save(desktop, size: screen.size, as: "desktop-\(name)", in: folder)
+		}
+
 		intro = false
 		clock = 30
 		let screens: [(String, @MainActor (Onboarding) -> Void)] = [
@@ -55,13 +78,20 @@ enum Snapshot {
 				$0.email = "tim@example.com"
 				$0.password = "ember7-quartz-42abcd-nova9k"
 			}),
-			("10-files", { $0.pose(.files) }),
-			("11-files-granted", {
+			("10-address", {
+				$0.pose(.address)
+				$0.relay.pose(name: "smiths")
+			}),
+			("11-files", { $0.pose(.files) }),
+			("12-files-granted", {
 				$0.pose(.files, granted: true)
 				$0.sky.bloom = 1
 			}),
-			("12-starting", { $0.pose(.service) }),
-			("13-ready", { $0.pose(.service, service: .ready) })
+			("13-starting", { $0.pose(.service) }),
+			("14-ready", {
+				$0.pose(.service, service: .ready)
+				$0.relay.pose(name: "smiths", url: "https://smiths.\(RelaySetup.domain)")
+			})
 		]
 		for (name, pose) in screens {
 			let onboarding = Onboarding()
@@ -69,22 +99,23 @@ enum Snapshot {
 			await save(OnboardingView(onboarding: onboarding), size: size, as: name, in: folder)
 		}
 
-		let status = GatewayStatus()
-		status.pose(
-			running: true,
-			people: [
-				Runtime.Person(name: "Tim", email: "tim@example.com", isAdmin: true),
-				Runtime.Person(name: "Anna", email: "anna@example.com", isAdmin: false),
-				Runtime.Person(name: "Grandma", email: "grandma@example.com", isAdmin: false)
-			]
-		)
-		// The menu follows the system's appearance: both.
+		let people = [
+			Runtime.Person(name: "Tim", email: "tim@example.com", isAdmin: true),
+			Runtime.Person(name: "Anna", email: "anna@example.com", isAdmin: false),
+			Runtime.Person(name: "Grandma", email: "grandma@example.com", isAdmin: false)
+		]
+		// The menu follows the system's appearance: both. Dark with the relay's address, light with
+		// this Mac's and the way to get one.
+		let relayed = GatewayStatus()
+		relayed.pose(running: true, people: people, relay: URL(string: "https://smiths.\(RelaySetup.domain)"))
 		await save(
-			StatusMenu(status: status).background(Color(hex: 0x2A2A2A)).environment(\.colorScheme, .dark),
+			StatusMenu(status: relayed).background(Color(hex: 0x2A2A2A)).environment(\.colorScheme, .dark),
 			size: nil, as: "15-menu-dark", in: folder
 		)
+		let local = GatewayStatus()
+		local.pose(running: true, people: people)
 		await save(
-			StatusMenu(status: status).background(Color(hex: 0xF2F2F2)).environment(\.colorScheme, .light),
+			StatusMenu(status: local).background(Color(hex: 0xF2F2F2)).environment(\.colorScheme, .light),
 			size: nil, as: "16-menu-light", in: folder
 		)
 	}
@@ -122,6 +153,31 @@ enum Snapshot {
 
 	private static func write(_ rep: NSBitmapImageRep, to url: URL) {
 		try? rep.representation(using: .png, properties: [:])?.write(to: url)
+	}
+
+	/// The onboarding window in the middle of a stand-in desktop, and the outburst over them.
+	private struct Desktop: View {
+		let onboarding: Onboarding
+		let scene: OutburstScene
+		let screen: CGRect
+		let t: Double
+
+		var body: some View {
+			ZStack {
+				LinearGradient(
+					colors: [Color(hex: 0x23406E), Color(hex: 0x5B4B8A), Color(hex: 0xC98B73)],
+					startPoint: .topLeading, endPoint: .bottomTrailing
+				)
+				OnboardingView(onboarding: onboarding)
+					.frame(width: OnboardingView.size.width, height: OnboardingView.size.height)
+					.clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+					.shadow(color: .black.opacity(0.45), radius: 30, y: 14)
+				Canvas { context, _ in
+					scene.draw(&context, screen: screen, t: t)
+				}
+			}
+			.frame(width: screen.width, height: screen.height)
+		}
 	}
 
 	/// The sky as it would be at `clock`: a fresh one, run up to then frame by frame.

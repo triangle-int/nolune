@@ -189,6 +189,12 @@ export const fr: Messages = {
 		nameTooLong: (max: number) => `Un nom peut compter au plus ${max} caractères.`,
 		nameHasAt: 'Un nom ne peut pas contenir de @.',
 		nameTaken: (name: string) => `Quelqu’un s’appelle déjà ${name}.`,
+		emailInvalid: 'Saisissez une adresse e-mail, comme anna@example.com.',
+		emailTaken: 'Quelqu’un se connecte déjà avec cette adresse.',
+		passwordTooShort: (min: number) => `Un mot de passe doit faire au moins ${min} caractères.`,
+		passwordTooSimple:
+			'Utilisez 3 parmi : minuscules, majuscules, chiffres et symboles. Ou faites-le de 20 caractères ou plus.',
+		passwordTooRepetitive: 'Ce mot de passe répète trop les mêmes caractères.',
 		notPicture: 'nolune ne peut pas utiliser cette image.',
 		pictureTooLarge: 'Cette image est trop grande.'
 	},
@@ -199,6 +205,7 @@ export const fr: Messages = {
 		allProfiles: 'Tous les profils',
 		card: 'Votre fiche',
 		modelsAndKeys: 'Modèles et clés',
+		people: 'Personnes',
 		logOut: 'Se déconnecter'
 	},
 
@@ -979,7 +986,7 @@ export const fr: Messages = {
 		password: 'Mot de passe',
 		signingIn: 'Connexion…',
 		forgot:
-			'Mot de passe oublié ? Demandez à la personne qui a installé nolune d’exécuter {command}.',
+			'Mot de passe oublié ? Demandez à un administrateur de le réinitialiser dans Personnes, ou d’exécuter {command}.',
 		tooManyAttempts: 'Trop de tentatives. Patientez une minute et réessayez.',
 		wrongPassword: 'Adresse e-mail ou mot de passe incorrect.'
 	},
@@ -1233,5 +1240,91 @@ export const fr: Messages = {
 				'Un modèle rapide et compétent garde les discussions fluides : chaque commande qui fait plus que regarder lui coûte une courte requête.',
 			saved: 'Enregistré. S’applique dès la prochaine commande.'
 		}
+	},
+
+	people: {
+		title: 'Personnes',
+		hint: 'Tous ceux qui peuvent se connecter à nolune. Toute personne ayant un compte peut faire faire n’importe quoi à l’agent sur cet ordinateur : n’ajoutez que des personnes de confiance. Pour partager un profil avec quelqu’un, ajoutez-le dans Personnes et profil de ce profil.',
+		accounts: 'Comptes',
+		you: 'Vous',
+		admin: 'Admin',
+		resetPassword: 'Réinitialiser le mot de passe',
+		makeAdmin: 'Rendre administrateur',
+		removeAdmin: 'Retirer les droits d’admin',
+		resetTitle: (name: string) => `Réinitialiser le mot de passe de ${name} ?`,
+		resetBody:
+			'nolune crée un nouveau mot de passe et l’affiche une seule fois. L’ancien ne fonctionne plus ; les appareils déjà connectés le restent.',
+		reset: 'Réinitialiser',
+		newPassword: (name: string) =>
+			`Le nouveau mot de passe de ${name}. Il n’est affiché que cette fois : envoyez-le-lui.`,
+		nowAdmin: (name: string) => `${name} est maintenant administrateur.`,
+		noLongerAdmin: (name: string) => `${name} n’est plus administrateur.`,
+		removeTitle: (name: string) => `Retirer ${name} ?`,
+		removeBody:
+			'Cette personne est déconnectée et ne peut plus se connecter. Ses messages restent dans les discussions partagées, et un profil dont elle est le seul membre reste sur cet ordinateur, sans personne. C’est irréversible.',
+		removed: (name: string) => `${name} a été retiré.`,
+		notYourself: 'Impossible sur votre propre compte. Demandez à un autre administrateur.',
+		gone: 'Ce compte n’existe plus.',
+		add: 'Ajouter une personne',
+		addHint:
+			'nolune crée son mot de passe et l’affiche une seule fois, pour que vous le lui envoyiez avec l’adresse. Ou envoyez un lien d’invitation, plus bas, pour qu’elle choisisse le sien.',
+		name: 'Nom',
+		namePlaceholder: 'Anna',
+		email: 'E-mail',
+		emailPlaceholder: 'anna@example.com',
+		makeThemAdmin: 'Administrateur',
+		adminHint: 'Les administrateurs gèrent les modèles, les clés et les personnes.',
+		adding: 'Ajout…',
+		added: (name: string) =>
+			`${name} a été ajouté. Envoyez-lui l’adresse et ce mot de passe ; il n’est affiché que cette fois.`,
+		address: 'Adresse',
+		password: 'Mot de passe',
+		copyAddress: 'Copier l’adresse',
+		copyPassword: 'Copier le mot de passe',
+		invites: 'Liens d’invitation',
+		invitesHint: (days: number) =>
+			`Un lien permet à quelqu’un de créer son propre compte : il choisit son nom, son e-mail et son mot de passe, donc aucun mot de passe n’est à envoyer. Chaque lien sert une fois, pendant ${days} jours, et crée un compte ordinaire.`,
+		newInvite: 'Créer un lien d’invitation',
+		inviteFor: 'Pour qui',
+		optional: '(facultatif)',
+		inviteForPlaceholder: 'Mamie',
+		inviteForHint: 'Son nom est déjà rempli dans le formulaire. Il peut le changer.',
+		create: 'Créer',
+		creating: 'Création…',
+		inviteCreated: (name: string | null) =>
+			`${name ? `Envoyez ce lien à ${name}` : 'Envoyez ce lien à la personne'}. Il n’est affiché que cette fois.`,
+		copyLink: 'Copier le lien',
+		noInvites: 'Aucun lien d’invitation en attente.',
+		inviteTitle: (name: string | null) => (name ? `Pour ${name}` : 'Lien d’invitation'),
+		inviteDetails: (by: string | null, until: string) =>
+			`${by ? `Créé par ${by}` : 'Créé sur cet ordinateur'} · valable jusqu’au ${until}`,
+		revoke: 'Révoquer',
+		revoked: 'Révoqué. Le lien ne fonctionne plus.'
+	},
+
+	invite: {
+		title: 'Rejoindre nolune',
+		from: (name: string) => `${name} vous a invité.`,
+		hint: 'Créez votre compte : vous vous connecterez avec cet e-mail et ce mot de passe.',
+		name: 'Votre nom',
+		nameHint:
+			'Tout le monde dans vos profils le voit, et nolune le lit avec chaque message que vous envoyez.',
+		email: 'Adresse e-mail',
+		password: 'Mot de passe',
+		passwordAgain: 'Confirmez le mot de passe',
+		passwordHint: (min: number) =>
+			`Au moins ${min} caractères, avec 3 parmi : minuscules, majuscules, chiffres et symboles. Ou 20 caractères ou plus, quels qu’ils soient.`,
+		mismatch: 'Les mots de passe ne correspondent pas.',
+		create: 'Créer le compte',
+		creating: 'Création de votre compte…',
+		until: (date: string) => `Ce lien est valable jusqu’au ${date}.`,
+		goneTitle: 'Ce lien ne fonctionne plus',
+		goneBody:
+			'Il a déjà servi, il a expiré ou il a été révoqué. Demandez-en un nouveau à la personne qui vous l’a envoyé.',
+		signIn: 'Se connecter',
+		signedInTitle: (name: string) => `Vous êtes connecté en tant que ${name}`,
+		signedInBody:
+			'Ce lien sert à créer un nouveau compte. Envoyez-le à la personne à qui il est destiné, ou déconnectez-vous d’abord pour l’utiliser.',
+		open: 'Ouvrir nolune'
 	}
 };

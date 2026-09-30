@@ -246,6 +246,41 @@ describe('the connection', () => {
 		await vi.waitFor(() => expect(log.at(-1)).toMatch(/given back/));
 	});
 
+	it('asks for its address again when the relay let it go, and keeps the new token', async () => {
+		await runCli(['relay', 'enable', '--name', 'smiths', '--server', relayUrl], testIo().io);
+		const before = readConfig().relay!;
+		await fetch(`${relayUrl}/api/gateways/smiths`, {
+			method: 'DELETE',
+			headers: { authorization: `Bearer ${before.token}` }
+		});
+
+		const { log } = await connect(before);
+		expect(log[0]).toBe(
+			'the relay had let http://smiths.nolune.test go while nolune was away, so nolune asked for it again'
+		);
+		expect(readConfig().relay).toMatchObject({ name: 'smiths', url: before.url });
+		expect(readConfig().relay?.token).not.toBe(before.token);
+		expect((await request('/')).body.toString()).toBe('hello');
+	});
+
+	it('stops using an address someone else has now, and forgets it', async () => {
+		await runCli(['relay', 'enable', '--name', 'smiths', '--server', relayUrl], testIo().io);
+		const before = readConfig().relay!;
+		await fetch(`${relayUrl}/api/gateways/smiths`, {
+			method: 'DELETE',
+			headers: { authorization: `Bearer ${before.token}` }
+		});
+		const theirs = await register('smiths');
+
+		const log: string[] = [];
+		links.push(connectRelay(before, { host: '127.0.0.1', port: webPort }, (m) => log.push(m)));
+		await vi.waitFor(() =>
+			expect(log.at(-1)).toMatch(/someone else has it now, so nolune stopped/)
+		);
+		expect(readConfig().relay).toBeUndefined();
+		await connect(theirs);
+	});
+
 	it("keeps trying a relay it can't reach, and says so once", async () => {
 		const log: string[] = [];
 		links.push(
@@ -350,6 +385,10 @@ describe('nolune relay', () => {
 			method: 'DELETE',
 			headers: { authorization: `Bearer ${forgotten.token}` }
 		});
+
+		const status = testIo();
+		await runCli(['relay', 'status'], status.io);
+		expect(status.out()).toContain("Gateway  the relay doesn't know this address any more");
 
 		const again = testIo();
 		expect(await runCli(['relay', 'enable'], again.io)).toBe(0);

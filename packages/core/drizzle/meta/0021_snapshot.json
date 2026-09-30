@@ -1,8 +1,8 @@
 {
 	"version": "6",
 	"dialect": "sqlite",
-	"id": "6e926557-58df-4a7f-8b6b-b57cf25a7677",
-	"prevId": "b9bb5c50-06a7-456b-a980-20963c1632a7",
+	"id": "7b849bff-2210-4320-be7f-cdfc25718b63",
+	"prevId": "6e926557-58df-4a7f-8b6b-b57cf25a7677",
 	"tables": {
 		"account": {
 			"name": "account",
@@ -175,6 +175,54 @@
 					"tableFrom": "background_command",
 					"tableTo": "conversation",
 					"columnsFrom": ["conversation_id"],
+					"columnsTo": ["id"],
+					"onDelete": "cascade",
+					"onUpdate": "no action"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		},
+		"card": {
+			"name": "card",
+			"columns": {
+				"user_id": {
+					"name": "user_id",
+					"type": "text",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"name": {
+					"name": "name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"created_at": {
+					"name": "created_at",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(cast(unixepoch('subsecond') * 1000 as integer))"
+				}
+			},
+			"indexes": {
+				"card_name_unique": {
+					"name": "card_name_unique",
+					"columns": ["name"],
+					"isUnique": true
+				}
+			},
+			"foreignKeys": {
+				"card_user_id_user_id_fk": {
+					"name": "card_user_id_user_id_fk",
+					"tableFrom": "card",
+					"tableTo": "user",
+					"columnsFrom": ["user_id"],
 					"columnsTo": ["id"],
 					"onDelete": "cascade",
 					"onUpdate": "no action"
@@ -855,6 +903,14 @@
 					"primaryKey": false,
 					"notNull": true,
 					"autoincrement": false
+				},
+				"source": {
+					"name": "source",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "'learning'"
 				},
 				"op": {
 					"name": "op",

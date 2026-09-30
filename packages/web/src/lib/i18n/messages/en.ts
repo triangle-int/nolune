@@ -104,6 +104,12 @@ export const en = {
 		nameTooLong: (max: number) => `A name can be at most ${max} characters.`,
 		nameHasAt: 'A name can’t have an @ in it.',
 		nameTaken: (name: string) => `Someone is already called ${name}.`,
+		emailInvalid: 'Type an email address, like anna@example.com.',
+		emailTaken: 'Someone already signs in with that email.',
+		passwordTooShort: (min: number) => `A password needs at least ${min} characters.`,
+		passwordTooSimple:
+			'Use 3 of: lowercase letters, capitals, digits and symbols. Or make it 20 characters or more.',
+		passwordTooRepetitive: 'That password repeats the same characters too much.',
 		notPicture: 'That isn’t a picture nolune can use.',
 		pictureTooLarge: 'That picture is too large.'
 	},
@@ -114,6 +120,7 @@ export const en = {
 		allProfiles: 'All profiles',
 		card: 'Your card',
 		modelsAndKeys: 'Models & keys',
+		people: 'People',
 		logOut: 'Log out'
 	},
 
@@ -905,7 +912,7 @@ export const en = {
 		email: 'Email address',
 		password: 'Password',
 		signingIn: 'Signing in…',
-		forgot: 'Forgot your password? Ask whoever set up nolune to run {command}.',
+		forgot: 'Forgot your password? Ask an admin to reset it under People, or to run {command}.',
 		tooManyAttempts: 'Too many attempts. Wait a minute and try again.',
 		wrongPassword: 'Wrong email or password.'
 	},
@@ -1145,6 +1152,93 @@ export const en = {
 				'A fast, capable model keeps chats quick: every command that does more than look costs a short call to it.',
 			saved: 'Saved. It applies from the next command.'
 		}
+	},
+
+	/** Everyone with an account, for admins: adding people, invite links, passwords. */
+	people: {
+		title: 'People',
+		hint: 'Everyone who can sign in to nolune. Anyone with an account can have the agent do anything on this computer, so add only people you trust. To share a profile with someone, add them under its People & profile.',
+		accounts: 'Accounts',
+		you: 'You',
+		admin: 'Admin',
+		resetPassword: 'Reset password',
+		makeAdmin: 'Make admin',
+		removeAdmin: 'Remove admin',
+		resetTitle: (name: string) => `Reset ${name}'s password?`,
+		resetBody:
+			'nolune makes a new password and shows it once. The old one stops working; devices already signed in stay signed in.',
+		reset: 'Reset',
+		newPassword: (name: string) =>
+			`${name}'s new password. It's shown only this once: send it to them.`,
+		nowAdmin: (name: string) => `${name} is now an admin.`,
+		noLongerAdmin: (name: string) => `${name} is no longer an admin.`,
+		removeTitle: (name: string) => `Remove ${name}?`,
+		removeBody:
+			"They're signed out and can't sign in again. Their messages stay in shared chats, and a profile only they belong to stays on this computer with nobody in it. This can't be undone.",
+		removed: (name: string) => `Removed ${name}.`,
+		notYourself: "You can't do that to your own account. Ask another admin.",
+		gone: 'That account no longer exists.',
+		add: 'Add a person',
+		addHint:
+			'nolune makes their password and shows it once, for you to send them with the address. Or send an invite link, below, and they pick their own.',
+		name: 'Name',
+		namePlaceholder: 'Anna',
+		email: 'Email',
+		emailPlaceholder: 'anna@example.com',
+		makeThemAdmin: 'Admin',
+		adminHint: 'Admins manage models, keys and people.',
+		adding: 'Adding…',
+		added: (name: string) =>
+			`Added ${name}. Send them the address and this password; it's shown only this once.`,
+		address: 'Address',
+		password: 'Password',
+		copyAddress: 'Copy the address',
+		copyPassword: 'Copy the password',
+		invites: 'Invite links',
+		invitesHint: (days: number) =>
+			`A link lets someone make their own account: they pick their name, email and password, so no password has to be sent. Each link works once, for ${days} days, and makes an ordinary account.`,
+		newInvite: 'Create invite link',
+		inviteFor: 'Who it’s for',
+		optional: '(optional)',
+		inviteForPlaceholder: 'Grandma',
+		inviteForHint: 'Their name starts filled in on the form. They can change it.',
+		create: 'Create',
+		creating: 'Creating…',
+		inviteCreated: (name: string | null) =>
+			`${name ? `Send this link to ${name}` : 'Send this link to them'}. It's shown only this once.`,
+		copyLink: 'Copy the link',
+		noInvites: 'No invite links waiting to be used.',
+		inviteTitle: (name: string | null) => (name ? `For ${name}` : 'Invite link'),
+		inviteDetails: (by: string | null, until: string) =>
+			`${by ? `Made by ${by}` : 'Made at this computer'} · works until ${until}`,
+		revoke: 'Take back',
+		revoked: 'Taken back. The link no longer works.'
+	},
+
+	/** The page an invite link opens, for someone without an account yet. */
+	invite: {
+		title: 'Join nolune',
+		from: (name: string) => `${name} invited you.`,
+		hint: "Make your account: you'll sign in with this email and password.",
+		name: 'Your name',
+		nameHint: 'Everyone in your profiles sees it, and nolune reads it with each message you send.',
+		email: 'Email address',
+		password: 'Password',
+		passwordAgain: 'Password again',
+		passwordHint: (min: number) =>
+			`At least ${min} characters, with 3 of: lowercase letters, capitals, digits and symbols. Or 20 characters or more of anything.`,
+		mismatch: "The passwords don't match.",
+		create: 'Create account',
+		creating: 'Creating your account…',
+		until: (date: string) => `This link works until ${date}.`,
+		goneTitle: "This link doesn't work anymore",
+		goneBody:
+			'It was used already, it expired, or it was taken back. Ask whoever sent it for a new one.',
+		signIn: 'Sign in',
+		signedInTitle: (name: string) => `You're signed in as ${name}`,
+		signedInBody:
+			"This link is for making a new account. Send it to the person it's for, or log out first to use it.",
+		open: 'Open nolune'
 	}
 };
 

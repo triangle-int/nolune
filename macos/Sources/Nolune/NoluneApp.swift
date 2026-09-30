@@ -25,7 +25,7 @@ struct NoluneApp: App {
 		// The menu bar extra comes in once the onboarding is done; the onboarding's own window is
 		// AppKit's (AppDelegate), so the app can open without one.
 		MenuBarExtra(isInserted: $onboarded) {
-			StatusMenu(status: delegate.status)
+			StatusMenu(status: delegate.status, openFromAnywhere: { delegate.showAddress() })
 		} label: {
 			Image(nsImage: MenuIcon.image)
 		}
@@ -71,6 +71,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private func showOnboarding() {
 		let onboarding = Onboarding()
 		onboarding.onFinish = { [weak self] in self?.closeOnboarding() }
+		present(NSHostingView(rootView: OnboardingView(onboarding: onboarding)))
+		// Set before the intro starts, which waits for this to return.
+		if let window { onboarding.outburst = Outburst(around: window) }
+	}
+
+	/// A window of the onboarding's size and sky, with `content` in it.
+	private func present(_ content: NSView) {
 		let window = NSWindow(
 			contentRect: NSRect(origin: .zero, size: OnboardingView.size),
 			styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
@@ -83,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		window.appearance = NSAppearance(named: .darkAqua)
 		window.backgroundColor = NSColor(Theme.space)
 		window.isReleasedWhenClosed = false
-		window.contentView = NSHostingView(rootView: OnboardingView(onboarding: onboarding))
+		window.contentView = content
 		// The content goes under the title bar, so the design's size is the whole window's.
 		window.setFrame(NSRect(origin: .zero, size: OnboardingView.size), display: false)
 		window.center()
@@ -93,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		NSApp.setActivationPolicy(.regular)
 		window.makeKeyAndOrderFront(nil)
 		NSApp.activate(ignoringOtherApps: true)
+		if let closing { NotificationCenter.default.removeObserver(closing) }
 		closing = NotificationCenter.default.addObserver(
 			forName: NSWindow.willCloseNotification, object: window, queue: .main
 		) { [weak self] _ in
@@ -102,6 +110,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 	private func closeOnboarding() {
 		window?.close()
+	}
+
+	/**
+	 * The onboarding's address step on its own, from the menu bar: for a Mac set up without the
+	 * relay. Once there's an address, the gateway starts again to connect to it.
+	 */
+	func showAddress() {
+		if let window {
+			window.makeKeyAndOrderFront(nil)
+			NSApp.activate(ignoringOtherApps: true)
+			return
+		}
+		let relay = RelaySetup()
+		// The onboarding's sky, as it is behind its questions.
+		let sky = Sky()
+		sky.still = true
+		sky.space = false
+		sky.stage = .aurora
+		let screen = ZStack {
+			SkyView(sky: sky)
+				.opacity(0.6)
+			AddressScreen(
+				relay: relay,
+				enable: { [weak self] in
+					guard await relay.enable() else { return }
+					Service.restart()
+					self?.window?.close()
+				},
+				skipTitle: "Not now",
+				skip: { [weak self] in self?.window?.close() }
+			)
+		}
+		.frame(width: OnboardingView.size.width, height: OnboardingView.size.height)
+		.background(Theme.space)
+		.ignoresSafeArea()
+		.preferredColorScheme(.dark)
+		present(NSHostingView(rootView: screen))
 	}
 
 	private func windowClosed() {

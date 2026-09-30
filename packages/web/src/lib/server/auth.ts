@@ -12,7 +12,7 @@ function createAuth() {
 		database: drizzleAdapter(getDb(), { provider: 'sqlite', schema }),
 		emailAndPassword: {
 			enabled: true,
-			// Accounts are created only with `nolune user create`.
+			// Admins make accounts: on the People page, with an invite link, or `nolune user create`.
 			disableSignUp: true,
 			minPasswordLength: MIN_PASSWORD_LENGTH
 		},

@@ -44,6 +44,14 @@ struct OnboardingView: View {
 		case .intro: IntroView(onboarding: onboarding, layout: layout)
 		case .welcome: WelcomeScreen(onboarding: onboarding)
 		case .account: AccountScreen(onboarding: onboarding)
+		case .address:
+			AddressScreen(
+				relay: onboarding.relay,
+				enable: { await onboarding.useRelay() },
+				skipTitle: "Only on this Mac for now",
+				skip: { onboarding.skipRelay() }
+			)
+			.task { onboarding.checkAddress() }
 		case .files: FilesScreen(onboarding: onboarding)
 		case .service: ServiceScreen(onboarding: onboarding)
 		}
@@ -159,6 +167,73 @@ private struct AccountScreen: View {
 	}
 }
 
+/**
+ * "Open it from anywhere.": an address through nolune's relay (Relay.swift), or this Mac only. The
+ * onboarding's step, and the window the menu bar opens for a Mac that skipped it.
+ */
+struct AddressScreen: View {
+	@ObservedObject var relay: RelaySetup
+	/// Gets the address; whoever shows the screen moves on once `relay.url` is there.
+	let enable: @MainActor () async -> Void
+	let skipTitle: String
+	let skip: @MainActor () -> Void
+
+	var body: some View {
+		VStack(spacing: 0) {
+			StepTitle(
+				title: "Open it from anywhere.",
+				subtitle: "An address for your family that works on any phone or laptop, at home or away. Nothing to set up on your router."
+			)
+			.padding(.bottom, 26)
+			VStack(spacing: 10) {
+				HStack(spacing: 8) {
+					WelcomeField(placeholder: "smiths", text: $relay.name)
+					Text(".\(RelaySetup.domain)")
+						.font(Theme.font(15))
+						.foregroundStyle(Theme.muted)
+						.fixedSize()
+				}
+				Text("A name, like your family's. Leave it empty for a random one.")
+					.font(Theme.font(12))
+					.foregroundStyle(Theme.muted)
+					.frame(maxWidth: .infinity, alignment: .leading)
+					.padding(.leading, 4)
+			}
+			.frame(width: 360)
+			.onSubmit(submit)
+			if let problem = relay.problem {
+				Text(problem)
+					.font(Theme.font(13))
+					.foregroundStyle(Color(hex: 0xF87171))
+					.multilineTextAlignment(.center)
+					.frame(maxWidth: 420)
+					.padding(.top, 12)
+			}
+			Button(relay.working ? "Getting your address…" : "Continue", action: submit)
+				.buttonStyle(PillButtonStyle())
+				.disabled(relay.working)
+				.keyboardShortcut(.defaultAction)
+				.padding(.top, 22)
+			Button(skipTitle, action: skip)
+				.buttonStyle(QuietLinkStyle())
+				.padding(.top, 14)
+			Text("nolune's relay passes your family's traffic to this Mac, and could see it, as any tunnel could.")
+				.font(Theme.font(11))
+				.foregroundStyle(Theme.muted.opacity(0.8))
+				.multilineTextAlignment(.center)
+				.frame(maxWidth: 420)
+				.padding(.top, 18)
+		}
+		.padding(.top, 20)
+	}
+
+	private func submit() {
+		// Out of the field being typed in first, so its text is in before it's read.
+		NSApp.keyWindow?.makeFirstResponder(nil)
+		Task { await enable() }
+	}
+}
+
 /// "Let nolune see your files.": Full Disk Access, and the switch that flips with the real one.
 private struct FilesScreen: View {
 	@ObservedObject var onboarding: Onboarding
@@ -231,6 +306,10 @@ private struct ServiceScreen: View {
 				.padding(.top, 26)
 			case .ready:
 				StepTitle(title: "You're all set.", subtitle: "nolune opens with your Mac. It lives up here ↗")
+				if let url = onboarding.relay.url {
+					AddressLine(url: url)
+						.padding(.top, 22)
+				}
 				Button {
 					onboarding.openNolune()
 				} label: {
@@ -358,6 +437,30 @@ final class AppFileDragView: NSView, NSDraggingSource {
 
 	func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
 		dragging = false
+	}
+}
+
+/// The relay's address, to copy and pass on to the family.
+private struct AddressLine: View {
+	let url: String
+
+	var body: some View {
+		VStack(spacing: 8) {
+			HStack(spacing: 8) {
+				Text(url)
+					.font(Theme.mono(14))
+					.foregroundStyle(Theme.foreground)
+					.textSelection(.enabled)
+					.padding(.horizontal, 16)
+					.frame(height: 44)
+					.background(RoundedRectangle(cornerRadius: 12).fill(Theme.card.opacity(0.7)))
+					.overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.input))
+				CopyButton(text: url)
+			}
+			Text("Your family opens this on any device.")
+				.font(Theme.font(12))
+				.foregroundStyle(Theme.muted)
+		}
 	}
 }
 

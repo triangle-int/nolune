@@ -3,6 +3,7 @@
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import BoxIcon from '@lucide/svelte/icons/box';
+	import ContactIcon from '@lucide/svelte/icons/contact';
 	import IdCardIcon from '@lucide/svelte/icons/id-card';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -74,6 +75,11 @@
 			<DropdownMenu.Item>
 				{#snippet child({ props })}
 					<a {...props} href={resolve('/admin')}><BoxIcon />{m.userMenu.modelsAndKeys}</a>
+				{/snippet}
+			</DropdownMenu.Item>
+			<DropdownMenu.Item>
+				{#snippet child({ props })}
+					<a {...props} href={resolve('/admin/people')}><ContactIcon />{m.userMenu.people}</a>
 				{/snippet}
 			</DropdownMenu.Item>
 		{/if}

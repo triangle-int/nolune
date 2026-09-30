@@ -9,6 +9,7 @@ import {
 	CustomProviderError,
 	DEFAULT_IMAGE_MODEL,
 	DEFAULT_PORT,
+	INVITE_DAYS,
 	MAX_MEDIA_BYTES,
 	addPreset,
 	editPreset,
@@ -20,6 +21,7 @@ import {
 	configExists,
 	findCustomProvider,
 	createSkill,
+	createInvite,
 	createUser,
 	deleteUser,
 	describeCommandSafety,
@@ -159,8 +161,10 @@ Plans (chats on your own subscription instead of an API key)
                                              someone signs in again
   nolune chatgpt-plan models                    the models the plan offers, for \`nolune preset add\`
 
-Users (web sign-up is disabled; this is the only way to add people)
+Users (there's no sign-up page: admins add people here, or on the People page)
   nolune user create <name> <email> [--password P] [--admin]
+  nolune user invite [name]                     a link to send, where they make their own account
+                                             (once, within 7 days); name: who it's for
   nolune user passwd <name|email> [--password P]
   nolune user admin <name|email> [--off]
   nolune user rm <name|email>
@@ -433,7 +437,7 @@ it (Tailscale Funnel, Cloudflare Tunnel, or a VPS) and set its URL with
 	io.log(`
 Done. Next:
   nolune service install        run the gateway in the background (or \`nolune start\` to try it)
-  nolune user create Anna anna@example.com    add family members
+  nolune user invite Anna       a link for a family member (or People, in the web UI)
   open ${origin}
 
 Chats need a model: sign in and make a profile, and its welcome asks for one (a key or a plan,
@@ -896,11 +900,15 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				const who = positional(positionals, 0, 'name|email');
 				deleteUser(who);
 				io.log(`Deleted ${who}.`);
+			} else if (action === 'invite') {
+				const { token } = createInvite({ name: positionals[0] });
+				io.log(`${publicOrigin(readConfig())}/invite/${token}`);
+				io.log(`Works once, within ${INVITE_DAYS} days. Take it back on the People page.`);
 			} else if (action === 'list') {
 				for (const u of listUsers()) {
 					io.log(`${u.name}\t${u.email}${u.isAdmin ? '\tadmin' : ''}`);
 				}
-			} else fail('usage: nolune user create|passwd|admin|rm|list');
+			} else fail('usage: nolune user create|invite|passwd|admin|rm|list');
 			return;
 		}
 

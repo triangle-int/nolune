@@ -9,11 +9,13 @@ import {
 	cardOf,
 	createConversation,
 	createProfile,
+	findInvite,
 	initConfig,
 	readCard,
 	readMemoryNote,
 	readSoulFile,
-	runSubagent
+	runSubagent,
+	updateConfig
 } from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commitQueuedRows, insertQueued } from '../../core/src/conversations.ts';
@@ -246,6 +248,20 @@ describe('runCli', () => {
 		const help = await run([]);
 		expect(help.code).toBe(0);
 		expect(help.out).toMatch(/^nolune - a family agent that runs on this computer\n/);
+	});
+});
+
+describe('nolune user invite', () => {
+	it('prints a link at the address people open, for who it names', async () => {
+		updateConfig((c) => {
+			c.origin = 'https://nolune.example.com';
+		});
+		const { code, out } = await run(['user', 'invite', 'Grandma']);
+		expect(code).toBe(0);
+		const link = out.split('\n')[0];
+		expect(link).toMatch(/^https:\/\/nolune\.example\.com\/invite\/[\w-]{32}$/);
+		expect(findInvite(link.split('/').pop()!)).toMatchObject({ name: 'Grandma', createdBy: null });
+		expect(out).toContain('Works once, within 7 days.');
 	});
 });
 

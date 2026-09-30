@@ -10,6 +10,7 @@ services:
       RELAY_SITE_URL: ${RELAY_SITE_URL-https://nolune.dev}
       RELAY_MONTHLY_GB: ${RELAY_MONTHLY_GB:-30}
       RELAY_MAX_PER_NETWORK: ${RELAY_MAX_PER_NETWORK:-10}
+      RELAY_FORGET_AFTER_DAYS: ${RELAY_FORGET_AFTER_DAYS:-90}
     volumes:
       - relay-data:/data
 

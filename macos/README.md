@@ -1,9 +1,9 @@
 # nolune for macOS
 
 `nolune.app`: nolune set up and running without a Terminal. It carries its own Node and the npm
-package, walks through a first-run onboarding (a big bang, then who's setting it up, Full Disk
-Access, and the gateway started), and stays in the menu bar after, running nolune while it's
-there.
+package, walks through a first-run onboarding (a big bang, then who's setting it up, an address
+that works from anywhere, Full Disk Access, and the gateway started), and stays in the menu bar
+after, running nolune while it's there.
 
 ## Build it
 
@@ -24,6 +24,10 @@ xcrun notarytool store-credentials nolune --apple-id you@example.com --team-id T
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=nolune \
   macos/scripts/build-app.sh
 ```
+
+With an App Store Connect API key instead of a keychain profile, set `NOTARY_KEY` (the .p8 file),
+`NOTARY_KEY_ID` and `NOTARY_ISSUER`: that's how the Publish workflow signs and notarizes the app
+for each release (see Publishing in [the development guide](../docs/development.md)).
 
 To test on your own Mac, an `Apple Development` identity works as well, and keeps the Full Disk
 Access switch on across builds, as an ad-hoc signature doesn't; `security find-identity -v -p
@@ -52,6 +56,13 @@ onboarding over.
   change. `nolune service restart|status|logs` work with the app's gateway (the keeper's pid is in
   `$NOLUNE_HOME/gateway.pid`); the app removes a LaunchAgent left by `nolune service install`,
   which would fight it for the port.
+- **An address from anywhere** (`Relay.swift`). The onboarding's second step gets one through
+  nolune's relay (`packages/relay`), like `https://smiths.nolune.family`, with
+  `nolune relay enable [--name]`: the family opens it on any phone or laptop, with nothing to set
+  up on the router. "Only on this Mac for now" skips it, and the menu bar's "Open it from
+  anywhere…" shows the same step later, then restarts the gateway to connect. The step is skipped
+  when nolune has an address already (the relay's, or a public URL of its own). While there's one,
+  it's what "Open nolune" opens and the menu shows (`Runtime.origin`, as `publicOrigin` in core).
 - **Full Disk Access** (`DiskAccess.swift`). There's no API to ask for it. The app opens the right
   pane, reads a protected file so it usually shows up in the list switched off, offers its icon to
   drag in when it doesn't, and checks in a new process every second until the switch is on: a
@@ -62,7 +73,15 @@ onboarding over.
   light bursts and the stars and the eight colors fly out of it into the web welcome's sky
   (IntroSky.svelte, redrawn with SwiftUI's `Canvas`). The full intro, with the wordmark, is the
   web welcome's, which comes next.
+- **It bursts out of the window** (`Outburst.swift`): a see-through window over each screen, above
+  the onboarding and the menu bar, that clicks pass through. While the light gathers, the desktop
+  dims and specks of light spiral in from all over the screen; at the bang the window's knocked
+  about, the flash lights up the desktop, the shock waves roll out across the screen and sparks
+  fly out past the window's edges, falling as they burn out. With no screen to draw on, the window
+  draws the bang itself. It's heard a moment after it's seen, far away: unfa's Big Boom, made
+  distant (`Resources/Sounds`, with its credit).
 
 The CI workflow `macos.yml` builds the app on every change here, checks the bundle keeps a
 gateway that answers, restarts and stops, and keeps every screen as a PNG (`Nolune --snapshot <folder>`, which draws
-the intro at fixed moments, each step and the menu without doing anything).
+the intro at fixed moments, in the window and out over a stand-in desktop, each step and the menu without doing
+anything).

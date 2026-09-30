@@ -178,6 +178,12 @@ export const de: Messages = {
 		nameTooLong: (max: number) => `Ein Name darf höchstens ${max} Zeichen haben.`,
 		nameHasAt: 'Ein Name darf kein @ enthalten.',
 		nameTaken: (name: string) => `Es heißt schon jemand ${name}.`,
+		emailInvalid: 'Gib eine E-Mail-Adresse ein, etwa anna@example.com.',
+		emailTaken: 'Mit dieser E-Mail meldet sich schon jemand an.',
+		passwordTooShort: (min: number) => `Ein Passwort braucht mindestens ${min} Zeichen.`,
+		passwordTooSimple:
+			'Nimm 3 von: Kleinbuchstaben, Großbuchstaben, Ziffern und Sonderzeichen. Oder mach es 20 Zeichen oder länger.',
+		passwordTooRepetitive: 'Dieses Passwort wiederholt dieselben Zeichen zu oft.',
 		notPicture: 'Mit diesem Bild kann nolune nichts anfangen.',
 		pictureTooLarge: 'Das Bild ist zu groß.'
 	},
@@ -188,6 +194,7 @@ export const de: Messages = {
 		allProfiles: 'Alle Profile',
 		card: 'Deine Karte',
 		modelsAndKeys: 'Modelle & Schlüssel',
+		people: 'Personen',
 		logOut: 'Abmelden'
 	},
 
@@ -967,7 +974,7 @@ export const de: Messages = {
 		password: 'Passwort',
 		signingIn: 'Anmeldung läuft…',
 		forgot:
-			'Passwort vergessen? Bitte die Person, die nolune eingerichtet hat, {command} auszuführen.',
+			'Passwort vergessen? Bitte einen Admin, es unter Personen zurückzusetzen oder {command} auszuführen.',
 		tooManyAttempts: 'Zu viele Versuche. Warte eine Minute und versuch es noch einmal.',
 		wrongPassword: 'E-Mail oder Passwort ist falsch.'
 	},
@@ -1218,5 +1225,91 @@ export const de: Messages = {
 				'Ein schnelles, fähiges Modell hält Chats flott: Jeder Befehl, der mehr tut als nachzusehen, kostet eine kurze Anfrage an das Modell.',
 			saved: 'Gespeichert. Gilt ab dem nächsten Befehl.'
 		}
+	},
+
+	people: {
+		title: 'Personen',
+		hint: 'Alle, die sich bei nolune anmelden können. Wer ein Konto hat, kann den Agenten alles auf diesem Computer tun lassen: Füge also nur Menschen hinzu, denen du vertraust. Um ein Profil mit jemandem zu teilen, füge die Person unter Personen & Profil des Profils hinzu.',
+		accounts: 'Konten',
+		you: 'Du',
+		admin: 'Admin',
+		resetPassword: 'Passwort zurücksetzen',
+		makeAdmin: 'Zum Admin machen',
+		removeAdmin: 'Admin entziehen',
+		resetTitle: (name: string) => `Passwort von ${name} zurücksetzen?`,
+		resetBody:
+			'nolune erstellt ein neues Passwort und zeigt es einmal an. Das alte funktioniert nicht mehr; bereits angemeldete Geräte bleiben angemeldet.',
+		reset: 'Zurücksetzen',
+		newPassword: (name: string) =>
+			`Das neue Passwort von ${name}. Es wird nur dieses eine Mal angezeigt: Schick es der Person.`,
+		nowAdmin: (name: string) => `${name} ist jetzt Admin.`,
+		noLongerAdmin: (name: string) => `${name} ist kein Admin mehr.`,
+		removeTitle: (name: string) => `${name} entfernen?`,
+		removeBody:
+			'Die Person wird abgemeldet und kann sich nicht mehr anmelden. Ihre Nachrichten bleiben in geteilten Chats, und ein Profil, in dem nur sie ist, bleibt ohne Mitglieder auf diesem Computer. Das lässt sich nicht rückgängig machen.',
+		removed: (name: string) => `${name} entfernt.`,
+		notYourself: 'Das geht nicht mit deinem eigenen Konto. Frag einen anderen Admin.',
+		gone: 'Dieses Konto gibt es nicht mehr.',
+		add: 'Person hinzufügen',
+		addHint:
+			'nolune erstellt das Passwort und zeigt es einmal an, damit du es mit der Adresse weitergeben kannst. Oder schick unten einen Einladungslink, dann wählt die Person ihr eigenes.',
+		name: 'Name',
+		namePlaceholder: 'Anna',
+		email: 'E-Mail',
+		emailPlaceholder: 'anna@example.com',
+		makeThemAdmin: 'Admin',
+		adminHint: 'Admins verwalten Modelle, Schlüssel und Personen.',
+		adding: 'Wird hinzugefügt…',
+		added: (name: string) =>
+			`${name} hinzugefügt. Schick die Adresse und dieses Passwort; es wird nur dieses eine Mal angezeigt.`,
+		address: 'Adresse',
+		password: 'Passwort',
+		copyAddress: 'Adresse kopieren',
+		copyPassword: 'Passwort kopieren',
+		invites: 'Einladungslinks',
+		invitesHint: (days: number) =>
+			`Mit einem Link legt jemand sein eigenes Konto an und wählt Namen, E-Mail und Passwort selbst, sodass kein Passwort verschickt werden muss. Jeder Link funktioniert einmal, ${days} Tage lang, und legt ein normales Konto an.`,
+		newInvite: 'Einladungslink erstellen',
+		inviteFor: 'Für wen',
+		optional: '(optional)',
+		inviteForPlaceholder: 'Oma',
+		inviteForHint: 'Der Name steht schon im Formular. Die Person kann ihn ändern.',
+		create: 'Erstellen',
+		creating: 'Wird erstellt…',
+		inviteCreated: (name: string | null) =>
+			`${name ? `Schick diesen Link an ${name}` : 'Schick diesen Link an die Person'}. Er wird nur dieses eine Mal angezeigt.`,
+		copyLink: 'Link kopieren',
+		noInvites: 'Keine Einladungslinks, die auf ihre Nutzung warten.',
+		inviteTitle: (name: string | null) => (name ? `Für ${name}` : 'Einladungslink'),
+		inviteDetails: (by: string | null, until: string) =>
+			`${by ? `Erstellt von ${by}` : 'An diesem Computer erstellt'} · gilt bis ${until}`,
+		revoke: 'Zurückziehen',
+		revoked: 'Zurückgezogen. Der Link funktioniert nicht mehr.'
+	},
+
+	invite: {
+		title: 'Willkommen bei nolune',
+		from: (name: string) => `${name} hat dich eingeladen.`,
+		hint: 'Leg dein Konto an: Du meldest dich mit dieser E-Mail und diesem Passwort an.',
+		name: 'Dein Name',
+		nameHint:
+			'Alle in deinen Profilen sehen ihn, und nolune liest ihn mit jeder Nachricht, die du schickst.',
+		email: 'E-Mail-Adresse',
+		password: 'Passwort',
+		passwordAgain: 'Passwort wiederholen',
+		passwordHint: (min: number) =>
+			`Mindestens ${min} Zeichen, mit 3 von: Kleinbuchstaben, Großbuchstaben, Ziffern und Sonderzeichen. Oder 20 beliebige Zeichen oder mehr.`,
+		mismatch: 'Die Passwörter stimmen nicht überein.',
+		create: 'Konto anlegen',
+		creating: 'Dein Konto wird angelegt…',
+		until: (date: string) => `Dieser Link gilt bis ${date}.`,
+		goneTitle: 'Dieser Link funktioniert nicht mehr',
+		goneBody:
+			'Er wurde schon benutzt, ist abgelaufen oder wurde zurückgezogen. Bitte die Person, die ihn geschickt hat, um einen neuen.',
+		signIn: 'Anmelden',
+		signedInTitle: (name: string) => `Du bist als ${name} angemeldet`,
+		signedInBody:
+			'Dieser Link ist zum Anlegen eines neuen Kontos. Schick ihn an die Person, für die er ist, oder melde dich erst ab, um ihn zu benutzen.',
+		open: 'nolune öffnen'
 	}
 };

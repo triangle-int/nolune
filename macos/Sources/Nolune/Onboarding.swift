@@ -3,7 +3,8 @@ import SwiftUI
 
 /**
  * The first run: the intro in space, then one question per screen, like the web welcome
- * (packages/web/src/routes/p/[slug]/welcome). Who's setting it up, Full Disk Access, and the gateway started.
+ * (packages/web/src/routes/p/[slug]/welcome). Who's setting it up, where the family opens it (an
+ * address through nolune's relay, or this Mac only), Full Disk Access, and the gateway started.
  */
 @MainActor
 final class Onboarding: ObservableObject {
@@ -11,11 +12,11 @@ final class Onboarding: ObservableObject {
 	private nonisolated static let phaseKey = "onboarding.phase"
 
 	enum Phase: String {
-		case intro, welcome, account, files, service
+		case intro, welcome, account, address, files, service
 	}
 
 	/// The steps after the welcome, for the bars at the top.
-	nonisolated static let steps: [Phase] = [.account, .files, .service]
+	nonisolated static let steps: [Phase] = [.account, .address, .files, .service]
 
 	enum ServiceState: Equatable {
 		case starting
@@ -26,6 +27,10 @@ final class Onboarding: ObservableObject {
 	@Published private(set) var phase: Phase
 	/// When the intro's clock started; the wordmark is drawn from it.
 	@Published private(set) var introStart: Date?
+	/// The big bang out over the desktop (Outburst.swift), from the window the app delegate shows.
+	var outburst: Outburst?
+	/// Whether the outburst draws the bang, the window leaving it to it.
+	@Published private(set) var burstsOut = false
 	@Published private(set) var skipped = false
 
 	@Published var name = ""
@@ -37,6 +42,8 @@ final class Onboarding: ObservableObject {
 	@Published private(set) var granted = false
 	@Published private(set) var service = ServiceState.starting
 
+	/// The address step's: the name asked for, and the address once there is one.
+	let relay: RelaySetup
 	let sky = Sky()
 	let music: Music
 	var onFinish: (() -> Void)?
@@ -46,6 +53,7 @@ final class Onboarding: ObservableObject {
 
 	init() {
 		music = Music()
+		relay = RelaySetup()
 		if !Snapshot.active {
 			admin = Task { await Runtime.shared.people()?.contains(where: \.isAdmin) ?? false }
 		}
@@ -73,8 +81,10 @@ final class Onboarding: ObservableObject {
 	/**
 	 * A big bang (IntroView.swift): a point of light gathers in the dark and bursts, the song
 	 * starts, the stars fly out of it and the eight avatar colors after them, pooling into a glow
-	 * behind the welcome. About four seconds; the full intro is the web welcome's, next. A click or
-	 * Esc skips it.
+	 * behind the welcome. It bursts out of the window too (Outburst.swift): the desktop dims, the
+	 * window's knocked about, and the flash, the shock waves and sparks go out across the screen.
+	 * It's heard a moment later, deep and muffled, far away. About four seconds; the full intro is
+	 * the web welcome's, next. A click or Esc skips it.
 	 */
 	func startIntro(layout: IntroLayout) async {
 		guard !Snapshot.active else { return }
@@ -87,6 +97,7 @@ final class Onboarding: ObservableObject {
 			return
 		}
 		let start = Date()
+		burstsOut = outburst?.begin(at: start) ?? false
 		introStart = start
 
 		func at(_ seconds: TimeInterval) async -> Bool {
@@ -100,6 +111,8 @@ final class Onboarding: ObservableObject {
 		music.play()
 		sky.burst = true
 		sky.stage = .stars
+		guard await at(IntroTiming.heard) else { return }
+		music.play(effect: "boom")
 
 		// The colors follow and pool into a glow.
 		guard await at(IntroTiming.colors) else { return }
@@ -119,6 +132,8 @@ final class Onboarding: ObservableObject {
 
 	func skipIntro() {
 		guard phase == .intro else { return }
+		outburst?.end()
+		music.hushEffects(over: 0.8)
 		if music.isPlaying { music.duck(to: Music.under, over: 1.2) } else { music.play(level: Music.under) }
 		skipped = true
 		sky.still = true
@@ -131,7 +146,7 @@ final class Onboarding: ObservableObject {
 		music.duck(to: Music.under, over: 2.5)
 		Task {
 			let skip = await admin?.value ?? false
-			if phase == .welcome { go(skip ? .files : .account) }
+			if phase == .welcome { go(skip ? .address : .account) }
 		}
 	}
 
@@ -140,7 +155,7 @@ final class Onboarding: ObservableObject {
 	/// Set up already, from an npm install or a run that stopped halfway: skip to the next step.
 	func checkAccount() async {
 		guard !Snapshot.active, let people = await Runtime.shared.people(), people.contains(where: \.isAdmin) else { return }
-		if phase == .account { go(.files) }
+		if phase == .account { go(.address) }
 	}
 
 	/// Continue is never greyed out: a field being typed in hands its text over only when it's
@@ -166,7 +181,7 @@ final class Onboarding: ObservableObject {
 		])
 		working = false
 		if output.succeeded {
-			go(.files)
+			go(.address)
 		} else {
 			problem = output.problem
 		}
@@ -185,6 +200,30 @@ final class Onboarding: ObservableObject {
 		let alphabet = Array("abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
 		return (0..<4).map { _ in String((0..<6).map { _ in alphabet.randomElement()! }) }
 			.joined(separator: "-")
+	}
+
+	// MARK: Address
+
+	/**
+	 * Has an address already, the relay's or a public URL of its own (an npm install with a
+	 * tunnel): skip to the next step.
+	 */
+	func checkAddress() {
+		guard !Snapshot.active else { return }
+		let config = Runtime.shared.config
+		let local = ["localhost", "127.0.0.1"]
+		let ownURL = config.origin.flatMap { URL(string: $0)?.host }.map { !local.contains($0) } ?? false
+		if config.relay != nil || ownURL, phase == .address { go(.files) }
+	}
+
+	/// An address through the relay. The gateway starts on the last step, and connects to it then.
+	func useRelay() async {
+		if await relay.enable(), phase == .address { go(.files) }
+	}
+
+	/// This Mac only, for now: the menu bar's "Open it from anywhere…" gets an address later.
+	func skipRelay() {
+		go(.files)
 	}
 
 	// MARK: Files
@@ -246,10 +285,11 @@ final class Onboarding: ObservableObject {
 	}
 
 	/// For `--snapshot`: a screen as it would be, without getting there.
-	func pose(_ phase: Phase, granted: Bool = false, service: ServiceState = .starting) {
+	func pose(_ phase: Phase, granted: Bool = false, service: ServiceState = .starting, burstsOut: Bool = false) {
 		self.phase = phase
 		self.granted = granted
 		self.service = service
+		self.burstsOut = burstsOut
 		if phase != .intro {
 			sky.still = true
 			sky.space = false
@@ -271,6 +311,8 @@ enum IntroTiming {
 	static let gather: TimeInterval = 0.3
 	/// It bursts, and the stars fly out of it.
 	static let bang: TimeInterval = 1.3
+	/// It's heard, a moment after it's seen: it's far away.
+	static let heard = bang + 0.3
 	/// The eight colors follow and pool into a glow.
 	static let colors = bang + 0.6
 	/// Space gives way to the page.

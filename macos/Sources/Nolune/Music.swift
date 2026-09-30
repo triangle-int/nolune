@@ -2,7 +2,8 @@ import AVFoundation
 
 /**
  * The welcome's song and its one short sound, as packages/web/src/lib/welcome/sounds.ts plays them: the song
- * carries the intro, then goes on much quieter under the questions.
+ * carries the intro, then goes on much quieter under the questions. And the app's own: the big
+ * bang, far away (`boom`).
  */
 @MainActor
 final class Music {
@@ -56,7 +57,7 @@ final class Music {
 		}
 	}
 
-	/// A short sound: `confirm` when a check passes.
+	/// A sound on its own: `confirm` when a check passes, `boom` for the big bang.
 	func play(effect name: String) {
 		guard !muted, let player = Music.player(name) else { return }
 		effects.removeAll { !$0.isPlaying }
@@ -64,8 +65,16 @@ final class Music {
 		player.play()
 	}
 
+	/// Fades out the sounds still playing: the boom's long rumble, when the intro's skipped.
+	func hushEffects(over fade: TimeInterval) {
+		for effect in effects where effect.isPlaying {
+			effect.setVolume(0, fadeDuration: fade)
+		}
+	}
+
 	private func apply(fade: TimeInterval) {
 		song?.setVolume(muted ? 0 : level, fadeDuration: fade)
+		if muted { hushEffects(over: fade) }
 	}
 
 	private static func player(_ name: String) -> AVAudioPlayer? {
