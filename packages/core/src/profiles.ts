@@ -16,29 +16,50 @@ const holder = globalThis as unknown as {
 	__noluneProfileLooks?: Map<string, string>;
 };
 const emitter = (holder.__noluneProfileEvents ??= new EventEmitter().setMaxListeners(0));
-/** Each profile's name and avatar as last seen, to tell which changed. */
+/** Each profile's name, avatar and members as last seen, to tell which changed. */
 const looks = (holder.__noluneProfileLooks ??= new Map());
 
-/** Called with the profile's id when its name or avatar changes. */
+/**
+ * Called with the profile's id when its name or avatar changes, or who is in it, or a member's name
+ * or picture.
+ */
 export function onProfileChanged(listener: (profileId: string) => void): () => void {
 	emitter.on('changed', listener);
 	return () => emitter.off('changed', listener);
 }
 
 /**
- * Tells listeners about profiles whose name or avatar changed since the last look. The CLI changes
- * them from other processes (the agent runs `nolune profile avatar`), so the gateway also looks after
- * every command and on its scheduler tick. A profile seen for the first time is only noted.
+ * Tells listeners about profiles whose look (name, avatar, members' names and pictures) changed
+ * since the last look. The CLI changes them from other processes (the agent runs `nolune profile
+ * avatar`), so the gateway also looks after every command and on its scheduler tick. A profile seen
+ * for the first time is only noted.
  */
 export function noticeProfileChanges(): void {
 	const rows = getDb()
 		.select({ id: profile.id, name: profile.name, avatar: profile.avatar })
 		.from(profile)
 		.all();
+	const members = new Map<string, string[]>();
+	const memberRows = getDb()
+		.select({
+			profileId: profileMember.profileId,
+			id: user.id,
+			name: user.name,
+			picture: user.picture
+		})
+		.from(profileMember)
+		.innerJoin(user, eq(user.id, profileMember.userId))
+		.orderBy(user.id)
+		.all();
+	for (const row of memberRows) {
+		const list = members.get(row.profileId) ?? [];
+		list.push(`${row.id} ${row.picture ?? ''} ${row.name}`);
+		members.set(row.profileId, list);
+	}
 	const ids = new Set(rows.map((row) => row.id));
 	for (const id of looks.keys()) if (!ids.has(id)) looks.delete(id);
 	for (const row of rows) {
-		const look = `${row.avatar}\n${row.name}`;
+		const look = [row.avatar, row.name, ...(members.get(row.id) ?? [])].join('\n');
 		if (looks.get(row.id) === look) continue;
 		const known = looks.has(row.id);
 		looks.set(row.id, look);
@@ -132,7 +153,7 @@ export function isMember(profileId: string, userId: string): boolean {
 
 export function listMembers(profileId: string) {
 	return getDb()
-		.select({ id: user.id, name: user.name })
+		.select({ id: user.id, name: user.name, picture: user.picture })
 		.from(profileMember)
 		.innerJoin(user, eq(user.id, profileMember.userId))
 		.where(eq(profileMember.profileId, profileId))

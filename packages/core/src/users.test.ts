@@ -1,17 +1,27 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { verifyPassword } from 'better-auth/crypto';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { getDb } from './db/index.ts';
 import { account, profileMember } from './db/schema.ts';
-import { createProfile, listMembers } from './profiles.ts';
+import { blobPath, storeBytes } from './media.ts';
+import { createProfile, listMembers, noticeProfileChanges, onProfileChanged } from './profiles.ts';
+import { makeUser } from './test/fixtures.ts';
 import {
+	MAX_PICTURE_BYTES,
+	PictureError,
+	UserNameError,
+	clearUserPicture,
 	createUser,
 	deleteUser,
 	findUser,
 	listUsers,
 	passwordProblem,
+	renameUser,
 	setAdmin,
-	setPassword
+	setPassword,
+	setUserPicture,
+	userPictureFile
 } from './users.ts';
 
 const PASSWORD = 'correct-Horse-battery-7';
@@ -62,6 +72,9 @@ describe('createUser', () => {
 		await expect(
 			createUser({ name: 'Max', email: 'max@example.com', password: 'short' })
 		).rejects.toThrow('Password must be at least 14 characters');
+		await expect(
+			createUser({ name: 'max@home', email: 'max@example.com', password: PASSWORD })
+		).rejects.toThrow("Name can't contain @");
 		expect(listUsers()).toHaveLength(1);
 	});
 });
@@ -116,5 +129,95 @@ describe('changing users', () => {
 		expect(listMembers(family.id)).toEqual([]);
 		expect(getDb().select().from(profileMember).all()).toEqual([]);
 		expect(() => deleteUser('Anna')).toThrow('No user "Anna"');
+	});
+});
+
+/** The start of a PNG of that size: all inspectImage reads. */
+function png(width: number, height: number, padding = 0): Buffer {
+	const head = Buffer.alloc(33 + padding);
+	Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(head);
+	head.writeUInt32BE(width, 16);
+	head.writeUInt32BE(height, 20);
+	return head;
+}
+
+describe('renameUser', () => {
+	it('renames, trimmed, and tells the profiles they are in', () => {
+		const anna = makeUser('Anna');
+		const family = createProfile('Family', anna.id);
+		const changed: string[] = [];
+		const stop = onProfileChanged((id) => changed.push(id));
+		noticeProfileChanges();
+		try {
+			expect(renameUser(anna.id, '  Ann  ')).toBe('Ann');
+			expect(findUser('ann')?.id).toBe(anna.id);
+			expect(listMembers(family.id).map((m) => m.name)).toEqual(['Ann']);
+			expect(changed).toEqual([family.id]);
+		} finally {
+			stop();
+		}
+	});
+
+	it('lets someone change the case of their own name, but not take another', () => {
+		const anna = makeUser('Anna');
+		makeUser('Max');
+		expect(renameUser(anna.id, 'ANNA')).toBe('ANNA');
+		const problem = (name: string) => {
+			try {
+				renameUser(anna.id, name);
+			} catch (err) {
+				return err instanceof UserNameError ? [err.reason, err.message] : err;
+			}
+		};
+		expect(problem('max')).toEqual(['taken', 'A user named "max" already exists']);
+		expect(problem('   ')).toEqual(['required', 'Name is required']);
+		expect(problem('a'.repeat(65))).toEqual(['tooLong', 'Name must be at most 64 characters']);
+		expect(problem('anna@home')).toEqual(['email', "Name can't contain @"]);
+		expect(renameUser(anna.id, '🌻'.repeat(64))).toBe('🌻'.repeat(64));
+	});
+});
+
+describe('profile pictures', () => {
+	it("keeps the picture in the media store and serves only pictures that are someone's", () => {
+		const anna = makeUser('Anna');
+		const family = createProfile('Family', anna.id);
+		const changed: string[] = [];
+		const stop = onProfileChanged((id) => changed.push(id));
+		noticeProfileChanges();
+		try {
+			const sha256 = setUserPicture(anna.id, png(256, 256));
+			expect(readFileSync(blobPath(sha256))).toEqual(png(256, 256));
+			expect(listMembers(family.id)).toEqual([{ id: anna.id, name: 'Anna', picture: sha256 }]);
+			expect(userPictureFile(sha256)).toEqual({ path: blobPath(sha256), mime: 'image/png' });
+			expect(changed).toEqual([family.id]);
+
+			// A file from a chat is in the same store, but no one's picture.
+			const other = storeBytes(png(10, 10)).sha256;
+			expect(userPictureFile(other)).toBeNull();
+			expect(userPictureFile('../config.json')).toBeNull();
+
+			clearUserPicture(anna.id);
+			expect(listMembers(family.id)[0].picture).toBeNull();
+			expect(userPictureFile(sha256)).toBeNull();
+			expect(existsSync(blobPath(sha256))).toBe(true);
+			expect(changed).toEqual([family.id, family.id]);
+		} finally {
+			stop();
+		}
+	});
+
+	it('refuses what is not a picture, and pictures too large', () => {
+		const anna = makeUser('Anna');
+		const problem = (data: Buffer) => {
+			try {
+				setUserPicture(anna.id, data);
+			} catch (err) {
+				return err instanceof PictureError ? err.reason : err;
+			}
+		};
+		expect(problem(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'))).toBe('notPicture');
+		expect(problem(png(1025, 16))).toBe('tooLarge');
+		expect(problem(png(16, 16, MAX_PICTURE_BYTES))).toBe('tooLarge');
+		expect(findUser('Anna')?.picture).toBeNull();
 	});
 });

@@ -150,7 +150,7 @@ export const fr: Messages = {
 
 	settings: {
 		title: 'Paramètres',
-		description: 'L’apparence de nolune sur cet appareil.',
+		description: 'Votre nom et votre photo, et l’apparence de nolune sur cet appareil.',
 		theme: 'Thème',
 		system: 'Système',
 		light: 'Clair',
@@ -170,6 +170,24 @@ export const fr: Messages = {
 			'Des sons discrets quand nolune bouge tout seul, comme à l’accueil d’un nouveau profil.',
 		logOut: 'Se déconnecter',
 		deviceOnly: 'Ces paramètres ne sont enregistrés que sur cet appareil.'
+	},
+
+	account: {
+		name: 'Votre nom',
+		hint: 'Tout le monde dans vos profils voit votre nom et votre photo, et nolune lit votre nom avec chaque message que vous envoyez.',
+		addPicture: 'Ajouter une photo',
+		changePicture: 'Changer de photo',
+		removePicture: 'Retirer la photo',
+		cropHint: 'Faites glisser la photo pour la placer dans le cercle.',
+		zoom: 'Zoom',
+		usePicture: 'Utiliser cette photo',
+		cantOpen: 'Impossible d’ouvrir cette image. Essayez un JPEG ou un PNG.',
+		nameRequired: 'Saisissez un nom.',
+		nameTooLong: (max: number) => `Un nom peut compter au plus ${max} caractères.`,
+		nameHasAt: 'Un nom ne peut pas contenir de @.',
+		nameTaken: (name: string) => `Quelqu’un s’appelle déjà ${name}.`,
+		notPicture: 'nolune ne peut pas utiliser cette image.',
+		pictureTooLarge: 'Cette image est trop grande.'
 	},
 
 	userMenu: {

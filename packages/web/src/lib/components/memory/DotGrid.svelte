@@ -11,6 +11,8 @@
 		rank: number;
 		/** The member of the profile it's about, for a person's note. */
 		member: string | null;
+		/** Their profile picture, if they have one. */
+		memberPicture: string | null;
 		updatedAt: number;
 		facts: MemoryFact[];
 	}
@@ -134,7 +136,11 @@
 						onclick={() => onpick?.(topic.path)}
 					>
 						{#if topic.member}
-							<UserAvatar name={topic.member} class="size-4 text-[9px]" />
+							<UserAvatar
+								name={topic.member}
+								picture={topic.memberPicture}
+								class="size-4 text-[9px]"
+							/>
 						{/if}
 						<span class="min-w-0 truncate">{topic.title}</span>
 					</button>

@@ -54,15 +54,23 @@ export {
 } from './custom-providers.ts';
 export { getDb, schema, type DB } from './db/index.ts';
 export {
+	MAX_NAME_LENGTH,
+	MAX_PICTURE_BYTES,
 	MIN_PASSWORD_LENGTH,
+	PictureError,
+	UserNameError,
+	clearUserPicture,
 	createUser,
 	deleteUser,
 	findUser,
 	generatePassword,
 	listUsers,
 	passwordProblem,
+	renameUser,
 	setAdmin,
-	setPassword
+	setPassword,
+	setUserPicture,
+	userPictureFile
 } from './users.ts';
 export {
 	addMember,

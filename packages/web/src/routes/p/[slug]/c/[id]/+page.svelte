@@ -10,7 +10,8 @@
 		efforts={data.efforts}
 		presets={data.presets}
 		defaultPresetId={data.defaultPresetId}
-		me={data.user?.name ?? ''}
+		me={data.user?.id ?? ''}
+		pictures={data.pictures}
 		folders={data.folders}
 		folderId={data.conversations.find((c) => c.id === data.conversation.id)?.folderId ?? null}
 		avatar={data.profile.avatar}

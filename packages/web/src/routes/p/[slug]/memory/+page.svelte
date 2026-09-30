@@ -39,7 +39,7 @@
 	let allRecent = $state(false);
 	const recent = $derived(allRecent ? data.recent : data.recent.slice(0, RECENT_SHOWN));
 
-	const whose = $derived(new Map(data.members.map((member) => [member.note, member.name])));
+	const whose = $derived(new Map(data.members.map((member) => [member.note, member])));
 	/**
 	 * By category: a note each, then a folder's notes under its name. Notes from before the
 	 * categories come last, as unsorted.
@@ -59,7 +59,8 @@
 				rank: category
 					? MEMORY_CATEGORIES.indexOf(category) + (folder ? 0.5 : 0)
 					: MEMORY_CATEGORIES.length,
-				member: whose.get(file.path) ?? null,
+				member: whose.get(file.path)?.name ?? null,
+				memberPicture: data.pictures[whose.get(file.path)?.id ?? ''] ?? null,
 				updatedAt: file.updatedAt,
 				facts: file.facts
 			};
@@ -82,6 +83,7 @@
 							group: null,
 							rank: 0,
 							member: null,
+							memberPicture: null,
 							updatedAt: 0,
 							facts: []
 						},

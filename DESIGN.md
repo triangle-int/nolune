@@ -42,8 +42,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
                               notifications, subagents, running background commands
-  media/<sha256>              copies of the pictures and files shown in chats, and of attached
-                              files not sent yet
+  media/<sha256>              copies of the pictures and files shown in chats, of attached
+                              files not sent yet, and people's profile pictures
   image-templates/<id>/       Images page templates for every profile (TEMPLATE.md, cover.webp)
   bin/nolune                     shim so the agent can run `nolune` from any command
   profiles/<slug>/            default working folder for commands in this profile
@@ -1280,6 +1280,23 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   too) switch the labels to the raw commands and add context size, prompt-cache hit rate, cache
   misses, per-reply token usage and the model that wrote each reply. "Always show steps" opens the
   groups by default.
+- **Your name and picture** are at the top of Settings. Unlike the rest of Settings they belong to
+  the account, and everyone sees them. A name is checked as `nolune user create` checks one
+  (`renameUser`): not empty, at most 64 characters, no `@` (which `findUser` takes for an email),
+  and nobody else's, ignoring case. Messages keep the name they were sent with, which is also the
+  one the model read, so the chat tells someone's own messages by their user id. A picture is
+  cropped in the browser (`PictureCropper.svelte`: drag or the arrow keys move it, the slider,
+  the wheel or a pinch zoom it) to a 256-pixel square, sent as WebP (PNG where the browser can't
+  write WebP) to `PUT /api/me/picture`, checked to be a PNG, JPEG, GIF or WebP of at most 1024
+  pixels a side and 512 KB, and kept in the media store under its SHA-256 (`user.picture`), which
+  the prune leaves alone. `/api/pictures/<sha256>` serves a hash only while it is someone's
+  picture, to anyone signed in, and lets the browser keep it for good: a new picture has a new
+  address. Pictures show wherever the initial did: the user menu, People & profile, the name over
+  someone's messages and their note on the Memory page. A change reaches open pages the way a
+  profile's new avatar does, since `noticeProfileChanges` counts the members' names and pictures
+  as part of a profile's look. better-auth's own `/update-user` is off, so nothing gets past these
+  checks, and the picture isn't better-auth's `image`, which that endpoint would let anyone set to
+  anything.
 - **The composer** is docked over the end of the chat and of the Images grid (`ComposerDock`):
   what scrolls under it fades and blurs into it instead of stopping at an edge, and the scroll
   area pads its end by the composer's height so the newest message still clears it.
@@ -1431,8 +1448,8 @@ its cache never depend on someone's settings. nolune already answers in the lang
 Each profile's assistant has a small mascot: one of eight one-color glyphs (probe, campfire, lantern,
 planet, quantum, comet, moon, satellite), redrawn by hand as SVG from a concept sheet. It shows next
 to every reply, large on the new chat screen, in the profile switcher and the profile list, on
-notifications, and as the tab icon of the profile's pages. People keep `UserAvatar`, their initial
-on a colored circle.
+notifications, and as the tab icon of the profile's pages. People keep `UserAvatar`: their
+picture, or their initial on a colored circle (see [Web UI](#web-ui), "Your name and picture").
 
 - **Drawing.** `packages/core/src/avatars.ts` has the names and the glyphs: shapes on a 24×24 grid
   filled with `currentColor`, with no strokes or second tone. Eyes and other details are holes

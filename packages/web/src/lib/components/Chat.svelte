@@ -83,7 +83,10 @@
 		/** The models the chat can switch to. */
 		presets: { id: string; name: string; provider: ChatModel['provider'] }[];
 		defaultPresetId: string;
+		/** Who is looking: their own messages go without a name. */
 		me: string;
+		/** Members' profile pictures by user id. */
+		pictures: Record<string, string>;
 		/** The profile's folders, and the one this chat is in. */
 		folders: FolderItem[];
 		folderId: string | null;
@@ -91,8 +94,17 @@
 		avatar: Avatar;
 	}
 
-	let { conversation, efforts, presets, defaultPresetId, me, folders, folderId, avatar }: Props =
-		$props();
+	let {
+		conversation,
+		efforts,
+		presets,
+		defaultPresetId,
+		me,
+		pictures,
+		folders,
+		folderId,
+		avatar
+	}: Props = $props();
 
 	const prefs = getPreferences();
 	const { m } = getI18n();
@@ -452,12 +464,14 @@
 </script>
 
 {#snippet humanBubble(
-	senderName: string,
+	sender: { id: string | null; name: string },
 	body: string,
 	files: DisplayAttachment[],
 	pending: boolean
 )}
-	{@const mine = senderName === me}
+	{@const senderName = sender.name}
+	<!-- By id: the name is the one it was sent with, which may not be theirs any more. -->
+	{@const mine = sender.id === me}
 	<div class="group/human flex flex-col items-end gap-1">
 		{#if !mine || pending}
 			<div class="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
@@ -465,7 +479,11 @@
 					<ClockIcon class="size-3" />
 					{mine ? m.chat.readsAfterStep : `${senderName} · ${m.chat.readsAfterStep}`}
 				{:else}
-					<UserAvatar name={senderName} class="size-4 text-[9px]" />
+					<UserAvatar
+						name={senderName}
+						picture={sender.id && pictures[sender.id]}
+						class="size-4 text-[9px]"
+					/>
 					{senderName}
 				{/if}
 			</div>
@@ -707,7 +725,7 @@
 			{#each entries as entry (entry.key)}
 				{#if entry.type === 'human'}
 					{@render humanBubble(
-						entry.message.senderName,
+						{ id: entry.message.senderId, name: entry.message.senderName },
 						entry.message.text,
 						entry.message.attachments,
 						false
@@ -795,7 +813,12 @@
 
 			{#each chat.queued as message (message.id)}
 				{#if message.kind === 'human'}
-					{@render humanBubble(message.senderName, message.text, message.attachments, true)}
+					{@render humanBubble(
+						{ id: message.senderId, name: message.senderName },
+						message.text,
+						message.attachments,
+						true
+					)}
 				{/if}
 			{/each}
 

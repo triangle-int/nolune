@@ -21,6 +21,12 @@ export const user = sqliteTable('user', {
 	emailVerified: integer('email_verified', { mode: 'boolean' }).default(false).notNull(),
 	image: text('image'),
 	isAdmin: integer('is_admin', { mode: 'boolean' }).default(false).notNull(),
+	/**
+	 * Their profile picture: `~/.nolune/media/<sha256>`, a square the Settings page cropped
+	 * (setUserPicture). Null: their initial on a colored circle. Not `image`, which better-auth
+	 * lets anyone signed in set to any text.
+	 */
+	picture: text('picture'),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull(),
 	updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
 		.default(now)

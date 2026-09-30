@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { and, eq, like } from 'drizzle-orm';
 import { getDb } from './db/index.ts';
-import { folderFile, media, message, upload } from './db/schema.ts';
+import { folderFile, media, message, upload, user } from './db/schema.ts';
 import { inspectImage } from './images.ts';
 import { isRemoteHref, mediaRefs } from './media-refs.ts';
 import { paths } from './paths.ts';
@@ -775,8 +775,9 @@ export function mediaFile(
 
 /**
  * Deletes stored files no row points to any more (their conversations or folders were deleted,
- * or an upload was never sent), messages' pictures and PDFs included. Files younger than an hour
- * are kept, since a row being saved may be about to reference them.
+ * an upload was never sent, or someone changed their profile picture), messages' pictures and
+ * PDFs included. Files younger than an hour are kept, since a row being saved may be about to
+ * reference them.
  */
 export function pruneMedia(): void {
 	if (!existsSync(paths.media)) return;
@@ -800,6 +801,9 @@ export function pruneMedia(): void {
 	for (const row of folderFiles) {
 		used.add(row.sha256);
 		if (row.previewSha256) used.add(row.previewSha256);
+	}
+	for (const row of getDb().select({ picture: user.picture }).from(user).all()) {
+		if (row.picture) used.add(row.picture);
 	}
 	const cutoff = Date.now() - ORPHAN_GRACE_MS;
 	for (const name of readdirSync(paths.media)) {
