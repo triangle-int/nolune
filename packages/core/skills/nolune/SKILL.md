@@ -249,8 +249,9 @@ admin the command that switches it back, to run at the computer.
 
 ## The service
 
-On macOS nolune runs in the background as a LaunchAgent. Elsewhere the owner runs `nolune start` under
-their own process manager, and `nolune service` doesn't work.
+On macOS nolune runs in the background as a LaunchAgent, and on Linux as a systemd user service.
+Elsewhere, or on Linux without systemd, the owner runs `nolune start` under their own process
+manager, and `nolune service` doesn't work.
 
 ```sh
 nolune service status     # "Running (pid ...)" or what's wrong
