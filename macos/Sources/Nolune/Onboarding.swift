@@ -145,21 +145,24 @@ final class Onboarding: ObservableObject {
 		if phase == .account { go(.files) }
 	}
 
-	var canCreateAccount: Bool {
-		!working && !name.trimmingCharacters(in: .whitespaces).isEmpty && email.contains("@")
-			&& !password.isEmpty
-	}
-
+	/// Continue is never greyed out: a field being typed in hands its text over only when it's
+	/// left, so a button that waited on the fields took two clicks. It says what's missing instead.
 	func createAccount() async {
-		guard canCreateAccount else { return }
+		guard !working else { return }
+		let name = name.trimmingCharacters(in: .whitespaces)
+		let email = email.trimmingCharacters(in: .whitespaces)
+		if let missing = Onboarding.missing(name: name, email: email, password: password) {
+			problem = missing
+			return
+		}
 		working = true
 		problem = nil
 		let runtime = Runtime.shared
 		let origin = runtime.config.origin ?? runtime.localURL.absoluteString
 		let output = await runtime.run([
 			"setup",
-			"--name", name.trimmingCharacters(in: .whitespaces),
-			"--email", email.trimmingCharacters(in: .whitespaces),
+			"--name", name,
+			"--email", email,
 			"--password", password,
 			"--origin", origin
 		])
@@ -169,6 +172,14 @@ final class Onboarding: ObservableObject {
 		} else {
 			problem = output.problem
 		}
+	}
+
+	nonisolated static func missing(name: String, email: String, password: String) -> String? {
+		if name.isEmpty { return "Add your name." }
+		if email.isEmpty { return "Add your email." }
+		if !email.contains("@") { return "That email is missing its @." }
+		if password.isEmpty { return "Add a password." }
+		return nil
 	}
 
 	/// Like `generatePassword` in packages/core/src/users.ts: four groups of six, easy to read.

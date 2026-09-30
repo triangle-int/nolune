@@ -133,6 +133,7 @@ private struct AccountScreen: View {
 					.padding(.leading, 4)
 			}
 			.frame(width: 340)
+			.onSubmit(submit)
 			if let problem = onboarding.problem {
 				Text(problem)
 					.font(Theme.font(13))
@@ -141,22 +142,20 @@ private struct AccountScreen: View {
 					.frame(maxWidth: 420)
 					.padding(.top, 12)
 			}
-			Button {
-				Task { await onboarding.createAccount() }
-			} label: {
-				if onboarding.working {
-					ProgressView().controlSize(.small).tint(Theme.primaryForeground)
-				} else {
-					Text("Continue")
-				}
-			}
-			.buttonStyle(PillButtonStyle())
-			.disabled(!onboarding.canCreateAccount)
-			.keyboardShortcut(.defaultAction)
-			.padding(.top, 22)
+			Button(onboarding.working ? "Creating your account…" : "Continue", action: submit)
+				.buttonStyle(PillButtonStyle())
+				.disabled(onboarding.working)
+				.keyboardShortcut(.defaultAction)
+				.padding(.top, 22)
 		}
 		.padding(.top, 20)
 		.task { await onboarding.checkAccount() }
+	}
+
+	private func submit() {
+		// Out of the field being typed in first, so its text is in before it's read.
+		NSApp.keyWindow?.makeFirstResponder(nil)
+		Task { await onboarding.createAccount() }
 	}
 }
 
