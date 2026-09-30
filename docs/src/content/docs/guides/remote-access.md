@@ -32,6 +32,10 @@ webhook URLs).
 - **When the computer is off or asleep**, the address shows a page saying nolune is offline, which
   reloads itself until it's back. A restart doesn't show it: the relay waits a few seconds for
   nolune to come back.
+- **Away for months.** An address whose nolune hasn't connected in 90 days goes back to the relay,
+  so names don't stay taken by computers that are gone. When nolune comes back, it asks for the
+  same address again and gets it, unless someone else took the name in the meantime: then it stops
+  using it, and `nolune relay enable` gets a new one.
 
 ## Through a tunnel of your own
 

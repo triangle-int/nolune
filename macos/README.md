@@ -25,6 +25,10 @@ SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=nolu
   macos/scripts/build-app.sh
 ```
 
+With an App Store Connect API key instead of a keychain profile, set `NOTARY_KEY` (the .p8 file),
+`NOTARY_KEY_ID` and `NOTARY_ISSUER`: that's how the Publish workflow signs and notarizes the app
+for each release (see Publishing in [the development guide](../docs/development.md)).
+
 To test on your own Mac, an `Apple Development` identity works as well, and keeps the Full Disk
 Access switch on across builds, as an ad-hoc signature doesn't; `security find-identity -v -p
 codesigning` lists yours. `ARCH=x86_64` builds for Intel Macs; `NODE_VERSION` picks the Node to bundle (the newest 24.x by

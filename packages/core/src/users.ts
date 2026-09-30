@@ -2,7 +2,7 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { hashPassword } from 'better-auth/crypto';
 import { and, eq, ne, sql } from 'drizzle-orm';
-import { getDb } from './db/index.ts';
+import { getDb, type DB } from './db/index.ts';
 import { account, user } from './db/schema.ts';
 import { inspectImage } from './images.ts';
 import { blobPath, storeBytes } from './media.ts';
@@ -18,6 +18,24 @@ export const MAX_PICTURE_EDGE = 1024;
 export class UserNameError extends Error {
 	readonly reason: 'required' | 'tooLong' | 'email' | 'taken';
 	constructor(message: string, reason: UserNameError['reason']) {
+		super(message);
+		this.reason = reason;
+	}
+}
+
+export class EmailError extends Error {
+	readonly reason: 'invalid' | 'taken';
+	constructor(message: string, reason: EmailError['reason']) {
+		super(message);
+		this.reason = reason;
+	}
+}
+
+export type PasswordReason = 'tooShort' | 'tooSimple' | 'tooRepetitive';
+
+export class PasswordError extends Error {
+	readonly reason: PasswordReason;
+	constructor(message: string, reason: PasswordReason) {
 		super(message);
 		this.reason = reason;
 	}
@@ -54,18 +72,44 @@ function checkName(name: string, userId?: string): string {
 	return trimmed;
 }
 
-/** Returns why a password is too weak, or null if it's fine. */
-export function passwordProblem(password: string): string | null {
-	if (password.length < MIN_PASSWORD_LENGTH) {
-		return `must be at least ${MIN_PASSWORD_LENGTH} characters`;
-	}
+const PASSWORD_PROBLEMS: Record<PasswordReason, string> = {
+	tooShort: `must be at least ${MIN_PASSWORD_LENGTH} characters`,
+	tooSimple: 'needs 3 of: lowercase, uppercase, digits, symbols (or use 20+ characters)',
+	tooRepetitive: 'has too few distinct characters'
+};
+
+/** Why a password is too weak, or null if it's fine. */
+export function passwordReason(password: string): PasswordReason | null {
+	if (password.length < MIN_PASSWORD_LENGTH) return 'tooShort';
 	const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((re) => re.test(password));
 	// Long passphrases are fine without symbol soup.
-	if (password.length < 20 && classes.length < 3) {
-		return 'needs 3 of: lowercase, uppercase, digits, symbols (or use 20+ characters)';
-	}
-	if (new Set(password).size < 8) return 'has too few distinct characters';
+	if (password.length < 20 && classes.length < 3) return 'tooSimple';
+	if (new Set(password).size < 8) return 'tooRepetitive';
 	return null;
+}
+
+/** Returns why a password is too weak, or null if it's fine. */
+export function passwordProblem(password: string): string | null {
+	const reason = passwordReason(password);
+	return reason && PASSWORD_PROBLEMS[reason];
+}
+
+function checkPassword(password: string): void {
+	const reason = passwordReason(password);
+	if (reason) throw new PasswordError(`Password ${PASSWORD_PROBLEMS[reason]}`, reason);
+}
+
+/** The email, trimmed and lowercased, if it's an address nobody has yet. */
+function checkEmail(email: string): string {
+	const trimmed = email.trim().toLowerCase();
+	// findUser takes anything with an @ for an email, and anything without for a name.
+	if (!/^[^\s@]+@[^\s@]+$/.test(trimmed)) {
+		throw new EmailError(`"${trimmed}" isn't an email address`, 'invalid');
+	}
+	if (findUserByEmail(trimmed)) {
+		throw new EmailError(`A user with email ${trimmed} already exists`, 'taken');
+	}
+	return trimmed;
 }
 
 export function generatePassword(): string {
@@ -90,27 +134,40 @@ export function findUserByEmail(email: string) {
 	return getDb().select().from(user).where(eq(user.email, email.toLowerCase())).get();
 }
 
+export function findUserById(id: string) {
+	return getDb().select().from(user).where(eq(user.id, id)).get();
+}
+
 /** Accepts either a display name or an email. */
 export function findUser(nameOrEmail: string) {
 	return nameOrEmail.includes('@') ? findUserByEmail(nameOrEmail) : findUserByName(nameOrEmail);
 }
 
-export async function createUser(input: {
-	name: string;
-	email: string;
-	password: string;
-	isAdmin?: boolean;
-}): Promise<{ id: string }> {
+/** What a transaction's callback is handed. */
+type Transaction = Parameters<Parameters<DB['transaction']>[0]>[0];
+
+/**
+ * `also` runs in the same transaction, before the account is written, and stops it by throwing:
+ * acceptInvite uses up its invite there, so a link makes one account however often it's sent.
+ */
+export async function createUser(
+	input: {
+		name: string;
+		email: string;
+		password: string;
+		isAdmin?: boolean;
+	},
+	also?: (tx: Transaction) => void
+): Promise<{ id: string }> {
 	const name = checkName(input.name);
-	const email = input.email.trim().toLowerCase();
-	if (findUserByEmail(email)) throw new Error(`A user with email ${email} already exists`);
-	const problem = passwordProblem(input.password);
-	if (problem) throw new Error(`Password ${problem}`);
+	const email = checkEmail(input.email);
+	checkPassword(input.password);
 
 	const id = randomUUID();
 	const hash = await hashPassword(input.password);
 	const now = new Date();
 	getDb().transaction((tx) => {
+		also?.(tx);
 		tx.insert(user)
 			.values({ id, name, email, isAdmin: input.isAdmin ?? false, createdAt: now, updatedAt: now })
 			.run();
@@ -133,8 +190,7 @@ export async function createUser(input: {
 export async function setPassword(nameOrEmail: string, password: string): Promise<void> {
 	const found = findUser(nameOrEmail);
 	if (!found) throw new Error(`No user "${nameOrEmail}"`);
-	const problem = passwordProblem(password);
-	if (problem) throw new Error(`Password ${problem}`);
+	checkPassword(password);
 	const hash = await hashPassword(password);
 	const result = getDb()
 		.update(account)
@@ -205,7 +261,13 @@ export function setAdmin(nameOrEmail: string, isAdmin: boolean): void {
 
 export function listUsers() {
 	return getDb()
-		.select({ id: user.id, name: user.name, email: user.email, isAdmin: user.isAdmin })
+		.select({
+			id: user.id,
+			name: user.name,
+			email: user.email,
+			isAdmin: user.isAdmin,
+			picture: user.picture
+		})
 		.from(user)
 		.orderBy(user.name)
 		.all();
@@ -215,4 +277,6 @@ export function deleteUser(nameOrEmail: string): void {
 	const found = findUser(nameOrEmail);
 	if (!found) throw new Error(`No user "${nameOrEmail}"`);
 	getDb().delete(user).where(eq(user.id, found.id)).run();
+	// They're no longer among their profiles' members.
+	noticeProfileChanges();
 }

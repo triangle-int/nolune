@@ -16,6 +16,8 @@ import { GatewayStore } from './store.ts';
  * RELAY_DATA     the gateways file; data/gateways.json by default
  * RELAY_MONTHLY_GB     traffic each address may pass in a month; 30 by default, 0 for no limit
  * RELAY_MAX_PER_NETWORK  addresses one network may have; 10 by default, 0 for no limit
+ * RELAY_FORGET_AFTER_DAYS  days a gateway may stay away before its name is free again; 90 by
+ *                default, 0 to keep every name
  * RELAY_ADMIN_SOCKET   the operator's socket (admin.ts); admin.sock next to the gateways file
  * RELAY_TRUST_PROXY=1  take the client's address from X-Forwarded-For, as set by Caddy in front
  * RELAY_SCHEME=http    for trying it without TLS; addresses are https otherwise
@@ -43,6 +45,7 @@ const relay = createRelay({
 	trustProxy: process.env.RELAY_TRUST_PROXY === '1',
 	monthlyTrafficBytes: Math.round(setting('RELAY_MONTHLY_GB', 30) * 1024 ** 3),
 	maxGatewaysPerNetwork: setting('RELAY_MAX_PER_NETWORK', 10),
+	forgetAfterMs: setting('RELAY_FORGET_AFTER_DAYS', 90) * 24 * 60 * 60 * 1000,
 	log: (message) => console.log(`[relay] ${message}`)
 });
 

@@ -11,6 +11,9 @@
 #   SIGN_IDENTITY     "Developer ID Application: Your Name (TEAMID)"
 #   NOTARY_PROFILE    a notarytool keychain profile (`xcrun notarytool store-credentials`); with
 #                     SIGN_IDENTITY, the app and the DMG are notarized and stapled
+#   NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER
+#                     instead of a profile, an App Store Connect API key: its .p8 file, its ID and
+#                     the issuer ID (as CI notarizes, in .github/workflows/publish.yml)
 #   SKIP_WEB_BUILD=1  use build/ and dist/ from an earlier `pnpm build`
 #
 # Out: macos/dist/<arch>/nolune.app and macos/dist/nolune-<version>-<arch>.dmg
@@ -135,10 +138,15 @@ sign "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 notarize() {
-	xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait
+	if [ -n "${NOTARY_KEY:-}" ]; then
+		xcrun notarytool submit "$1" --key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" \
+			--issuer "$NOTARY_ISSUER" --wait
+	else
+		xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait
+	fi
 }
 NOTARIZE=0
-if [ -n "${NOTARY_PROFILE:-}" ] && [ "$IDENTITY" != - ]; then NOTARIZE=1; fi
+if [ -n "${NOTARY_PROFILE:-}${NOTARY_KEY:-}" ] && [ "$IDENTITY" != - ]; then NOTARIZE=1; fi
 
 if [ "$NOTARIZE" = 1 ]; then
 	step "Notarizing the app"
