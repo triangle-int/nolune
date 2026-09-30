@@ -1,0 +1,84 @@
+/* The app's fonts (packages/web/src/routes/layout.css), bundled so every device shows the same
+   ones. */
+@import '@fontsource-variable/figtree';
+@import '@fontsource/fira-mono/400.css';
+@import '@fontsource/fira-mono/500.css';
+
+:root {
+	--ink: #08152c;
+	--ink-raised: #0d1d3a;
+	--line: rgb(151 172 201 / 0.28);
+	--cream: #f6f0e3;
+	--text: #dde3ee;
+	--muted: #9eabc2;
+	--rust: #f07a3c;
+	--sans: 'Figtree Variable', ui-sans-serif, -apple-system, system-ui, 'Segoe UI', sans-serif;
+	--mono: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	scroll-behavior: smooth;
+}
+
+body {
+	margin: 0;
+	background: var(--ink);
+	color: var(--text);
+	font-family: var(--mono);
+	-webkit-font-smoothing: antialiased;
+}
+
+a {
+	color: inherit;
+}
+
+/* The page's width and gutters, shared by every page. */
+.wrap {
+	width: 100%;
+	max-width: 1240px;
+	margin: 0 auto;
+	padding-inline: 24px;
+}
+
+/* An outlined orange button or link. */
+.pill {
+	display: inline-flex;
+	gap: 12px;
+	align-items: center;
+	padding: 10px 28px;
+	border: 1.5px solid var(--rust);
+	border-radius: 999px;
+	background: none;
+	color: var(--rust);
+	font: 500 1rem var(--mono);
+	text-decoration: none;
+	cursor: pointer;
+	transition: background 0.2s;
+}
+.pill:hover {
+	background: rgb(240 122 60 / 0.1);
+}
+
+@media (max-width: 560px) {
+	.wrap {
+		padding-inline: 16px;
+	}
+}
+
+:focus-visible {
+	outline: 2px solid var(--rust);
+	outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html {
+		scroll-behavior: auto;
+	}
+}

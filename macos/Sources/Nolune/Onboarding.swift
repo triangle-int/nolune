@@ -3,7 +3,7 @@ import SwiftUI
 
 /**
  * The first run: the intro in space, then one question per screen, like the web welcome
- * (src/routes/p/[slug]/welcome). Who's setting it up, Full Disk Access, and the gateway started
+ * (packages/web/src/routes/p/[slug]/welcome). Who's setting it up, Full Disk Access, and the gateway started
  * in the background.
  */
 @MainActor

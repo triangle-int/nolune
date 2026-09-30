@@ -45,6 +45,13 @@ export interface Config {
 	embeddings?: 'off' | { provider: 'openai' | 'openrouter' | 'custom-openai'; model: string };
 	/** Extra environment variables for commands the agent runs (e.g. FIRECRAWL_API_KEY). */
 	commandEnv?: Record<string, string>;
+	/**
+	 * How the agent's commands run (command-safety.ts): `auto`, a model checks each one first and
+	 * blocks what could do harm nobody asked for; `unrestricted`, they run as they are. Unset: auto.
+	 */
+	commandMode?: 'auto' | 'unrestricted';
+	/** The preset whose model does auto mode's checks. Unset, or removed: each chat's own model. */
+	safetyPresetId?: string;
 	/** Where `nolune start` listens. Defaults: 127.0.0.1:5780 (put a tunnel or proxy in front). */
 	host?: string;
 	port?: number;

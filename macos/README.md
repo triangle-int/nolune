@@ -56,7 +56,7 @@ onboarding over.
   entitlements V8 needs (`Resources/node.entitlements`, as Node's own builds have), then the app.
 - **The intro** (`Sky.swift`, `IntroView.swift`) is IntroSky.svelte and the welcome's wordmark
   animation, redrawn with SwiftUI's `Canvas` on the web's timings and song. The wordmark's path is
-  copied from `src/lib/assets/logo.svg`; keep them in step.
+  copied from `packages/web/src/lib/assets/logo.svg`; keep them in step.
 
 The CI workflow `macos.yml` builds the app on every change here, checks the bundle starts a
 gateway that answers, and keeps every screen as a PNG (`Nolune --snapshot <folder>`, which draws

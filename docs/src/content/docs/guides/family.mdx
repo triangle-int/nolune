@@ -1,0 +1,56 @@
+---
+title: Profiles and family
+description: Personal and shared profiles, adding people, and the assistant's look and soul.
+---
+
+import Avatars from '../../../components/Avatars.astro';
+
+## Your space, our space
+
+A profile is a space for a person or a group, rather than a separate login. One account can belong
+to several profiles, and you can switch between them whenever you need to.
+
+| Space              | Who it's for           | What you might keep there                         |
+| ------------------ | ---------------------- | ------------------------------------------------- |
+| Your own profile   | Just you               | Personal projects, ideas, and preferences         |
+| The family profile | Everyone at home       | Meal plans, household notes, and family routines  |
+| A shared project   | The people taking part | A holiday, a birthday, or something you're making |
+
+Each profile has its own conversations, memory, skills and assistant personality. In a shared
+profile, everyone can pick up the same conversation, and the assistant knows who's speaking.
+
+![Personal and shared profiles in nolune](../../../../screenshots/profiles.png)
+
+## Bringing someone into the family
+
+1. Create their account on the host computer:
+
+   ```sh
+   nolune user create Anna anna@example.com
+   ```
+
+2. Give them the address and the password printed by the command.
+3. Open **People & profile** in the profile you want to share, and add them by name or email.
+
+They can create their own profiles and add existing users too. Accounts are created by the host's
+administrator; web sign-up is off, and joining a profile doesn't send an email invitation.
+
+## A new profile's welcome
+
+A new profile starts with a short welcome: pick the assistant's avatar, and bring over what
+ChatGPT, Claude or Gemini already knows about you (copy a prompt there, paste the answer back). On a
+fresh install without a model, an admin picks one there too. Its sounds can be turned off in
+Settings.
+
+## The assistant's look
+
+There's one assistant; each profile gives it a look of its own. Pick one in the welcome, under
+**People & profile**, or with `nolune profile avatar <name> --profile <slug>`.
+
+<Avatars />
+
+## Soul
+
+Each profile can tell nolune who to be for its family: its character, what it cares about, how it
+talks. Write it under **People & profile**, or just ask nolune to be different and it updates its
+own soul (`~/.nolune/profiles/<profile>/soul.md`). Every chat starts with it.

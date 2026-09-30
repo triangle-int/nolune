@@ -1,8 +1,8 @@
 import SwiftUI
 
 /**
- * The wordmark, from src/lib/assets/logo.svg: the letters' path and the three trailing dots, in
- * the logo's own units. Keep them in step with the SVG.
+ * The wordmark, from packages/web/src/lib/assets/logo.svg: the letters' path and the three
+ * trailing dots, in the logo's own units. Keep them in step with the SVG.
  */
 enum Wordmark {
 	static let size = CGSize(width: 2088, height: 343)

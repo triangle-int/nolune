@@ -2,7 +2,7 @@ import AppKit
 import CoreText
 import SwiftUI
 
-/// The web app's dark theme (src/routes/layout.css), which the onboarding always wears.
+/// The web app's dark theme (packages/web/src/routes/layout.css), which the onboarding always wears.
 enum Theme {
 	/// Deep space behind the intro: almost black, a little blue (IntroSky's `SPACE`).
 	static let space = Color(red: 4 / 255, green: 6 / 255, blue: 14 / 255)

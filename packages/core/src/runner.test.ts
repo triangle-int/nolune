@@ -1,8 +1,9 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { streamTurn, toAnthropicMessages } from './anthropic.ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMessage, streamTurn, toAnthropicMessages } from './anthropic.ts';
 import { eq } from 'drizzle-orm';
 import { stopBackgroundCommands } from './background.ts';
+import { SAFETY_STOP, saveCommandMode } from './command-safety.ts';
 import {
 	appendRow,
 	commitQueuedRows,
@@ -15,6 +16,7 @@ import { addMemoryFact } from './memory.ts';
 import { conversation } from './db/schema.ts';
 import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
 import {
+	changeCommandMode,
 	changeEffort,
 	changeModel,
 	getSnapshot,
@@ -24,21 +26,29 @@ import {
 	recoverAfterRestart,
 	runningConversationIds,
 	sendMessage,
+	stop,
 	subscribe,
 	type LiveEvent
 } from './runner.ts';
 import { runSubagent, setSubagentStatus } from './subagents.ts';
-import { makeFamily, makePreset } from './test/fixtures.ts';
+import { makeFamily, makePreset, runCommandsUnchecked } from './test/fixtures.ts';
 
 vi.mock('./anthropic.ts', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./anthropic.ts')>()),
-	streamTurn: vi.fn()
+	streamTurn: vi.fn(),
+	// Auto mode's checks, on the chat's own model.
+	createMessage: vi.fn()
 }));
 
 vi.mock('./run-command.ts', async (importOriginal) => ({
 	...(await importOriginal<typeof import('./run-command.ts')>()),
 	runCommand: vi.fn()
 }));
+
+beforeEach(() => {
+	// Auto mode has tests of its own, at the end.
+	runCommandsUnchecked();
+});
 
 afterEach(() => {
 	vi.resetAllMocks();
@@ -378,5 +388,230 @@ describe('background commands', () => {
 
 		stopBackgroundCommands(chat.id, 'Anna');
 		for (const finish of finishers) finish({ content: '', isError: true, exitCode: null });
+	});
+});
+
+describe('auto mode', () => {
+	beforeEach(() => {
+		saveCommandMode('auto');
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+	});
+
+	const tidy = (id: string, command: string) => ({
+		type: 'tool_use',
+		id,
+		name: 'run_command',
+		input: { summary: 'Tidying up', command }
+	});
+	const said = (text: string) => modelReply([{ type: 'text', text }], 'end_turn');
+
+	/** A named chat (naming one would ask the model too) where Anna asked to tidy up. */
+	function tidyingChat(...replies: Anthropic.Message[]) {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({
+			profile,
+			presetId: makePreset().id,
+			userId: user.id,
+			title: 'Downloads'
+		});
+		insertQueued({
+			conversationId: chat.id,
+			senderId: user.id,
+			senderName: 'Anna',
+			text: 'Tidy up my Downloads'
+		});
+		for (const reply of replies) vi.mocked(streamTurn).mockResolvedValueOnce(reply);
+		return { chat, user };
+	}
+
+	/** What the check's model answers, in order. */
+	function checkSays(...texts: string[]) {
+		for (const text of texts) vi.mocked(createMessage).mockResolvedValueOnce(said(text));
+	}
+
+	it("answers a blocked command with the check's reason, without running it", async () => {
+		const { chat } = tidyingChat(
+			modelReply(
+				[
+					{ type: 'text', text: 'Anna surely wants it all gone.' },
+					tidy('t1', 'rm -rf ~/Downloads')
+				],
+				'tool_use'
+			),
+			said('I need your OK to empty Downloads.')
+		);
+		checkSays('BLOCK', "Verdict: BLOCK\nReason: Anna didn't ask to delete everything.");
+
+		await run(chat.id);
+
+		expect(runCommand).not.toHaveBeenCalled();
+		const [[blocked]] = results(chat.id);
+		expect(blocked).toMatchObject({ callId: 't1', isError: true });
+		expect(blocked.content).toMatch(
+			/^Blocked by auto mode: Anna didn't ask to delete everything\.\n\nThe command didn't run/
+		);
+		expect(getSnapshot(chat.id).error).toBeNull();
+		// The check read what Anna asked for and the command, not what the agent said.
+		const { system, input } = vi.mocked(createMessage).mock.calls[0][0];
+		expect(system).toMatch(/safety check/);
+		expect(input).toContain('Message from Anna: Tidy up my Downloads');
+		expect(input).toContain('rm -rf ~/Downloads');
+		expect(input).not.toContain('surely wants');
+	});
+
+	it('runs what the check allows, and what only looks without asking', async () => {
+		const { chat } = tidyingChat(
+			modelReply(
+				[tidy('t1', 'ls ~/Downloads'), tidy('t2', 'rm ~/Downloads/setup.dmg')],
+				'tool_use'
+			),
+			said('Removed the installer.')
+		);
+		checkSays('ALLOW');
+		vi.mocked(runCommand).mockResolvedValue({
+			content: '[exit code 0]',
+			isError: false,
+			exitCode: 0
+		});
+
+		await run(chat.id);
+
+		expect(runCommand).toHaveBeenCalledTimes(2);
+		expect(createMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it('tells the agent to stop after three blocks in a row, ends the loop if it goes on, and starts again when Anna answers', async () => {
+		const { chat, user } = tidyingChat(
+			modelReply([tidy('t1', 'rm -rf ~/Downloads')], 'tool_use'),
+			modelReply([tidy('t2', 'find ~/Downloads -delete')], 'tool_use'),
+			modelReply([tidy('t3', 'mv ~/Downloads ~/.Trash/')], 'tool_use'),
+			modelReply([tidy('t4', 'rmdir ~/Downloads')], 'tool_use')
+		);
+		for (let i = 0; i < 3; i++) checkSays('BLOCK', 'Verdict: BLOCK\nReason: Not asked for.');
+
+		await run(chat.id);
+
+		const answered = results(chat.id).map(([result]) => result.content as string);
+		expect(answered).toHaveLength(4);
+		expect(answered[1]).not.toMatch(/Run no more commands/);
+		expect(answered[2]).toMatch(/That's 3 commands blocked in a row\. Run no more commands now/);
+		// Refused without asking the check again, and the loop ended there.
+		expect(answered[3]).toMatch(/^Blocked by auto mode: no more commands run in this turn/);
+		expect(createMessage).toHaveBeenCalledTimes(6);
+		expect(streamTurn).toHaveBeenCalledTimes(4);
+		expect(getSnapshot(chat.id).error).toBe(SAFETY_STOP);
+
+		// Anna says to go ahead: the count starts again, and the check sees her answer.
+		vi.mocked(streamTurn).mockResolvedValueOnce(
+			modelReply([tidy('t5', 'rm -rf ~/Downloads')], 'tool_use')
+		);
+		vi.mocked(streamTurn).mockResolvedValueOnce(said('Done.'));
+		checkSays('ALLOW');
+		vi.mocked(runCommand).mockResolvedValueOnce({
+			content: '[exit code 0]',
+			isError: false,
+			exitCode: 0
+		});
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'Yes, delete all of it');
+		await ended;
+
+		expect(runCommand).toHaveBeenCalledTimes(1);
+		expect(getSnapshot(chat.id).error).toBeNull();
+		const { input } = vi.mocked(createMessage).mock.calls.at(-1)![0];
+		expect(input).toContain('Message from Anna: Yes, delete all of it');
+		expect(input).toContain('Command you blocked: rm -rf ~/Downloads');
+	});
+
+	it('answers the call when someone presses Stop during the check', async () => {
+		const { chat } = tidyingChat(modelReply([tidy('t1', 'rm ~/Downloads/a.zip')], 'tool_use'));
+		vi.mocked(createMessage).mockReturnValueOnce(new Promise(() => {}));
+
+		const ended = run(chat.id);
+		await vi.waitFor(() => expect(createMessage).toHaveBeenCalled());
+		stop(chat.id, 'Anna');
+		await ended;
+
+		expect(runCommand).not.toHaveBeenCalled();
+		expect(results(chat.id)).toEqual([
+			[{ type: 'tool_result', callId: 't1', content: 'Not run. Stopped by Anna.', isError: true }]
+		]);
+	});
+
+	it("goes by the chat's own mode, changed for everyone who has it open", async () => {
+		const { chat } = tidyingChat(
+			modelReply([tidy('t1', 'rm -rf ~/Downloads')], 'tool_use'),
+			said('Emptied it.')
+		);
+		const events: LiveEvent[] = [];
+		subscribe(chat.id, (event) => events.push(event));
+		vi.mocked(runCommand).mockResolvedValueOnce({
+			content: '[exit code 0]',
+			isError: false,
+			exitCode: 0
+		});
+
+		expect(changeCommandMode(chat.id, 'unrestricted')).toEqual({
+			mode: 'unrestricted',
+			fallback: 'auto'
+		});
+		await run(chat.id);
+
+		expect(runCommand).toHaveBeenCalledTimes(1);
+		expect(createMessage).not.toHaveBeenCalled();
+		expect(events).toContainEqual({
+			type: 'commands',
+			commands: { mode: 'unrestricted', fallback: 'auto' }
+		});
+		expect(getSnapshot(chat.id).commands).toEqual({ mode: 'unrestricted', fallback: 'auto' });
+	});
+
+	it('checks a chat set to auto when Models & keys says unrestricted', async () => {
+		saveCommandMode('unrestricted');
+		const { chat } = tidyingChat(
+			modelReply([tidy('t1', 'rm -rf ~/Downloads')], 'tool_use'),
+			said('I need your OK first.')
+		);
+		changeCommandMode(chat.id, 'auto');
+		checkSays('BLOCK', "Verdict: BLOCK\nReason: Anna didn't ask to delete everything.");
+
+		await run(chat.id);
+
+		expect(runCommand).not.toHaveBeenCalled();
+		expect(results(chat.id)[0][0].content).toMatch(/^Blocked by auto mode/);
+	});
+
+	it("starts subagents with their chat's mode, and changes theirs with it", () => {
+		const { chat } = tidyingChat();
+		changeCommandMode(chat.id, 'unrestricted');
+		const { conversation: sub } = runSubagent({
+			parentId: chat.id,
+			name: 'sorter',
+			prompt: 'Sort.'
+		});
+		const modeOf = (id: string) =>
+			getDb().select().from(conversation).where(eq(conversation.id, id)).get()?.commandMode;
+
+		expect(modeOf(sub.id)).toBe('unrestricted');
+		changeCommandMode(chat.id, null);
+		expect(modeOf(sub.id)).toBeNull();
+	});
+
+	it('checks nothing when commands are unrestricted', async () => {
+		saveCommandMode('unrestricted');
+		const { chat } = tidyingChat(
+			modelReply([tidy('t1', 'rm -rf ~/Downloads')], 'tool_use'),
+			said('Emptied it.')
+		);
+		vi.mocked(runCommand).mockResolvedValueOnce({
+			content: '[exit code 0]',
+			isError: false,
+			exitCode: 0
+		});
+
+		await run(chat.id);
+
+		expect(runCommand).toHaveBeenCalledTimes(1);
+		expect(createMessage).not.toHaveBeenCalled();
 	});
 });

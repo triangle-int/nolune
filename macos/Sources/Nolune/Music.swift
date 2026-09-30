@@ -1,7 +1,7 @@
 import AVFoundation
 
 /**
- * The welcome's song and its one short sound, as src/lib/welcome/sounds.ts plays them: the song
+ * The welcome's song and its one short sound, as packages/web/src/lib/welcome/sounds.ts plays them: the song
  * carries the intro, then goes on much quieter under the questions.
  */
 @MainActor

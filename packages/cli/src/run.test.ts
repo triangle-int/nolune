@@ -296,3 +296,41 @@ describe('nolune agent watch', () => {
 		expect(await watching).toMatchObject({ code: 1, out: '' });
 	});
 });
+
+describe('command mode', () => {
+	it("is set at the terminal, never from the agent's own commands", async () => {
+		makePreset('Haiku', 'claude-haiku-5');
+		expect((await run(['config'])).out).toContain(
+			"\ncommands      auto mode, checked by each chat's own model\n"
+		);
+
+		expect(await run(['config', 'set', 'safety-model', 'Haiku'])).toEqual({
+			code: 0,
+			out: 'Commands: auto mode, checked by Haiku.\n',
+			err: ''
+		});
+		expect(await run(['config', 'set', 'command-mode', 'unrestricted'])).toMatchObject({
+			code: 0,
+			out: 'Commands: unrestricted: commands run without a check.\n'
+		});
+		expect((await run(['config', 'set', 'command-mode', 'off'])).err).toContain(
+			'command-mode is auto or unrestricted'
+		);
+		expect((await run(['config', 'set', 'safety-model', 'Opus'])).err).toContain(
+			'No preset "Opus"'
+		);
+
+		const fromAgent = await run(['config', 'set', 'command-mode', 'auto'], {
+			env: { NOLUNE_CONVERSATION_ID: 'chat-1' }
+		});
+		expect(fromAgent.code).toBe(1);
+		expect(fromAgent.err).toContain("the agent can't change how its own commands are checked");
+		expect((await run(['config'])).out).toContain('commands      unrestricted');
+
+		await run(['config', 'set', 'command-mode', 'auto']);
+		await run(['config', 'set', 'safety-model', 'chat']);
+		expect((await run(['config'])).out).toContain(
+			"commands      auto mode, checked by each chat's own model"
+		);
+	});
+});
