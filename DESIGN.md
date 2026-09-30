@@ -1828,11 +1828,12 @@ signing.
   whether it runs, and install and uninstall point to the app. The app removes a LaunchAgent with
   the gateway's label (`nolune service install`'s) when it starts one, since two would fight over
   the port.
-- **Full Disk Access.** No API asks for it. The step opens the pane, reads a protected file (which
-  usually lists the app, switched off), offers the app's icon to drag in, and checks every second
-  in a fresh `--probe-disk-access` process, since a running one may not see the grant until it
-  relaunches. When the switch goes on, the step's own big switch flips with it and the aurora
-  swells.
+- **Full Disk Access.** No API asks for it. The step opens the pane, tries a few protected files
+  (the privacy databases, Time Machine's settings, Safari's and Mail's folders: none is on every
+  Mac, so any one that reads is the answer; trying them usually lists the app, switched off),
+  offers the app's icon to drag in, and checks every second in a fresh `--probe-disk-access`
+  process, since a running one may not see the grant until it relaunches. When the switch goes
+  on, the step's own big switch flips with it and the aurora swells.
 - **After.** A menu bar extra: whether the gateway answers, the people with accounts, the address,
   open, restart, the log, and Quit, which stops nolune. Opening the app again opens nolune in the
   browser.

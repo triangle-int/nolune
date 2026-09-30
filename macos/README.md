@@ -64,9 +64,10 @@ onboarding over.
   when nolune has an address already (the relay's, or a public URL of its own). While there's one,
   it's what "Open nolune" opens and the menu shows (`Runtime.origin`, as `publicOrigin` in core).
 - **Full Disk Access** (`DiskAccess.swift`). There's no API to ask for it. The app opens the right
-  pane, reads a protected file so it usually shows up in the list switched off, offers its icon to
-  drag in when it doesn't, and checks in a new process every second until the switch is on: a
-  running process may not see the grant before it relaunches.
+  pane, tries a few protected files so it usually shows up in the list switched off, offers its
+  icon to drag in when it doesn't, and checks in a new process every second until the switch is on:
+  a running process may not see the grant before it relaunches. Any one protected file it can read
+  is the answer, since none is on every Mac (macOS 27 moved the user's privacy database).
 - **Signing** (`scripts/build-app.sh`): every Mach-O in the package, then Node with the
   entitlements V8 needs (`Resources/node.entitlements`, as Node's own builds have), then the app.
 - **The intro** (`IntroView.swift`, `Sky.swift`) is a big bang of about four seconds: a point of

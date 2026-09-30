@@ -5,16 +5,40 @@ import AppKit
  * the app can do is take them to the right list, show up in it, and notice the moment it's on.
  */
 enum DiskAccess {
-	/// The privacy database: only a process with Full Disk Access can open it.
-	private static var protectedFile: URL {
-		FileManager.default.homeDirectoryForCurrentUser
-			.appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db")
+	/**
+	 * Files only a process with Full Disk Access can open. None is on every Mac: macOS 27 moved the
+	 * user's privacy database out of Library/Application Support, so each is tried, and any one
+	 * that opens is the answer.
+	 */
+	private static var protectedFiles: [URL] {
+		[
+			// The privacy databases: the user's (up to macOS 26) and the Mac's.
+			FileManager.default.homeDirectoryForCurrentUser
+				.appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db"),
+			URL(fileURLWithPath: "/Library/Application Support/com.apple.TCC/TCC.db"),
+			URL(fileURLWithPath: "/Library/Preferences/com.apple.TimeMachine.plist"),
+		]
+	}
+
+	/// Folders the same goes for, there once Safari or Mail has run: listed rather than opened.
+	private static var protectedFolders: [URL] {
+		let home = FileManager.default.homeDirectoryForCurrentUser
+		return ["Library/Safari", "Library/Mail"]
+			.map { home.appendingPathComponent($0, isDirectory: true) }
 	}
 
 	static func canReadProtectedFiles() -> Bool {
-		guard let handle = try? FileHandle(forReadingFrom: protectedFile) else { return false }
+		protectedFiles.contains(where: canOpen) || protectedFolders.contains(where: canList)
+	}
+
+	private static func canOpen(_ file: URL) -> Bool {
+		guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
 		try? handle.close()
 		return true
+	}
+
+	private static func canList(_ folder: URL) -> Bool {
+		(try? FileManager.default.contentsOfDirectory(atPath: folder.path)) != nil
 	}
 
 	/**
@@ -40,8 +64,8 @@ enum DiskAccess {
 	}
 
 	/**
-	 * Trying a protected file is what usually adds the app to the Full Disk Access list, switched
-	 * off, so there's a switch to flip. Usually: it's how macOS behaves, not something it promises,
+	 * Trying protected files is what usually adds the app to the Full Disk Access list, switched
+	 * off, so there's a switch to flip; without access every one of them is tried. Usually: it's how macOS behaves, not something it promises,
 	 * so the onboarding also offers the app's icon to drag into the list.
 	 */
 	static func appearInList() {
