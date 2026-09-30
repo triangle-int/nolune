@@ -25,7 +25,7 @@ for name in "$host" "$domain" "check.$domain"; do
 	if [ -n "$until" ]; then
 		echo "  ok       $name, until $until"
 	else
-		echo "  MISSING  $name: see the problems below"
+		echo "  MISSING  $name: see the errors below"
 	fi
 done
 
@@ -38,9 +38,12 @@ else
 fi
 
 echo
-echo "Problems in the last hour"
-problems=$(docker compose logs --since 1h --no-log-prefix caddy relay 2>/dev/null |
-	grep -iE 'error|fail' | tail -n 5 | cut -c1-240)
+echo "Errors in the last 15 minutes"
+# Errors only: Caddy's (in its console format, or JSON from before it), and the relay's failed
+# requests. Caddy's notes that merely mention a failure, like the one about UDP buffers, aren't.
+problems=$(docker compose logs --since 15m --no-log-prefix caddy relay 2>/dev/null |
+	grep -E '[[:space:]]ERROR[[:space:]]|"level":"error"|^\[relay\] request failed' |
+	tail -n 5 | cut -c1-240)
 if [ -n "$problems" ]; then
 	echo "$problems" | sed 's/^/  /'
 else
