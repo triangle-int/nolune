@@ -102,6 +102,11 @@ pnpm build && pnpm start
 curl -H 'Host: smiths.nolune.localhost' http://127.0.0.1:8090/login
 ```
 
+If Caddy's log says a certificate couldn't be had: `SERVFAIL` or `NXDOMAIN` means the name's DNS
+record is missing or in the wrong zone (check it with `dig +short relay.nolune.dev`); an error from
+Cloudflare's API means the token can't edit that zone. Caddy tries again by itself, every minute at
+first; `docker compose restart caddy` tries at once.
+
 ## Looking after it
 
 - **Back up** the gateways file (the `relay-data` volume). Without it, every family would have to

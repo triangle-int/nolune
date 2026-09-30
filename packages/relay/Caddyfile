@@ -10,6 +10,9 @@
 {$RELAY_HOST}, {$RELAY_DOMAIN}, *.{$RELAY_DOMAIN} {
 	tls {
 		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+		# Finding each name's zone and checking the challenge records asks Cloudflare's resolvers,
+		# which answer for its zones at once, rather than the server's, which may not (SERVFAIL).
+		resolvers 1.1.1.1 1.0.0.1
 	}
 	reverse_proxy relay:8080 {
 		# Event streams go on as they come, not when a buffer fills.
