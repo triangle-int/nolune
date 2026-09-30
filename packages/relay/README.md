@@ -109,6 +109,13 @@ first; `docker compose restart caddy` tries at once.
 
 ## Looking after it
 
+- **Is it all right?** `./check.sh` in this folder, on the server, answers in a few lines: whether
+  the containers run, the certificates and until when, whether the relay answers, and the last
+  problems in the logs.
+- **The logs** are lines to read (Caddy's in its console format, the relay's as `[relay] ...`):
+  `docker compose logs -f relay` for addresses coming and going, `docker compose logs -f caddy` for
+  certificates, `docker compose logs --since 1h` for the last hour of both.
+
 - **Back up** the gateways file (the `relay-data` volume). Without it, every family would have to
   run `nolune relay enable` again (it asks for the same name back) and restart nolune; until then
   their gateways try every 5 minutes, in case the file comes back.

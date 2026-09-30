@@ -1,5 +1,9 @@
 {
 	email {$ACME_EMAIL}
+	# Lines people can read (time, level, what happened), rather than JSON.
+	log {
+		format console
+	}
 }
 
 # The relay's own host (relay.nolune.dev), the domain without a name (nolune.family, which the
