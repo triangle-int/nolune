@@ -176,7 +176,8 @@ export function commandEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
 	};
 }
 
-function resolveCwd(cwd: string | undefined, base: string): string {
+/** Where a command runs: its `cwd`, from `base` when it's relative, or `base`. */
+export function resolveCwd(cwd: string | undefined, base: string): string {
 	if (!cwd) return base;
 	if (cwd === '~') return homedir();
 	if (cwd.startsWith('~/')) return join(homedir(), cwd.slice(2));

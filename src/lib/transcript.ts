@@ -264,8 +264,12 @@ export function formatDuration(ms: number, m: Messages): string | null {
 	return m.time.hoursMinutes(Math.floor(minutes / 60), minutes % 60);
 }
 
-/** How a finished command ended. */
-export function resultStatus(result: ToolResult): 'done' | 'failed' | 'stopped' {
+/**
+ * How a finished command ended. `blocked`: auto mode's check didn't let it run, and its result
+ * says why (command-safety.ts in core).
+ */
+export function resultStatus(result: ToolResult): 'done' | 'failed' | 'stopped' | 'blocked' {
 	if (!result.isError) return 'done';
+	if (result.output.startsWith('Blocked by auto mode')) return 'blocked';
 	return /Stopped by [^\n]*$/.test(result.output) ? 'stopped' : 'failed';
 }

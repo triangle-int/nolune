@@ -33,6 +33,7 @@ import {
 	type MediaRow,
 	type PreparedMedia
 } from './media.ts';
+import type { CommandMode } from './command-safety.ts';
 import type { CacheTtl, Effort, Provider } from './models.ts';
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
@@ -169,6 +170,8 @@ export function createConversation(
 		/** A folder of the profile: the chat starts in it, with its instructions and files. */
 		folderId?: string | null;
 		cacheTtl?: CacheTtl;
+		/** How its commands run, when that differs from Models & keys (command-safety.ts). */
+		commandMode?: CommandMode | null;
 	}
 ): Conversation {
 	const folderId = input.folderId ?? null;
@@ -190,6 +193,7 @@ export function createConversation(
 		tools: TOOLS,
 		providerSession: null,
 		cacheTtl: input.cacheTtl ?? '1h',
+		commandMode: input.commandMode ?? null,
 		hidden: input.hidden ?? false,
 		learnedSeq: null,
 		createdBy: input.userId,
@@ -268,6 +272,11 @@ export function getConversationForUser(id: string, userId: string) {
 /** On Claude, changing effort mid-conversation rebuilds that conversation's cache once. */
 export function setEffort(id: string, effort: Effort): void {
 	getDb().update(conversation).set({ effort }).where(eq(conversation.id, id)).run();
+}
+
+/** Null: the chat's commands run as Models & keys says. */
+export function setCommandMode(id: string, commandMode: CommandMode | null): void {
+	getDb().update(conversation).set({ commandMode }).where(eq(conversation.id, id)).run();
 }
 
 /** Why a conversation can't switch to a model, in words for the person switching. */

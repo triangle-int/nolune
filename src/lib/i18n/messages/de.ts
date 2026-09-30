@@ -296,10 +296,12 @@ export const de: Messages = {
 		ranCommands: (n: number) =>
 			p(n, { one: `${n} Befehl ausgeführt`, other: `${n} Befehle ausgeführt` }),
 		failedCount: (n: number) => `${n} fehlgeschlagen`,
+		blockedCount: (n: number) => `${n} blockiert`,
 		failed: 'fehlgeschlagen',
 		didntWork: 'hat nicht geklappt',
 		statusStopped: 'gestoppt',
 		statusNotRun: 'nicht ausgeführt',
+		statusBlocked: 'blockiert',
 		command: 'Befehl',
 		theCommand: 'Der Befehl, den nolune ausgeführt hat',
 		inFolder: (cwd: string) => `in ${cwd}`,
@@ -324,6 +326,17 @@ export const de: Messages = {
 			xhigh: { label: 'Sehr hoch', hint: 'Nimmt sich Zeit' },
 			max: { label: 'Maximal', hint: 'Am langsamsten, für die schwierigsten Probleme' }
 		}
+	},
+
+	commandMode: {
+		title: 'Befehle in diesem Chat',
+		auto: 'Automatisch',
+		autoHint: 'Ein Modell prüft jeden Befehl, bevor er läuft.',
+		unrestricted: 'Uneingeschränkt',
+		unrestrictedHint: 'Befehle laufen ohne Prüfung. Nicht empfohlen.',
+		adminsOnly: 'Nur Admins können die Prüfung für einen Chat ausschalten.',
+		labelAuto: 'Befehle: automatischer Modus',
+		labelUnrestricted: 'Befehle: uneingeschränkt'
 	},
 
 	newChat: {
@@ -1040,6 +1053,34 @@ export const de: Messages = {
 			wordsOnly: 'Gespeichert. Das Gedächtnis wird nur nach Wörtern durchsucht.',
 			noAnswer: (problem: string) => `Gespeichert, aber keine Antwort: ${problem}`,
 			needModel: 'Gib das Modell an, das verwendet werden soll.'
+		},
+		commands: {
+			title: 'Befehle',
+			hint: 'Der Agent arbeitet, indem er Befehle auf diesem Computer ausführt, mit dem Zugriff dieses Kontos auf seine Dateien und Apps. Im automatischen Modus prüft ein Modell jeden Befehl, bevor er läuft, und stoppt, was Schaden anrichten könnte, ohne dass jemand darum gebeten hat. Jeder Chat richtet sich danach, außer jemand stellt ihn mit dem Schild im Eingabefeld anders ein; die Prüfung ausschalten können dort nur Admins.',
+			modes: {
+				auto: 'Automatischer Modus',
+				unrestricted: 'Uneingeschränkt'
+			},
+			choices: {
+				auto: 'Automatisch (empfohlen)',
+				unrestricted: 'Uneingeschränkt (nicht empfohlen)'
+			},
+			checkedByChat: 'Jeden Befehl prüft das eigene Modell des Chats.',
+			checkedBy: (preset: string) => `Jeden Befehl prüft ${preset}.`,
+			presetGone:
+				'Das für die Prüfungen gewählte Modell wurde entfernt, deshalb prüft jeder Chat seine Befehle mit seinem eigenen Modell.',
+			unrestrictedStatus: 'Befehle laufen ohne Prüfung.',
+			change: 'Ändern',
+			mode: 'Modus',
+			autoNote:
+				'Befehle, die nur nachsehen, laufen sofort. Die übrigen werden zuerst geprüft; ein blockierter Befehl läuft nicht, und nolune sagt, was es vorhatte, damit jemand zustimmen kann.',
+			unrestrictedNote:
+				'Jeder Befehl läuft so, wie der Agent ihn geschrieben hat. Nichts hält einen Fehler auf oder eine Webseite oder E-Mail, die ihn zu etwas überredet. Nur für Leute, die genau hinsehen.',
+			checker: 'Geprüft von',
+			chatModel: 'Das eigene Modell des Chats',
+			checkerNote:
+				'Ein schnelles, fähiges Modell hält Chats flott: Jeder Befehl, der mehr tut als nachzusehen, kostet eine kurze Anfrage an das Modell.',
+			saved: 'Gespeichert. Gilt ab dem nächsten Befehl.'
 		}
 	}
 };

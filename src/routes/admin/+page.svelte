@@ -14,6 +14,7 @@
 	import TopBar from '$lib/components/TopBar.svelte';
 	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
 	import AddCustomProvider from '$lib/components/admin/AddCustomProvider.svelte';
+	import CommandSafety from '$lib/components/admin/CommandSafety.svelte';
 	import CustomProviderRow from '$lib/components/admin/CustomProviderRow.svelte';
 	import MemorySearch from '$lib/components/admin/MemorySearch.svelte';
 	import PresetForm from '$lib/components/admin/PresetForm.svelte';
@@ -526,6 +527,12 @@
 				defaults={data.embeddingDefaults}
 				keys={data.keys}
 				customProviders={data.customProviders}
+				result={form}
+			/>
+
+			<CommandSafety
+				setting={data.commands}
+				presets={data.presets.map(({ id, name }) => ({ id, name }))}
 				result={form}
 			/>
 		</div>

@@ -22,7 +22,9 @@ import {
 	createSkill,
 	createUser,
 	deleteUser,
+	describeCommandSafety,
 	effectiveContextWindow,
+	findPreset,
 	generatePassword,
 	getDb,
 	getDefaultPreset,
@@ -35,6 +37,7 @@ import {
 	initConfig,
 	installCliShim,
 	isApiKeyProvider,
+	isCommandMode,
 	isCustomProvider,
 	isProvider,
 	providerFor,
@@ -51,7 +54,9 @@ import {
 	removeCustomProvider,
 	removePreset,
 	saveApiKey,
+	saveCommandMode,
 	saveCustomProvider,
+	saveSafetyPreset,
 	scanSkills,
 	setAdmin,
 	setDefaultPreset,
@@ -105,6 +110,13 @@ Settings (${paths.home})
   nolune config set claude-path <path>          the Claude Code that claude-plan chats run, and the
   nolune config set codex-path <path>           Codex that chatgpt-plan chats run (found on the PATH
                                              and in their usual folders otherwise)
+  nolune config set command-mode <auto|unrestricted>
+                                             auto (the default): a model checks each command the
+                                             agent runs and blocks what could do harm nobody asked
+                                             for; unrestricted runs them unchecked (not
+                                             recommended). Not from the agent's own commands
+  nolune config set safety-model <preset|chat>  the preset whose model does auto mode's checks, or
+                                             chat for each chat's own model (the default)
   nolune key set <anthropic|openai|openrouter> [key]
                                              store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures. Admins
@@ -566,19 +578,46 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				const images = imageGenerationStatus();
 				row('images', `${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				row('embeddings', embeddingStatus());
+				row('commands', describeCommandSafety());
 				row('env', Object.keys(config.commandEnv ?? {}).join(', ') || '-');
 				return;
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|codex-path> <value>]'
+					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|codex-path|command-mode|safety-model> <value>]'
 				);
 			}
 			const key = positional(
 				rest,
 				0,
-				'host|port|origin|image-model|embeddings|claude-path|codex-path'
+				'host|port|origin|image-model|embeddings|claude-path|codex-path|command-mode|safety-model'
 			);
+			if (key === 'command-mode' || key === 'safety-model') {
+				// Auto mode guards against the agent itself, so it can't be the one to turn it off.
+				if (io.env.NOLUNE_CONVERSATION_ID) {
+					fail(
+						"the agent can't change how its own commands are checked. Someone can, at this computer's terminal or on the Models & keys page."
+					);
+				}
+				if (key === 'command-mode') {
+					const mode = positional(rest, 1, 'auto|unrestricted');
+					if (!isCommandMode(mode)) fail('command-mode is auto or unrestricted');
+					saveCommandMode(mode);
+				} else {
+					const which = positional(rest, 1, 'preset|chat');
+					let id: string | null = null;
+					if (which !== 'chat') {
+						try {
+							id = findPreset(which).id;
+						} catch (err) {
+							fail(`${(err as Error).message}. \`nolune preset list\` shows them.`);
+						}
+					}
+					saveSafetyPreset(id);
+				}
+				io.log(`Commands: ${describeCommandSafety()}.`);
+				return;
+			}
 			if (key === 'embeddings') {
 				let setting: ReturnType<typeof parseEmbeddingSetting>;
 				try {
@@ -609,7 +648,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				else if (key === 'codex-path') c.codexPath = value;
 				else
 					fail(
-						'you can set host, port, origin, image-model, embeddings, claude-path or codex-path'
+						'you can set host, port, origin, image-model, embeddings, claude-path, codex-path, command-mode or safety-model'
 					);
 			});
 			if (key === 'claude-path') {

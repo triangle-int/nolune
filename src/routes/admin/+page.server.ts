@@ -15,6 +15,7 @@ import {
 	checkCustomProvider,
 	claudePlanStatus,
 	chatGptPlanStatus,
+	commandSafetyState,
 	chatGptSignInState,
 	findCustomProvider,
 	customProviderNameProblem,
@@ -25,7 +26,9 @@ import {
 	findClaudeCode,
 	findCodex,
 	getDefaultPreset,
+	getPreset,
 	isApiKeyProvider,
+	isCommandMode,
 	isCustomProvider,
 	isProviderUrl,
 	listPresets,
@@ -37,7 +40,9 @@ import {
 	removePreset,
 	removeCustomProvider,
 	saveApiKey,
+	saveCommandMode,
 	saveCustomProvider,
+	saveSafetyPreset,
 	splitModel,
 	saveEmbeddingSetting,
 	setDefaultPreset,
@@ -84,6 +89,8 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 		// What memory search finds meaning with.
 		embeddings: embeddingState(),
 		embeddingDefaults: DEFAULT_EMBEDDING_MODELS,
+		// Whether a model checks the agent's commands first, and which.
+		commands: commandSafetyState(),
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -313,6 +320,19 @@ export const actions: Actions = {
 		// Facts the new source hasn't embedded yet are, in the background.
 		startEmbeddingMemory(listProfiles().map((p) => p.slug));
 		return { embeddingsMessage: embeddingState().using ? t.works : t.wordsOnly };
+	},
+	commandSafety: async ({ locals, request }) => {
+		requireAdmin(locals);
+		const form = await request.formData();
+		const mode = form.get('mode')?.toString() ?? '';
+		if (!isCommandMode(mode)) error(400, 'Unknown command mode');
+		// Empty: each chat's own model.
+		const presetId = form.get('presetId')?.toString() || null;
+		if (presetId && !getPreset(presetId)) error(400, 'Unknown model preset');
+		saveCommandMode(mode);
+		// Unrestricted has nothing to check with, and the choice stays for when auto comes back.
+		if (mode === 'auto') saveSafetyPreset(presetId);
+		return { commandsMessage: translations(locals.locale).m.admin.commands.saved };
 	},
 	remove: async ({ locals, request }) => {
 		requireAdmin(locals);
