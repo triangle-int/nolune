@@ -8,6 +8,7 @@
 	import { AVATARS, type Avatar } from '@nolune/core/avatars';
 	import { AVATAR_COLORS } from '$lib/avatars';
 	import ChatWindow from '$lib/ChatWindow.svelte';
+	import FamilyChat from '$lib/FamilyChat.svelte';
 	import Mascot from '$lib/Mascot.svelte';
 	import Orbit from '$lib/Orbit.svelte';
 	import Stars from '$lib/Stars.svelte';
@@ -127,6 +128,17 @@
 		<Stars count={40} seed={11} />
 		<div class="wrap product-frame">
 			<ChatWindow {avatar} />
+		</div>
+	</section>
+
+	<section class="family" aria-label="A family chat">
+		<div class="wrap">
+			<h2 class="ruled">Everyone in one chat</h2>
+			<p class="caption family-caption">
+				The family writes from their own phones. nolune knows who's speaking and answers each of
+				them.
+			</p>
+			<FamilyChat {avatar} />
 		</div>
 	</section>
 
@@ -430,6 +442,14 @@
 		position: relative;
 		z-index: 1;
 		max-width: 1100px;
+	}
+
+	/* the family, in one chat */
+	.family {
+		padding: 48px 0 64px;
+	}
+	.family-caption {
+		margin: 16px 0 40px;
 	}
 
 	/* features */
