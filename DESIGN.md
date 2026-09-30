@@ -549,6 +549,11 @@ kick(conversation):                     one loop per conversation at a time
   and conversations with queued messages are started again.
 - Several consecutive user rows (for example tool results followed by steering texts) are sent as
   separate messages. The API merges them into one turn.
+- **On OpenAI's models** (an OpenAI key or the ChatGPT plan), a message sent while the model is in
+  the middle of a turn waits for its answer instead. They keep their reasoning and calls only since
+  the last user message, so a message between a command's result and the next step cut the turn
+  off unanswered: the model answered it, then the one before it all over again. It still joins at
+  once after auto mode told the agent to stop, and when a failed call ends the loop.
 - **Messages from the gateway** queue like a person's and join the transcript the same way: a
   background command's output (`task_result`) and, in a subagent's conversation, its task and steers
   (`agent_message`). Each one is plain user text with a bracketed first line saying where it comes

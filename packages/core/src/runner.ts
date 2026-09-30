@@ -11,6 +11,7 @@ import {
 	streamTurn,
 	type Effort,
 	type ModelReply,
+	type Provider,
 	type StreamEvent,
 	type ToolCall
 } from './models.ts';
@@ -460,8 +461,9 @@ function onStreamEvent(conversationId: string, event: StreamEvent): void {
 const sending = new Map<string, Promise<unknown>>();
 
 /**
- * Queues a message; it joins the transcript at the agent's next step (steering) or starts a
- * turn. `uploadIds`: files the sender attached in the composer, in order.
+ * Queues a message; it joins the transcript at the agent's next step (steering; on OpenAI's
+ * models once it has answered, see holdsQueued) or starts a turn. `uploadIds`: files the sender
+ * attached in the composer, in order.
  */
 export async function sendMessage(
 	conversationId: string,
@@ -1124,6 +1126,17 @@ async function planTurn(
 	}
 }
 
+/**
+ * Whether messages sent while the model works through a turn wait for its answer instead of
+ * joining at its next step. OpenAI's models keep their reasoning and calls only since the last
+ * message they were sent (developers.openai.com/api/docs/guides/reasoning): one between a
+ * command's result and the next step cut their turn off unanswered, so they answered it and then
+ * the one before it all over again.
+ */
+function holdsQueued(provider: Provider): boolean {
+	return provider === 'openai' || provider === 'chatgpt-plan';
+}
+
 async function loop(conversationId: string): Promise<void> {
 	const st = stateFor(conversationId);
 	if (st.running) return; // the running loop picks up new messages at its next step
@@ -1134,11 +1147,18 @@ async function loop(conversationId: string): Promise<void> {
 	emit(conversationId, { type: 'status', running: true, error: null });
 	runningChanged(conversationId, true);
 
+	/** The model called commands at its last step, and gets their results next. */
+	let midTurn = false;
+	/** Messages are waiting for the model's answer (holdsQueued). */
+	let holding = false;
 	try {
 		for (;;) {
 			const stored = getConversation(conversationId);
 			if (!stored) return;
-			commitQueued(conversationId);
+			// Messages sent meanwhile join now, or once the model has answered (holdsQueued). Not once
+			// auto mode told it to stop: then what people wrote is the answer it waits for.
+			holding = midTurn && holdsQueued(stored.provider) && !st.safety.refused;
+			if (!holding) commitQueued(conversationId);
 			const rows = committedRows(conversationId);
 			if (rows.at(-1)?.role !== 'user') return;
 			countBlocksFrom(st, rows);
@@ -1154,6 +1174,7 @@ async function loop(conversationId: string): Promise<void> {
 			st.abort = abort;
 			if (isAgentPlan(conv.provider)) {
 				if (!(await planTurn({ ...conv, provider: conv.provider }, rows, st, abort))) return;
+				midTurn = false;
 				// The agent ended its turn: only messages that came meanwhile start another.
 				if (!queuedRows(conversationId).length) return;
 				continue;
@@ -1193,10 +1214,11 @@ async function loop(conversationId: string): Promise<void> {
 			await saveReply(conv, reply, abort.signal, () => foundText(rows));
 
 			const { calls } = reply;
+			midTurn = calls.length > 0;
 			// No tool calls: the turn is over. Loop again in case messages arrived meanwhile.
 			if (calls.length === 0) continue;
 
-			// Queued messages may carry pictures too; they join the history at the next step. Without
+			// Queued messages may carry pictures too; they join the history at a later step. Without
 			// a Files API (the ChatGPT plan), every request carries them inline.
 			const images = imageUse(
 				[...messages, ...queuedRows(conversationId).map(readRow)],
@@ -1227,6 +1249,9 @@ async function loop(conversationId: string): Promise<void> {
 			}
 		}
 	} finally {
+		// The answer they waited for didn't come (a failed call): they join the transcript as they
+		// would have before it, or a subagent would start again on them, and fail again, forever.
+		if (holding) commitQueued(conversationId);
 		st.running = false;
 		st.abort = null;
 		st.live = [];

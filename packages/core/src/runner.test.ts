@@ -176,6 +176,30 @@ describe('the agent loop', () => {
 		]);
 		expect(runningConversationIds()).not.toContain(chat.id);
 	});
+
+	it('steers Claude: a message sent during a command joins at its next step', async () => {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
+		vi.mocked(streamTurn)
+			.mockResolvedValueOnce(modelReply([listFiles], 'tool_use'))
+			.mockResolvedValueOnce(
+				modelReply([{ type: 'text', text: 'One file, made today.' }], 'end_turn')
+			);
+		vi.mocked(runCommand).mockImplementationOnce(async () => {
+			await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'When was it made?');
+			return { content: 'a.txt', isError: false, exitCode: 0 };
+		});
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'Files?');
+		await ended;
+
+		expect(streamTurn).toHaveBeenCalledTimes(2);
+		expect(toAnthropicMessages(vi.mocked(streamTurn).mock.calls[1][0].messages).slice(-2)).toEqual([
+			{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a.txt' }] },
+			{ role: 'user', content: [{ type: 'text', text: 'Anna: When was it made?' }] }
+		]);
+	});
 });
 
 describe('tools and cache', () => {

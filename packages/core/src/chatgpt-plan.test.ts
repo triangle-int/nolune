@@ -787,6 +787,83 @@ describe('chats on the ChatGPT plan', () => {
 		await vi.waitFor(() => expect(getConversation(chat.id)?.title).toBe('Disk space'));
 	});
 
+	it('keeps a message sent during a command waiting until the answer, then answers it once', async () => {
+		await signIn();
+		const { user, chat } = planChat();
+		scripted(
+			streamed([thought('Listing them.'), said('Let me look.'), runs('ls')]),
+			streamed([said('One file: a.txt.')]),
+			streamed([said('Today.')])
+		);
+		let waiting: string[] = [];
+		vi.mocked(runCommand).mockImplementationOnce(async () => {
+			await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'When was it made?');
+			waiting = getSnapshot(chat.id).queued.map((m) => (m.kind === 'human' ? m.text : m.kind));
+			return { content: 'a.txt\n[exit code 0]', isError: false, exitCode: 0 };
+		});
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'Files?');
+		await ended;
+
+		expect(getSnapshot(chat.id).error).toBeNull();
+		expect(waiting).toEqual(['When was it made?']);
+		expect(rowsOf(chat.id).map((row) => row.kind)).toEqual([
+			'human',
+			'assistant',
+			'tool_results',
+			'assistant',
+			'human',
+			'assistant'
+		]);
+		const [, second, third] = chatCalls();
+		// The turn goes on with the command's result last, as the model left it.
+		expect((second.json?.input as Item[]).at(-1)).toMatchObject({
+			type: 'function_call_output',
+			output: 'a.txt\n[exit code 0]'
+		});
+		// Then the message, after the answer, as a turn of its own.
+		expect((third.json?.input as Item[]).slice(-2)).toEqual([
+			expect.objectContaining({
+				type: 'message',
+				content: [expect.objectContaining({ text: 'One file: a.txt.' })]
+			}),
+			{ role: 'user', content: [{ type: 'input_text', text: 'Anna: When was it made?' }] }
+		]);
+	});
+
+	it("lets a waiting message in when the answer doesn't come", async () => {
+		await signIn();
+		const { user, chat } = planChat();
+		scripted(
+			streamed([runs('ls')]),
+			streamed([], {
+				code: 'subscription_sharing_usage_limit_exceeded',
+				message: 'Usage limit reached.'
+			})
+		);
+		vi.mocked(runCommand).mockImplementationOnce(async () => {
+			await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'When was it made?');
+			return { content: 'a.txt\n[exit code 0]', isError: false, exitCode: 0 };
+		});
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'Files?');
+		await ended;
+
+		expect(getSnapshot(chat.id).error).toMatch(/usage limit is reached/);
+		// Where it would have been before the failed call, for Try again to answer.
+		expect(getSnapshot(chat.id).queued).toEqual([]);
+		expect(rowsOf(chat.id).map((row) => row.kind)).toEqual([
+			'human',
+			'assistant',
+			'tool_results',
+			'human'
+		]);
+		logged.mockRestore();
+	});
+
 	it("says where to look when the plan's limit is reached", async () => {
 		await signIn();
 		const { user, chat } = planChat();
