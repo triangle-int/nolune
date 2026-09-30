@@ -1,6 +1,6 @@
 import type { DisplayMemoryLook, DisplayMessage } from '@nolune/core';
 import { describe, expect, it } from 'vitest';
-import { buildTranscript } from './transcript';
+import { buildTranscript, resultStatus } from './transcript';
 
 const human = (id: number, text: string): DisplayMessage => ({
 	id,
@@ -66,5 +66,23 @@ describe('what the note-taker saved', () => {
 		]);
 		expect(entries.map((entry) => entry.type)).toEqual(['human', 'reply', 'memory', 'reply']);
 		expect(new Set(entries.map((entry) => entry.key)).size).toBe(entries.length);
+	});
+});
+
+describe('resultStatus', () => {
+	const result = (output: string, isError: boolean) => ({ output, isError, pictures: [] });
+
+	it('tells a command auto mode blocked from one that failed or was stopped', () => {
+		expect(resultStatus(result('a.txt\n[exit code 0]', false))).toBe('done');
+		expect(resultStatus(result('No such file\n[exit code 1]', true))).toBe('failed');
+		expect(resultStatus(result('partial\n[Stopped by Anna.]', true))).toBe('stopped');
+		expect(
+			resultStatus(
+				result(
+					"Blocked by auto mode: Anna didn't ask to delete it.\n\nThe command didn't run.",
+					true
+				)
+			)
+		).toBe('blocked');
 	});
 });

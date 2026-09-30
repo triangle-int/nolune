@@ -309,10 +309,12 @@ export const fr: Messages = {
 		ranCommands: (n: number) =>
 			p(n, { one: `A exécuté ${n} commande`, other: `A exécuté ${n} commandes` }),
 		failedCount: (n: number) => `${n} en échec`,
+		blockedCount: (n: number) => p(n, { one: `${n} bloquée`, other: `${n} bloquées` }),
 		failed: 'échec',
 		didntWork: 'n’a pas fonctionné',
 		statusStopped: 'arrêtée',
 		statusNotRun: 'non exécutée',
+		statusBlocked: 'bloquée',
 		command: 'Commande',
 		theCommand: 'La commande exécutée par nolune',
 		inFolder: (cwd: string) => `dans ${cwd}`,
@@ -1051,6 +1053,34 @@ export const fr: Messages = {
 			wordsOnly: 'Enregistré. La mémoire est cherchée par mots seulement.',
 			noAnswer: (problem: string) => `Enregistré, mais pas de réponse : ${problem}`,
 			needModel: 'Indiquez le modèle à utiliser.'
+		},
+		commands: {
+			title: 'Commandes',
+			hint: 'L’agent travaille en lançant des commandes sur cet ordinateur, avec l’accès de ce compte à ses fichiers et à ses apps. En mode automatique, un modèle examine chaque commande avant qu’elle ne s’exécute et arrête ce qui pourrait nuire sans que personne l’ait demandé. Commun à tous les profils.',
+			modes: {
+				auto: 'Mode automatique',
+				unrestricted: 'Sans restriction'
+			},
+			choices: {
+				auto: 'Automatique (recommandé)',
+				unrestricted: 'Sans restriction (déconseillé)'
+			},
+			checkedByChat: 'Chaque commande est vérifiée par le modèle de la discussion.',
+			checkedBy: (preset: string) => `Chaque commande est vérifiée par ${preset}.`,
+			presetGone:
+				'Le modèle choisi pour les vérifications a été supprimé : chaque discussion vérifie donc ses commandes avec son propre modèle.',
+			unrestrictedStatus: 'Les commandes s’exécutent sans vérification.',
+			change: 'Modifier',
+			mode: 'Mode',
+			autoNote:
+				'Les commandes qui ne font que regarder s’exécutent tout de suite. Les autres sont d’abord vérifiées ; une commande bloquée ne s’exécute pas, et nolune explique ce qu’il voulait faire pour que quelqu’un puisse donner son accord.',
+			unrestrictedNote:
+				'Chaque commande s’exécute telle que l’agent l’a écrite, sans rien pour arrêter une erreur, ni une page web ou un e-mail qui le pousse à faire quelque chose. Seulement pour qui surveille de près.',
+			checker: 'Vérifiée par',
+			chatModel: 'Le modèle de la discussion',
+			checkerNote:
+				'Un modèle rapide et compétent garde les discussions fluides : chaque commande qui fait plus que regarder lui coûte une courte requête.',
+			saved: 'Enregistré. S’applique dès la prochaine commande.'
 		}
 	}
 };

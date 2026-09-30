@@ -8,7 +8,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 | Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execution          | Commands run as the gateway's macOS user with full access to the disk and no approval step. There is no sandbox. The profile folder is only the default working folder. A "smart mode" that auto-approves or rejects commands may come later.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Execution          | Commands run as the gateway's macOS user with full access to the disk. There is no sandbox. The profile folder is only the default working folder. In auto mode (the default) a model checks each command before it runs and blocks what could do harm nobody asked for, in place of a person approving each one; unrestricted runs them unchecked. See [Auto mode](#auto-mode).                                                                                                                                                                                                                                                                                                                               |
 | Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Exposure           | Public through a tunnel on a VPS. Every route requires login. The sign-up endpoint is disabled: accounts are created only with the local CLI, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -35,8 +35,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 ~/.nolune/                 (override with NOLUNE_HOME)
   config.json                 auth secret, Anthropic, OpenAI and OpenRouter keys, custom providers
                               (name, API, address, key), image model,
-                              extra env vars for commands, where Claude Code and Codex are if set
-                              (mode 600)
+                              extra env vars for commands, where Claude Code and Codex are if set,
+                              the command mode and the preset that checks commands (mode 600)
   codex/                      Codex's home for the ChatGPT plan: its sign-in (which nolune never
                               reads), and the chats' threads under sessions/
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
@@ -588,6 +588,53 @@ kick(conversation):                     one loop per conversation at a time
   working in the background, with a Stop button that works while the agent itself is idle. A
   `nolune agent watch` running there is the same work as the subagent it waits for, so the list shows
   only the subagent. Deleting a chat stops them first.
+
+### Auto mode
+
+The agent runs commands with the owner's account, so a mistake, or a web page or email that talks it
+into something, can do real harm. Auto mode (`command-safety.ts`) has a model check each command
+before it runs, in place of a person approving every one, the way Claude Code's auto mode does.
+`config.commandMode` is `auto` unless an admin picks `unrestricted` (Models & keys, or `nolune config
+set command-mode`), which runs commands unchecked as nolune did before. It applies from the next
+command, to chats, automations and subagents alike, and on the plans too, since their commands run
+through the same `runToolCall`.
+
+- **Commands that only look run at once** (`read-only-commands.ts`): `ls`, `cat`, `grep`, `find`
+  without `-exec` or `-delete`, `nolune memory search` and the like, joined by pipes, `&&` or `;`,
+  redirected only to `/dev/null`, and nowhere near where secrets live (`.ssh`, `.env`,
+  `config.json`...). The shell is read strictly: a substitution, subshell, brace expansion,
+  unquoted glob or expansion where it could become a flag, a program not on the list, or anything
+  else it can't be sure of goes to the check. A wrong "no" costs a model call; a wrong "yes" would
+  skip the check.
+- **What the check sees.** A fixed system prompt (who can ask for what, how to decide, a block
+  list and its exceptions) and, per command: the computer and profile, whether it's a chat, an
+  automation or a subagent, the folder's instructions, what people asked for (the words they
+  typed and the names of files they attached; an automation's prompt; a subagent's task), the
+  commands run or blocked before, and the command with its working folder. Never what the agent
+  said or thought, what its commands printed, attached files' contents or recalled memory: they
+  can carry text written to steer it, and the agent's own words can argue for anything. Each part
+  is inside tags ending in a random code, so text in a command can't close one.
+- **Who authorizes.** Only people's messages, an automation's prompt, the folder's instructions and
+  a subagent's task (checked when the parent ran `nolune agent run`). A request covers what it
+  plainly means; what the agent chose on its own isn't asked for until someone says so, and a
+  person agreeing in the chat counts.
+- **Two stages on one prompt.** A quick call that answers ALLOW or BLOCK in one word and is told to
+  block when unsure; only a block gets a careful call that reasons it through and ends with
+  `Verdict:` and `Reason:`. Most commands are allowed at the first, and the second shares the
+  first's prefix for providers that cache it. Both are `quickReply`s (low effort, 30 and 60 s) to
+  the preset chosen for checks (`config.safetyPresetId`), else the chat's own model.
+- **Fails closed.** An error, a timeout or an answer without a verdict blocks the command, as does
+  one over 50,000 characters. Stop during a check answers the call like a stopped command.
+- **A blocked command** doesn't run; its result starts `Blocked by auto mode: <reason>` and tells
+  the agent not to work around it but to ask, since a person's yes in the chat lets it through.
+  The chat shows the step as blocked. The runner counts blocks in a loop since the last person's
+  message: at 3 in a row or 20 in all the agent is told to run nothing more and say what it
+  wanted, and a call it makes after that is refused unchecked and ends the loop with an error. A
+  new message from a person starts the count again.
+- **Not from the agent.** `nolune config set command-mode` and `safety-model` refuse to run from the
+  agent's commands (`NOLUNE_CONVERSATION_ID` is set), and the block list covers editing
+  `config.json`. Against a determined agent on an unsandboxed account that's a speed bump, not a
+  wall: auto mode guards against mistakes and manipulation, not against the family.
 
 ### Seeing images: `nolune view`
 
@@ -1539,7 +1586,7 @@ to (issue #42).
 
 ```
 packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_command, background
-                commands, memory notes (search and recall, learning from chats, and
+                commands, auto mode (command-safety.ts, read-only-commands.ts), memory notes (search and recall, learning from chats, and
                 memory-export.ts, memory-import.ts: memories brought over from another
                 assistant), new-chat suggestions, nolune view images, attachments, model
                 calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with
@@ -1616,7 +1663,9 @@ publishing (see Publishing in the README). `npm install -g nolune` gives the `no
   takes them) rather than after the turn.
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
-- Smart approval mode.
+- Auto mode: house rules an admin writes for the check (Claude Code's environment, block and allow
+  slots), a probe that warns the agent about prompt injection in what its commands print, and a
+  look at everything a subagent did when it hands back its result.
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.

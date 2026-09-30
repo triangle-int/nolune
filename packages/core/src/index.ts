@@ -89,6 +89,7 @@ export {
 	addPreset,
 	editPreset,
 	effectiveContextWindow,
+	findPreset,
 	getDefaultPreset,
 	getPreset,
 	listPresets,
@@ -96,6 +97,17 @@ export {
 	setDefaultPreset,
 	type Preset
 } from './presets.ts';
+export {
+	COMMAND_MODES,
+	commandMode,
+	commandSafetyState,
+	describeCommandSafety,
+	isCommandMode,
+	saveCommandMode,
+	saveSafetyPreset,
+	type CommandMode,
+	type CommandSafetyState
+} from './command-safety.ts';
 export {
 	createConversation,
 	deleteConversation,

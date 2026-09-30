@@ -221,10 +221,12 @@ export const en = {
 		workedForAMoment: 'Worked for a moment',
 		ranCommands: (n: number) => p(n, { one: `Ran ${n} command`, other: `Ran ${n} commands` }),
 		failedCount: (n: number) => `${n} failed`,
+		blockedCount: (n: number) => `${n} blocked`,
 		failed: 'failed',
 		didntWork: "didn't work",
 		statusStopped: 'stopped',
 		statusNotRun: 'not run',
+		statusBlocked: 'blocked',
 		command: 'Command',
 		theCommand: 'The command nolune ran',
 		inFolder: (cwd: string) => `in ${cwd}`,
@@ -959,6 +961,34 @@ export const en = {
 			wordsOnly: 'Saved. Memory is searched by words only.',
 			noAnswer: (problem: string) => `Saved, but it didn't answer: ${problem}`,
 			needModel: 'Give the model it should use.'
+		},
+		commands: {
+			title: 'Commands',
+			hint: "The agent works by running commands on this computer, with this account's access to its files and apps. Auto mode has a model look at each command before it runs and stop what could do harm nobody asked for. Shared by every profile.",
+			modes: {
+				auto: 'Auto mode',
+				unrestricted: 'Unrestricted'
+			},
+			choices: {
+				auto: 'Auto (recommended)',
+				unrestricted: 'Unrestricted (not recommended)'
+			},
+			checkedByChat: "Each command is checked by the chat's own model.",
+			checkedBy: (preset: string) => `Each command is checked by ${preset}.`,
+			presetGone:
+				"The model chosen for the checks was removed, so each chat's own model checks its commands.",
+			unrestrictedStatus: 'Commands run without a check.',
+			change: 'Change',
+			mode: 'Mode',
+			autoNote:
+				"Commands that only look at things run right away. The rest are checked first; a blocked one doesn't run, and nolune says what it wanted to do so someone can say go ahead.",
+			unrestrictedNote:
+				'Every command runs as the agent wrote it, with nothing to stop a mistake, or a web page or email that talks it into something. Only for people who watch closely.',
+			checker: 'Checked by',
+			chatModel: "The chat's own model",
+			checkerNote:
+				'A fast, capable model keeps chats quick: every command that does more than look costs a short call to it.',
+			saved: 'Saved. It applies from the next command.'
 		}
 	}
 };

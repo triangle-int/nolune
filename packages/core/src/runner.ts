@@ -61,6 +61,15 @@ import {
 	type ToolResultBlock
 } from './format.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
+import {
+	BLOCK_STREAK_LIMIT,
+	BLOCK_TOTAL_LIMIT,
+	SAFETY_STOP,
+	blockedText,
+	checkCommand,
+	commandMode,
+	refusedText
+} from './command-safety.ts';
 import { folderContextFor } from './folders.ts';
 import { readSoul } from './soul.ts';
 import { createViewDir, imageUse, readViewedImages, type ImageUse } from './images.ts';
@@ -81,7 +90,9 @@ import {
 	RUN_COMMAND_TOOL,
 	commandEnv,
 	parseRunCommandInput,
+	resolveCwd,
 	runCommand,
+	type RunCommandInput,
 	type RunCommandResult
 } from './run-command.ts';
 import { SubagentError, activeSubagents, listSubagents } from './subagents.ts';
@@ -160,6 +171,24 @@ export interface Snapshot {
 	memory: DisplayMemoryLook[];
 }
 
+/**
+ * What auto mode blocked (command-safety.ts) in the current loop, since a person last wrote. Too
+ * many blocks and the agent is told to stop and ask; a call it makes after that ends the loop.
+ */
+interface SafetyTally {
+	/** The last message from a person it counts from: a newer one starts again. */
+	since: number | null;
+	/** Blocked in a row, and in all. */
+	streak: number;
+	total: number;
+	/** Calls refused unchecked because the agent was told to stop. */
+	refused: number;
+}
+
+function freshTally(since: number | null = null): SafetyTally {
+	return { since, streak: 0, total: 0, refused: 0 };
+}
+
 interface State {
 	running: boolean;
 	abort: AbortController | null;
@@ -167,6 +196,7 @@ interface State {
 	error: string | null;
 	live: (LiveBlock | null)[];
 	toolOutput: { id: string; text: string } | null;
+	safety: SafetyTally;
 	emitter: EventEmitter;
 }
 
@@ -239,6 +269,7 @@ function stateFor(conversationId: string): State {
 			error: null,
 			live: [],
 			toolOutput: null,
+			safety: freshTally(),
 			emitter: new EventEmitter()
 		};
 		st.emitter.setMaxListeners(100);
@@ -600,6 +631,9 @@ async function runToolCall(
 		NOLUNE_CONVERSATION_ID: conv.id
 	};
 
+	const blocked = await safetyCheck(conv, call, input, dir, signal, st);
+	if (blocked) return blocked;
+
 	if (input.background) {
 		// No NOLUNE_VIEW_DIR: nothing collects the pictures of a command nobody waits for.
 		const outcome = await startBackgroundCommand({
@@ -651,6 +685,81 @@ async function runToolCall(
 		noticeProfileChanges();
 		commandEnded();
 	}
+}
+
+/** The promise's value, or null as soon as the signal aborts. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | null> {
+	if (signal.aborted) return Promise.resolve(null);
+	return new Promise((resolve, reject) => {
+		const onAbort = () => resolve(null);
+		signal.addEventListener('abort', onAbort, { once: true });
+		promise.then(
+			(value) => {
+				signal.removeEventListener('abort', onAbort);
+				resolve(value);
+			},
+			(err: unknown) => {
+				signal.removeEventListener('abort', onAbort);
+				reject(err);
+			}
+		);
+	});
+}
+
+/**
+ * Auto mode's check before a command runs (command-safety.ts): the call's result when it mustn't
+ * run, else null. Once it blocked too many, the agent is told to stop, and calls it makes after
+ * that are refused unchecked. Stop during the check answers the call like a stopped command.
+ */
+async function safetyCheck(
+	conv: Conversation,
+	call: ToolCall,
+	input: RunCommandInput,
+	dir: string,
+	signal: AbortSignal,
+	st: State
+): Promise<ToolResultBlock | null> {
+	if (commandMode() !== 'auto') return null;
+	const tally = st.safety;
+	const tooMany = () => tally.streak >= BLOCK_STREAK_LIMIT || tally.total >= BLOCK_TOTAL_LIMIT;
+	if (tooMany()) {
+		tally.refused++;
+		return toolResult(call.id, refusedText(tally.total), true);
+	}
+	const verdict = await untilAborted(
+		checkCommand({
+			conv,
+			rows: committedRows(conv.id),
+			callId: call.id,
+			input,
+			cwd: resolveCwd(input.cwd, dir),
+			profile: { name: getProfile(conv.profileId)?.name ?? '', dir }
+		}),
+		signal
+	);
+	if (!verdict) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
+	if (verdict.allowed) {
+		tally.streak = 0;
+		return null;
+	}
+	tally.streak++;
+	tally.total++;
+	console.log(`[nolune] ${conv.id.slice(0, 8)} auto mode blocked a command: ${verdict.reason}`);
+	const stop = tooMany()
+		? tally.streak >= BLOCK_STREAK_LIMIT
+			? { blocked: tally.streak, inARow: true }
+			: { blocked: tally.total, inARow: false }
+		: null;
+	return toolResult(call.id, blockedText(verdict.reason, stop), true);
+}
+
+/**
+ * Counts auto mode's blocks from the last message a person wrote: one that came since the count
+ * started, maybe to say go ahead, starts it again.
+ */
+function countBlocksFrom(st: State, rows: MessageRow[]): void {
+	const since = rows.findLast((row) => row.kind === 'human')?.seq ?? null;
+	if (since !== st.safety.since) st.safety = freshTally(since);
 }
 
 function commandSummary(call: ToolCall): string | null {
@@ -895,7 +1004,14 @@ async function planTurn(
 						const reason = err instanceof Error ? err.message : String(err);
 						return toolResult(call.id, `Not finished: ${reason}`, true);
 					}),
-				onResults: (results) => saveResults(conv, results)
+				onResults: (results) => {
+					saveResults(conv, results);
+					// The agent went on calling commands after auto mode told it to stop.
+					if (st.safety.refused && !abort.signal.aborted) {
+						st.error = SAFETY_STOP;
+						abort.abort();
+					}
+				}
 			});
 			return true;
 		} catch (err) {
@@ -929,6 +1045,7 @@ async function loop(conversationId: string): Promise<void> {
 	st.running = true;
 	st.error = null;
 	st.stoppedBy = null;
+	st.safety = freshTally();
 	emit(conversationId, { type: 'status', running: true, error: null });
 	runningChanged(conversationId, true);
 
@@ -939,6 +1056,13 @@ async function loop(conversationId: string): Promise<void> {
 			commitQueued(conversationId);
 			const rows = committedRows(conversationId);
 			if (rows.at(-1)?.role !== 'user') return;
+			countBlocksFrom(st, rows);
+			// The agent went on calling commands after auto mode told it to stop, and nobody has
+			// said anything since.
+			if (st.safety.refused) {
+				st.error = SAFETY_STOP;
+				return;
+			}
 			const conv = withCurrentContext(stored, rows);
 
 			const abort = new AbortController();

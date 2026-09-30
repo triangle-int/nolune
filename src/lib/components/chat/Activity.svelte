@@ -41,6 +41,10 @@
 	const failed = $derived(
 		commands.filter((c) => results[c.id] && resultStatus(results[c.id]) === 'failed').length
 	);
+	/** Auto mode stopped these; the agent says what it wanted, so people see it folded too. */
+	const blocked = $derived(
+		commands.filter((c) => results[c.id] && resultStatus(results[c.id]) === 'blocked').length
+	);
 	const stopped = $derived(
 		commands.some((c) => results[c.id] && resultStatus(results[c.id]) === 'stopped')
 	);
@@ -77,6 +81,9 @@
 		</span>
 		{#if failed && !active && prefs.technical}
 			<span class="shrink-0 text-destructive">· {m.steps.failedCount(failed)}</span>
+		{/if}
+		{#if blocked && !active}
+			<span class="shrink-0 text-warning">· {m.steps.blockedCount(blocked)}</span>
 		{/if}
 		{#if !open && pictures.length}
 			<!-- A glimpse only: opening the group shows them with their commands. -->

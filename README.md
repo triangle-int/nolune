@@ -117,8 +117,10 @@ administrator; joining a profile doesn't send an email invitation.
 
 > [!IMPORTANT]
 > nolune is built for people you trust. The agent runs commands with your host account's permissions,
-> without a sandbox or approval step. Profiles organize access in the web app; they do not isolate
-> the agent from files on the computer. Everyone in a shared profile can read its chats and memory.
+> without a sandbox. In auto mode, the default, a model checks each command before it runs and
+> blocks what could do harm nobody asked for; it's a safeguard against mistakes and manipulation,
+> not a sandbox. Profiles organize access in the web app; they do not isolate the agent from files
+> on the computer. Everyone in a shared profile can read its chats and memory.
 
 ## Your computer, your setup
 
