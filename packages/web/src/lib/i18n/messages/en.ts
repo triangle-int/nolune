@@ -244,6 +244,8 @@ export const en = {
 			`Over ${ttl === '5m' ? '5 minutes' : 'an hour'} passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).`,
 		cacheBroken:
 			'Context that should have come from the cache was processed again (slower and costlier). Switching the model or the reasoning level, moving the chat to another folder or changing its folder cause this once.',
+		cacheElsewhere:
+			"Context that should have come from the cache was processed again (slower and costlier). OpenAI keeps the cache on one of its servers, and this request most likely reached another one: nolune can't choose which. Switching the reasoning level, moving the chat to another folder or changing its folder cause this once too.",
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} cached`,
 		contextUsed: (used: string, window: string) =>

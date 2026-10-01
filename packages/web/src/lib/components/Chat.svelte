@@ -9,10 +9,17 @@
 		ChatModel,
 		CommandMode,
 		DisplayAttachment,
+		Provider,
 		Usage
 	} from '@nolune/core';
 	import type { Avatar } from '@nolune/core/avatars';
-	import { cacheHitRate, cacheMissTokens, cacheTtlMs, promptTokens } from '@nolune/core/usage';
+	import {
+		cacheHitRate,
+		cacheMissTokens,
+		cachesWholePrompt,
+		cacheTtlMs,
+		promptTokens
+	} from '@nolune/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
@@ -224,10 +231,17 @@
 	/**
 	 * Replies whose request processed again what the previous request had cached, keyed by id.
 	 * `expired`: the conversation sat idle past the cache's lifetime before that request.
+	 * `elsewhere`: on OpenAI, with the same model, so the request most likely reached a server
+	 * without the chat's cache.
 	 */
 	const cacheMisses = $derived.by(() => {
-		const misses: Record<number, { tokens: number; expired: boolean }> = {};
-		let previous: { usage: Usage; at: number } | null = null;
+		const misses: Record<number, { tokens: number; expired: boolean; elsewhere: boolean }> = {};
+		let previous: {
+			usage: Usage;
+			at: number;
+			provider: Provider | null;
+			model: string | null;
+		} | null = null;
 		// When the rows that led to the next request (a message, command output) arrived.
 		let resumedAt = 0;
 		for (const m of chat.messages) {
@@ -237,11 +251,15 @@
 			}
 			if (!m.usage) continue;
 			if (previous) {
-				const tokens = cacheMissTokens(previous.usage, m.usage);
+				const tokens = cacheMissTokens(previous.usage, m.usage, previous.provider);
 				const expired = resumedAt - previous.at > cacheTtlMs(conversation.cacheTtl);
-				if (tokens > 0) misses[m.id] = { tokens, expired };
+				const elsewhere =
+					cachesWholePrompt(previous.provider) &&
+					m.provider === previous.provider &&
+					m.model === previous.model;
+				if (tokens > 0) misses[m.id] = { tokens, expired, elsewhere };
 			}
-			previous = { usage: m.usage, at: m.createdAt };
+			previous = { usage: m.usage, at: m.createdAt, provider: m.provider, model: m.model };
 			resumedAt = 0;
 		}
 		return misses;
@@ -265,7 +283,9 @@
 			tokens: misses.reduce((n, miss) => n + miss.tokens, 0),
 			reason: misses.some((miss) => miss.expired)
 				? m.chat.cacheExpired(conversation.cacheTtl)
-				: m.chat.cacheBroken
+				: misses.every((miss) => miss.elsewhere)
+					? m.chat.cacheElsewhere
+					: m.chat.cacheBroken
 		};
 	}
 

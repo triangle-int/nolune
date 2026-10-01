@@ -20,6 +20,7 @@ const said = (id: number, text: string): DisplayMessage => ({
 	media: {},
 	stopReason: 'end_turn',
 	usage: null,
+	provider: null,
 	model: null,
 	createdAt: id
 });

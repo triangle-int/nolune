@@ -329,6 +329,8 @@ export const fr: Messages = {
 			`${ttl === '5m' ? 'Plus de 5 minutes se sont écoulées' : 'Plus d’une heure s’est écoulée'} depuis l’étape précédente : la discussion en cache a expiré et a été traitée à nouveau (plus lent et plus coûteux).`,
 		cacheBroken:
 			'Du contexte qui aurait dû venir du cache a été traité à nouveau (plus lent et plus coûteux). Cela arrive une fois quand on change de modèle ou de niveau de réflexion, qu’on déplace la discussion dans un autre dossier ou qu’on modifie son dossier.',
+		cacheElsewhere:
+			'Du contexte qui aurait dû venir du cache a été traité à nouveau (plus lent et plus coûteux). OpenAI garde le cache sur l’un de ses serveurs, et cette requête est sans doute arrivée sur un autre : nolune ne peut pas choisir lequel. Cela arrive aussi une fois quand on change de niveau de réflexion, qu’on déplace la discussion dans un autre dossier ou qu’on modifie son dossier.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} en cache`,
 		contextUsed: (used: string, window: string) =>
