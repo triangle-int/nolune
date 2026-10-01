@@ -1930,13 +1930,13 @@ spread out.
 - **Counted in dollars**, not tokens: models' prices differ fifty times over, and pictures cost too.
   OpenRouter says what each request cost (`usage.cost`); FAL prices each picture.
 - **Three limits**, each a share of the plan's credits, set on the plan's product in Stripe (see
-  [Payments](#payments)). The one plan to start with, Family, is $20 a month for $15 of credits:
+  [Payments](#payments)). The one plan to start with, Family, is $20 a month for $25 of credits:
 
-  | Limit   | Family | Starts again                                               |
-  | ------- | ------ | ---------------------------------------------------------- |
-  | 5 hours | $1.10  | 5 hours after the request that opened the window           |
-  | Week    | $5.25  | each week, on the day and at the hour the plan started     |
-  | Month   | $15    | with each payment; up to $7.50 of what's left carries over |
+  | Limit   | Family | Starts again                                                |
+  | ------- | ------ | ----------------------------------------------------------- |
+  | 5 hours | $1.80  | 5 hours after the request that opened the window            |
+  | Week    | $8.75  | each week, on the day and at the hour the plan started      |
+  | Month   | $25    | with each payment; up to $12.50 of what's left carries over |
 
 - **How they're sized.** A month holds about 4.3 weeks, and 4.3 weeks' limits come to about 1.5
   times the credits, so ordinary use never meets the weekly limit and only a burst does. About
@@ -1964,8 +1964,10 @@ spread out.
 - **Extra credits** are bought on their own, kept for a year, and spent only past a limit, once an
   admin has turned that on in Models & keys. The windows don't apply to them, so a family can go
   on now rather than at 18:40.
-- **Rate limits.** Requests a minute and at once, per account. The token works outside nolune too;
-  what it can spend is the family's own, and the limits keep it to that.
+- **Rate limits.** Requests a minute and at once, per account. The token works outside nolune too,
+  and the plan's credits cost less than OpenRouter's (see [Payments](#payments)), which makes them
+  worth reselling: one subscription per account and per card (Radar's card fingerprint), and the
+  windows keep what one subscription can pass on to what it was given.
 
 ### What the family sees
 
@@ -2004,13 +2006,16 @@ Triangle Interactive, LLC sells the plan, through Stripe.
 - **The catalog.** Two products, in the same Stripe account as Gensprite's and named the same way:
   `nolune Family` ($20 a month, its price's lookup key `nolune-plan-family`) and
   `nolune extra credits` ($10 once, `nolune-pack-10`). What each grants is in its metadata, in
-  cents: `credits_cents` (1500 and 800), the plan's `limit_5h_cents`, `limit_week_cents` and
+  cents: `credits_cents` (2500 and 1000), the plan's `limit_5h_cents`, `limit_week_cents` and
   `rollover_cap_cents`, the pack's `expires_in_days`. The API reads them from the product of what
   was paid, so another tier is another product rather than new code. Checkout finds prices by their
   lookup keys.
-- **The margin.** Credits are model use at OpenRouter's prices, and the margin is the difference:
-  $15 of a $20 plan, $8 of a $10 pack. With every credit spent, Stripe's and Managed Payments'
-  fees and OpenRouter's on buying credits leave about 13%; credits not spent are the rest.
+- **Subsidized, to begin with.** Credits are model use at OpenRouter's prices, and at the start
+  they're worth more than they cost, to win families: $25 for a $20 plan, $10 for a $10 pack. With
+  Stripe's and Managed Payments' fees and OpenRouter's on buying credits, a family that spends
+  every credit costs about $8 a month more than it pays, and a pack about $1.50; credits nobody
+  spends cost nothing. The amounts are the products' metadata, so they can come down for periods to
+  come without new prices, once the families have been told.
 - **Buying.** The account page on nolune.dev opens Stripe Checkout for a tier (a monthly Price for
   each) and Stripe's customer portal for changing the tier or the card, or cancelling. Extra
   credits are a one-time Checkout payment. Nothing is billed for use afterwards: the month's credits
@@ -2046,6 +2051,8 @@ Triangle Interactive, LLC sells the plan, through Stripe.
 - Shares for each member of a family. The API knows only the gateway, so the gateway would count
   them (it knows who started each turn), from what each response says it cost (`x-nolune-cost`).
 - Whether background work's share should be an admin's setting.
+- When the subsidy ends, and whether packs need a cap a month meanwhile: each one costs more than it
+  brings in, and nothing limits how many one account buys.
 
 ## Code layout
 
