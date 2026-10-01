@@ -19,8 +19,11 @@ final class AppModel: ObservableObject {
 	/// Counts the times the app came back to the front, for the page to check it's still there.
 	@Published private(set) var activations = 0
 
-	private init() {
-		let defaults = UserDefaults.standard
+	private let defaults: UserDefaults
+
+	/// The app's is `shared`; tests make their own, with defaults of their own.
+	init(defaults: UserDefaults = .standard) {
+		self.defaults = defaults
 		origin = defaults.string(forKey: Self.originKey).flatMap(URL.init(string:))
 		previous = defaults.string(forKey: Self.previousKey).flatMap(URL.init(string:))
 	}
@@ -28,7 +31,7 @@ final class AppModel: ObservableObject {
 	func connect(to address: Address) {
 		pending = address.path
 		origin = address.origin
-		UserDefaults.standard.set(address.origin.absoluteString, forKey: Self.originKey)
+		defaults.set(address.origin.absoluteString, forKey: Self.originKey)
 	}
 
 	/// Back to the first screen, to connect to another nolune.
@@ -37,8 +40,8 @@ final class AppModel: ObservableObject {
 		previous = origin
 		pending = nil
 		self.origin = nil
-		UserDefaults.standard.set(origin.absoluteString, forKey: Self.previousKey)
-		UserDefaults.standard.removeObject(forKey: Self.originKey)
+		defaults.set(origin.absoluteString, forKey: Self.previousKey)
+		defaults.removeObject(forKey: Self.originKey)
 	}
 
 	/// The page to open first, which is then no longer pending.

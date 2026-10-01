@@ -114,24 +114,41 @@ extension Address {
 
 	/**
 	 * Whether a nolune answers at the address: its sign-in page loads. The relay's page for a
-	 * computer that's off or asleep counts, since it comes back by itself.
+	 * computer that's off or asleep counts, since it comes back by itself. It gives the address
+	 * the nolune answered at, which a redirect may have moved (`example.com` to
+	 * `www.example.com`): the app keeps that one, or it would send each page off to Safari.
 	 */
-	func check(session: URLSession = .shared) async -> Problem? {
+	func check(session: URLSession = .shared) async -> Result<Address, Problem> {
 		var request = URLRequest(url: origin.appendingPathComponent("login"), timeoutInterval: 15)
 		request.cachePolicy = .reloadIgnoringLocalCacheData
 		do {
 			let (_, response) = try await session.data(for: request)
 			let status = (response as? HTTPURLResponse)?.statusCode ?? 0
 			switch status {
-			case 200..<400, 503: return nil
-			case 404: return .nothingThere
-			default: return .refused(status)
+			case 200..<400, 503:
+				let answered = response.url.flatMap(Address.origin(of:)) ?? origin
+				return .success(Address(origin: answered, path: path))
+			case 404:
+				return .failure(.nothingThere)
+			default:
+				return .failure(.refused(status))
 			}
 		} catch let error as URLError where error.code == .cannotFindHost || error.code == .dnsLookupFailed {
-			return .nothingThere
+			return .failure(.nothingThere)
 		} catch {
-			return .unreachable(error.localizedDescription)
+			return .failure(.unreachable(error.localizedDescription))
 		}
+	}
+
+	/// A URL's scheme, host and port: an address. Plain http only on this network.
+	static func origin(of url: URL) -> URL? {
+		guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return nil }
+		guard scheme == "https" || (scheme == "http" && isLocal(host)) else { return nil }
+		var origin = URLComponents()
+		origin.scheme = scheme
+		origin.host = host
+		origin.port = url.port
+		return origin.url
 	}
 
 	func describe(_ problem: Problem) -> String {

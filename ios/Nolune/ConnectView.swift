@@ -102,12 +102,11 @@ struct ConnectView: View {
 		checking = true
 		problem = nil
 		Task {
-			let found = await address.check()
+			let result = await address.check()
 			checking = false
-			if let found {
-				problem = address.describe(found)
-			} else {
-				model.connect(to: address)
+			switch result {
+			case .success(let answered): model.connect(to: answered)
+			case .failure(let found): problem = address.describe(found)
 			}
 		}
 	}

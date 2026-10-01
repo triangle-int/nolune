@@ -80,7 +80,7 @@ jobs:
           step xcrun simctl io "$udid" screenshot "$screens/connect.png"
           # A page open, as if connected: the launch argument stands in for the saved address.
           step xcrun simctl terminate "$udid" dev.nolune.app
-          step xcrun simctl launch "$udid" dev.nolune.app -origin https://nolune.dev
+          step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev
           sleep 10
           step xcrun simctl io "$udid" screenshot "$screens/page.png"
       - uses: actions/upload-artifact@v4

@@ -130,9 +130,13 @@ final class BrowserController: UIViewController {
 		url.path == "/login" || url.path.hasPrefix("/invite/")
 	}
 
-	/// The page changed, also within the web app: someone may have signed in, or out.
+	/**
+	 * The page changed, also within the web app: someone may have signed in, or out. Only once a
+	 * page has loaded: its address changes as soon as it starts to, before a redirect to the
+	 * sign-in page, or an error, says whether anyone is signed in.
+	 */
 	private func pageChanged() {
-		guard let url = webView.url, isFamily(url) else { return }
+		guard let url = webView.url, isFamily(url), !webView.isLoading else { return }
 		if isSignIn(url) {
 			registered = nil
 			return
@@ -146,7 +150,7 @@ final class BrowserController: UIViewController {
 	/// Sends the token Apple gave the app to the nolune the page is signed in to, once.
 	private func registerDevice() {
 		guard let token = model.deviceToken, registered != token, !errorPage,
-			let url = webView?.url, isFamily(url), !isSignIn(url)
+			let webView, !webView.isLoading, let url = webView.url, isFamily(url), !isSignIn(url)
 		else { return }
 		registered = token
 		Task {

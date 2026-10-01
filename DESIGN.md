@@ -2051,8 +2051,9 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   type and controls, `Sky.swift` and `Theme.swift`, are built into both apps. It asks which nolune
   to open: a name on the relay (`smiths` is `https://smiths.nolune.family`), an address, or any
   link from it, like an invite, whose page opens first (`Address.swift`). It checks that a nolune
-  answers there (its sign-in page, or the relay's page for a computer that's off) before it keeps
-  the address. Plain http only on this network (localhost, `.local`, private IPv4), as App
+  answers there (its sign-in page, or the relay's page for a computer that's off) and keeps the
+  address it answered at, after any redirect (`example.com` to `www.example.com`), since pages on
+  any other address go to Safari. Plain http only on this network (localhost, `.local`, private IPv4), as App
   Transport Security allows with `NSAllowsLocalNetworking`.
 - **The web app** (`BrowserController.swift`) is as Safari shows it, with `nolune/<version>` at the
   end of the user agent. It stays inside the safe area and above the keyboard, so the composer is
@@ -2061,9 +2062,10 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   the status bar's style. Links elsewhere open in Safari, and new windows of the family's own pages
   load in place. Files the agent hands over (downloads) open in Quick Look, which shares or saves
   them; `alert`, `confirm` and `prompt` are native alerts; the file picker and camera are WebKit's.
-- **Notifications** (`Push.swift`). Once someone has signed in (on any of the family's pages but
-  the sign-in and invite pages, and not during a profile's welcome), the app asks to show
-  notifications and registers with Apple. The token goes to the gateway from the page, as whoever
+- **Notifications** (`Push.swift`). Once someone has signed in (a page of the family's has
+  loaded, or the web app moved to one, that isn't the sign-in or an invite page, an error, or a
+  profile's welcome), the app asks to show notifications and registers with Apple. Not as a page
+  starts to load: its address changes before a redirect to the sign-in page says nobody is. The token goes to the gateway from the page, as whoever
   is signed in (`POST /api/push`, run with `callAsyncJavaScript`), and belongs to their session
   (`push_device`, `packages/core/src/push.ts`): signing out stops it, and whoever signs in next on
   that iPhone takes it over. A development build's token is for Apple's sandbox, as the build's
