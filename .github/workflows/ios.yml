@@ -50,6 +50,9 @@ jobs:
           ')
           xcrun simctl list devices | grep "$udid"
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          # Booted now, it finishes setting itself up while the tests run (they may run on a
+          # clone of it), ready for the screens after them.
+          xcrun simctl boot "$udid" || true
       # -quiet: only warnings, errors and the tests that fail.
       - name: Test
         run: |
@@ -62,17 +65,14 @@ jobs:
             -destination 'generic/platform=iOS' -derivedDataPath "$BUILD" CODE_SIGNING_ALLOWED=NO
       - name: Draw the screens
         continue-on-error: true
-        timeout-minutes: 6
+        timeout-minutes: 10
         run: |
           udid=${{ steps.simulator.outputs.udid }}
           screens="$RUNNER_TEMP/screens"
           mkdir -p "$screens"
-          # Each step of it may take a minute at most, and says what it's doing, so one that
-          # hangs shows which.
-          step() { echo "> $*"; perl -e 'alarm shift; exec @ARGV' 60 "$@"; }
-          # A fresh start: the tests leave the simulator busy, and installing can wait on it.
-          step xcrun simctl shutdown "$udid" || true
-          step xcrun simctl boot "$udid"
+          # Each step of it may take three minutes at most, and says what it's doing, so one
+          # that hangs shows which.
+          step() { echo "> $*"; perl -e 'alarm shift; exec @ARGV' 180 "$@"; }
           step xcrun simctl bootstatus "$udid" -b
           step xcrun simctl install "$udid" "$BUILD/Build/Products/Debug-iphonesimulator/Nolune.app"
           step xcrun simctl launch "$udid" dev.nolune.app
