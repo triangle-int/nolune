@@ -14,16 +14,19 @@ export {
 	API_KEYS,
 	DEFAULT_PORT,
 	DEFAULT_RELAY_SERVER,
+	MODEL_KEY_PROVIDERS,
 	apiKeyHelp,
 	configExists,
 	initConfig,
 	isApiKeyProvider,
+	isModelKeyProvider,
 	publicOrigin,
 	readConfig,
 	updateConfig,
 	writeConfig,
 	type ApiKeyProvider,
 	type Config,
+	type ModelKeyProvider,
 	type RelayConfig
 } from './config.ts';
 export {
@@ -35,6 +38,18 @@ export {
 	saveApiKey,
 	type ApiKeyStatus
 } from './api-keys.ts';
+export {
+	DEFAULT_WEB_RESULTS,
+	MAX_WEB_RESULTS,
+	WEB_RECENT,
+	WebError,
+	readWebPage,
+	searchWeb,
+	webUrl,
+	type WebPage,
+	type WebRecent,
+	type WebResult
+} from './web.ts';
 export {
 	CUSTOM_APIS,
 	CUSTOM_LABELS,

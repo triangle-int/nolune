@@ -1031,7 +1031,9 @@ export const de: Messages = {
 				'Für Chats und Automationen mit OpenAI-Modellen und zum Erstellen von Bildern auf der Seite „Bilder“ und wenn der Agent zeichnet.',
 			openrouter:
 				'Für Chats und Automationen mit den Modellen, die OpenRouter anbietet (Claude, GPT, Gemini, DeepSeek und viele mehr), mit einem Schlüssel und dessen Guthaben.',
-			xai: 'Für Chats und Automationen mit den Grok-Modellen von xAI.'
+			xai: 'Für Chats und Automationen mit den Grok-Modellen von xAI.',
+			firecrawl:
+				'Damit der Agent im Web sucht und Seiten liest. Ohne Schlüssel nutzt er den kostenlosen Tarif von Firecrawl mit einem Tageslimit für diesen Computer.'
 		},
 		withoutIt: {
 			anthropic:
@@ -1040,13 +1042,16 @@ export const de: Messages = {
 				'Chats und Automationen mit OpenAI-Modellen funktionieren nicht mehr, und nolune kann keine Bilder erstellen, bis ein neuer Schlüssel hinzugefügt wird.',
 			openrouter:
 				'Chats und Automationen mit OpenRouter-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.',
-			xai: 'Chats und Automationen mit Grok-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.'
+			xai: 'Chats und Automationen mit Grok-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.',
+			firecrawl:
+				'Websuchen laufen wieder über den kostenlosen Tarif von Firecrawl mit seinem Tageslimit.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`In nolune gespeichert${hint ? `, endet auf ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`Aus der Umgebungsvariable ${variable}${hint ? `, endet auf ${hint}` : ''}`,
 		notSet: 'Nicht gesetzt',
+		notSetFree: 'Nicht gesetzt: kostenloser Tarif mit Tageslimit',
 		replace: 'Ersetzen',
 		pasteKey: (provider: string) => `${provider}-API-Schlüssel einfügen`,
 		keyLabel: (provider: string) => `${provider}-API-Schlüssel`,

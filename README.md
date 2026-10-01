@@ -48,8 +48,9 @@ background. Members can also manage the profile and its membership.
   delete notes on the Memory page, undo automatically saved memories, or turn learning from chats
   off.
 - **An assistant that can do the work.** It can work with files on the host computer, run commands,
-  inspect photos and documents, and return files in the chat. Give it a form to fill in or ask it
-  to find the photos from your last trip.
+  search the web and read pages, inspect photos and documents, and return files in the chat. Give
+  it a form to fill in, ask it to find the photos from your last trip, or which pharmacies are open
+  on Sunday. Searching needs no key, up to a daily limit.
 - **Your other apps, connected.** Admins connect MCP servers, like a calendar, GitHub, Notion or
   the smart home, and new chats get their tools next to nolune's own, on every model. Keep one to
   the profiles it belongs to, like someone's own email in their profile.

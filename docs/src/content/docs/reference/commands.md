@@ -44,12 +44,13 @@ No tunnel, port forwarding or domain of your own. See [Remote access](/docs/guid
   chat for each chat's own model (the default)
 - `nolune config set update-check <on|off>`: on (the default): the gateway asks GitHub once a day
   for nolune's newest release, and admins see when there's one
-- `nolune key set <anthropic|openai|openrouter|xai> [key]`: store an API key (prompts if omitted)
-  after checking it; OpenAI's runs GPT chats and makes pictures, xAI's runs Grok. Admins can also
-  do this on the web, under Models & keys
-- `nolune key rm <anthropic|openai|openrouter|xai>`: remove a stored key (the environment's is used,
-  if set)
-- `nolune env set <NAME> <value>`: extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
+- `nolune key set <anthropic|openai|openrouter|xai|firecrawl> [key]`: store an API key (prompts if
+  omitted) after checking it; OpenAI's runs GPT chats and makes pictures, xAI's runs Grok,
+  Firecrawl's lifts the web search's daily limit. Admins can also do this on the web, under Models &
+  keys
+- `nolune key rm <anthropic|openai|openrouter|xai|firecrawl>`: remove a stored key (the
+  environment's is used, if set)
+- `nolune env set <NAME> <value>`: extra env var for agent commands (e.g. HASS_TOKEN)
 - `nolune env rm <NAME> | nolune env list`
 
 ## Custom providers
@@ -208,6 +209,16 @@ Model openai/gpt-image-2.5-flare; change it with `nolune config set image-model`
 [--quality Q] [--background auto|transparent|opaque] [--format png|jpeg|webp] [--count N] [--model
 PROVIDER/MODEL] [--out DIR|FILE] [--dry-run]`: make pictures from a prompt, or change the
   `--image` ones; `-` reads the prompt from stdin
+
+## The web
+
+Through Firecrawl: its free tier, limited per day, until `nolune key set firecrawl`.
+
+- `nolune web search <query> [--limit N] [--news] [--recent day|week|month|year] [--country CC]`:
+  the top results' titles, addresses and snippets (5 unless --limit, at most 20); --news for news
+  articles, --country as someone there sees them (de)
+- `nolune web read <url> [--out FILE]`: a page's main text (or a PDF's) as Markdown; a long one is
+  saved whole to a file, whose path it prints
 
 ## Inside agent commands
 
