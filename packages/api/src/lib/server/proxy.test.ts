@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { readAccount, updateAccount } from './accounts.ts';
-import { HOUR, startPlan, type PeriodGrant } from './limits.ts';
+import { addExtra, endPlan, HOUR, startPlan, type PeriodGrant } from './limits.ts';
 import { OpenRouter } from './openrouter.ts';
 import { MAX_TOKENS, Proxy, type Endpoint } from './proxy.ts';
 import { addUser, testDb } from './test/db.ts';
 
 const t0 = Date.UTC(2026, 9, 1, 18, 0);
+const DAY = 24 * HOUR;
 const family: PeriodGrant = {
 	source: 'in_1',
 	credits: 25_000_000,
@@ -213,6 +214,19 @@ describe('nolune’s API in front of OpenRouter', () => {
 	it('refuses an account with no plan, and models the plan doesn’t offer', async () => {
 		const none = await setup(() => Response.json({}), false);
 		expect((await none.send(chat)).status).toBe(402);
+
+		// A plan that ended keeps its pack for the next one, and spends nothing until then.
+		const ended = await setup(() => Response.json({}));
+		await updateAccount(ended.db, ended.userId, (account) => ({
+			...endPlan(
+				addExtra(account!, { source: 'cs_1', credits: 10_000_000, expiresAt: t0 + 365 * DAY })
+			),
+			extraPastLimits: true
+		}));
+		const refused = await ended.send(chat);
+		expect(refused.status).toBe(402);
+		expect((await refused.json()).error.code).toBe('no_plan');
+		expect(ended.calls()).toHaveLength(0);
 
 		const s = await setup(() => Response.json({}));
 		const noTools = await s.send({ ...chat, model: 'some/model-without-tools' });

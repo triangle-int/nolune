@@ -135,3 +135,12 @@ export const credit = pgTable(
 	},
 	(table) => [primaryKey({ columns: [table.userId, table.source] })]
 );
+
+/** Who someone is at Stripe: made with their first checkout, and how Stripe's events find them. */
+export const customer = pgTable('customer', {
+	userId: text('user_id')
+		.primaryKey()
+		.references(() => user.id, { onDelete: 'cascade' }),
+	stripeCustomerId: text('stripe_customer_id').notNull().unique(),
+	createdAt: createdAt()
+});

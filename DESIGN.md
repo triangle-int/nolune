@@ -1866,9 +1866,10 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
 ## The nolune plan
 
 _Built, not open yet._ nolune's API (`packages/api`) signs people in, links gateways, keeps the
-limits and passes chats and embeddings on to OpenRouter; nolune's side links to it and runs chats,
-memory search and their errors on it. Still to come: Stripe's checkout and webhooks, pictures,
-deploying the API, and automations that wait out a limit. Until the API
+limits, passes chats and embeddings on to OpenRouter, and sells the plan through Stripe (its
+account page and webhook); nolune's side links to it and runs chats, memory search and their
+errors on it. Still to come: pictures, deploying the API (and Stripe's live mode), and automations
+that wait out a limit. Until the API
 is open to everyone, the web UI offers the plan only when `NOLUNE_PLAN_API_URL` points nolune at
 one (`nolunePlanOffered`); the CLI always has it.
 
@@ -2014,9 +2015,11 @@ locks the person's row first, so requests that end together each add what they s
   reason to mark them wrong.
 - **Embeddings count only against the month.** They cost next to nothing, and search by meaning
   shouldn't stop with a window: recall would get worse just when someone is told to wait.
-- **Extra credits** are bought on their own, kept for a year, and spent only past a limit, once an
-  admin has turned that on in Models & keys. The windows don't apply to them, so a family can go
-  on now rather than at 18:40. Background work never spends them: they were bought for people.
+- **Extra credits** are bought on their own, on top of a plan, kept for a year, and spent only past
+  a limit, once whoever pays has turned that on on the account page, next to where they're bought.
+  The windows don't apply to them, so a family can go on now rather than at 18:40. Background work
+  never spends them: they were bought for people. A plan that ends keeps them for the next one,
+  and spends nothing until then: the API answers `no_plan`.
 - **A period's credits don't run out by date.** The next paid period replaces them (with what
   carries over), so while Stripe retries a failed payment the family still has what was left.
   Packs do, a year after they were bought. A subscription that ends takes the period's credits and
@@ -2033,9 +2036,8 @@ locks the person's row first, so requests that end together each add what they s
   again: `{ "error": { "code": "five_hour_limit", "message": …, "resets_at": … } }` (or
   `weekly_limit`, `background_share`, `credits_spent`). It adds `x-should-retry: false`, since the
   SDKs retry a 429 themselves and don't wait out a `Retry-After` of hours. nolune makes it a
-  `PlanError` with that `kind`, in words, as the ChatGPT plan's usage limit is said: "nolune's
-  5-hour limit is reached; chats start again at 18:40. An admin can turn on extra credits in Models
-  & keys."
+  `PlanError` with that `kind`, in words, as the ChatGPT plan's usage limit is said: "The nolune
+  plan's 5-hour limit is reached. Chats start again at 18:40."
 - **Other errors.** OpenRouter's go on as they came (a request it can't take, a model that's down,
   input its moderation flagged), except a `401` or `402`, which are about nolune's own key or
   credits: those are logged for the operator and the family gets a `503` (`upstream_unavailable`).
@@ -2090,20 +2092,32 @@ Triangle Interactive, LLC sells the plan, through Stripe.
   and Models & keys ("Launch offer: $25 of credits for $20"), from `offer: launch`. Ending it is
   the products' metadata, not new prices: families are told a month ahead, and their periods after
   that get the new amounts. Credits already given and packs already bought keep theirs.
-- **Buying.** The account page on nolune.dev opens Stripe Checkout for a tier (a monthly Price for
-  each) and Stripe's customer portal for changing the tier or the card, or cancelling. Extra
-  credits are a one-time Checkout payment. Nothing is billed for use afterwards: the month's credits
+- **Buying.** The account page (`/` on the API) opens Stripe Checkout for the plan (one per
+  account) and for a pack of extra credits (a one-time payment, once there's a plan), and Stripe's
+  customer portal (Manage) for the card, invoices and cancelling. Each person's Stripe customer is
+  made at their first Checkout and kept (the `customer` table), and Stripe's events find people by
+  it. Back from Checkout (`?checkout=plan&session=…`), the page waits for the event that grants
+  what was paid for, for up to a minute. Nothing is billed for use afterwards: the month's credits
   come with the subscription and extra credits are paid before they're spent, so there's never an
-  invoice for tokens already used, or one that fails after they were.
-- **Credits follow Stripe's events**, at the API's webhook endpoint. `invoice.paid` grants the
-  period's credits; `customer.subscription.updated` moves the tier (an upgrade at once, Stripe
-  invoicing the prorated difference, whose `invoice.paid` grants the same share of the new tier's
-  credits; a downgrade at the period's end); `customer.subscription.deleted`, sent when a
-  cancelled subscription runs out, ends the plan; `checkout.session.completed` adds extra credits.
-  Each event is checked by its signature and applied once, by its id, since Stripe may send one
-  more than once.
-- **A failed payment** (`invoice.payment_failed`) leaves the plan what's left of its credits but
-  gives it no new ones while Stripe retries. Models & keys says so, with the portal's link.
+  invoice for tokens already used, or one that fails after they were. `billing.ts` is all of it.
+- **nolune's own portal.** The account's default portal configuration is Gensprite's too, and lets
+  people switch prices, so nolune's (`STRIPE_PORTAL_CONFIGURATION`) offers cancelling at the
+  period's end, cards and invoices, and no switching. On flexible billing (this API version), a
+  cancellation sets the subscription's `cancel_at` rather than `cancel_at_period_end`; the page
+  reads both ("Cancelled: the plan ends on November 1").
+- **Credits follow Stripe's events**, at `/stripe/webhook` (API version `2026-09-30.endive`, the
+  SDK's). `invoice.paid` for a subscription's first period starts the plan, and each one after
+  grants the period's credits (with what carries over) and the product's limits; one for anything
+  else (a prorated change, once there's more than one tier) grants nothing and is logged, and so
+  does one for a subscription that has run out since. `checkout.session.completed` (or
+  `async_payment_succeeded`, for a payment that comes later) adds a pack's credits.
+  `customer.subscription.deleted`, sent when a cancelled subscription runs out, ends the plan
+  unless another subscription holds it. Each event is checked by its signature, and each grant is
+  keyed by what paid for it (the invoice, the Checkout Session), so an event Stripe sends twice
+  grants once.
+- **A failed payment** leaves the plan what's left of its credits but gives it no new ones while
+  Stripe retries. The account page says so (the subscription is `past_due`), and Manage changes
+  the card; Models & keys doesn't yet.
 - **The API keeps its own ledger.** Stripe knows money, not windows: the 5-hour and weekly limits
   are checked before every request, so the API keeps the credits, the windows and each request's
   cost itself, and Stripe never sees tokens. Stripe's LLM token billing (a private preview in 2026,
@@ -2167,7 +2181,8 @@ packages/api    @nolune/api. nolune's API for the nolune plan (see [The nolune
                 drizzle (migrations in packages/api/drizzle, run when it starts). So far: accounts
                 with better-auth (auth.ts: codes by email, email.ts through Resend; device codes
                 for gateways; bearer tokens), the plan's credits and limits (limits.ts, kept by
-                accounts.ts), the pages (sign-in, link, the plan), and /v1: usage, models, and
+                accounts.ts), selling it through Stripe (billing.ts: Checkout, the portal, the
+                webhook), the pages (sign-in, link, the plan), and /v1: usage, models, and
                 chats and embeddings passed on to OpenRouter (proxy.ts, openrouter.ts, with
                 stream.ts reading a stream's usage as it goes on). Its tests run on
                 PGlite, Postgres in the test's own process. Deployed next to the relay, not part

@@ -3,6 +3,7 @@ import type { Db } from './db.ts';
 import {
 	admit,
 	charge,
+	hasPlan,
 	micros,
 	usage,
 	type Account,
@@ -170,7 +171,7 @@ export class Proxy {
 			inputCost: endpoint === 'chat' ? inputCost(body, model) : undefined
 		};
 		const account = await readAccount(this.db, userId);
-		if (!account) return apiError(402, 'no_plan', 'This account has no nolune plan.');
+		if (!hasPlan(account)) return apiError(402, 'no_plan', 'This account has no nolune plan.');
 		const admission = admit(account, request, now);
 		if (!admission.ok) {
 			const resetsAt = admission.resetsAt === null ? null : new Date(admission.resetsAt);

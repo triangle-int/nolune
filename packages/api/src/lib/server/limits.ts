@@ -255,6 +255,24 @@ export function startPlan(grant: PeriodGrant, now: number, previous?: Account): 
 	return grantPeriod(account, grant, now);
 }
 
+/** Whether someone has a plan going: one that ended keeps its packs, for the next one, and no limits. */
+export function hasPlan(account: Account | null): account is Account {
+	return !!account && account.limits.week > 0;
+}
+
+/** Someone with no plan, yet: no limits to spend within, for packs bought before one (or without). */
+export function noPlan(now: number): Account {
+	return {
+		limits: { window: 0, week: 0 },
+		startedAt: now,
+		renewsAt: null,
+		window: null,
+		week: null,
+		credits: [],
+		extraPastLimits: false
+	};
+}
+
 /** A subscription that ran out: no more limits to spend within, and its credits are gone. Packs stay. */
 export function endPlan(account: Account): Account {
 	return {

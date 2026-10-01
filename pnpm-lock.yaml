@@ -95,6 +95,9 @@ importers:
       pg:
         specifier: ^8.23.1
         version: 8.23.1
+      stripe:
+        specifier: ^23.0.0
+        version: 23.0.0(@types/node@22.20.4)
     devDependencies:
       '@electric-sql/pglite':
         specifier: ^0.5.8
@@ -4307,6 +4310,15 @@ packages:
   strip-ansi@7.2.0:
     resolution: {integrity: sha512-yDPMNjp4WyfYBkHnjIRLfca1i6KMyGCtsVgoKe/z1+6vukgaENdgGBZt+ZmKPc4gavvEZ5OgHfHdrazhgNyG7w==}
     engines: {node: '>=12'}
+
+  stripe@23.0.0:
+    resolution: {integrity: sha512-MDE2A5ZVVluYURORaZEVghSmnLJc3w6aHAlZSxDQMsOjOb3V0O6ro/CiaeFlJS4N7uIVmsg98ocRsPmUK6YfyA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@types/node': '>=20'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
 
   style-to-object@1.0.14:
     resolution: {integrity: sha512-LIN7rULI0jBscWQYaSswptyderlarFkjQ+t79nzty8tcIAceVomEVlLzH5VP4Cmsv6MtKhs7qaAiwlcp+Mgaxw==}
@@ -8819,6 +8831,10 @@ snapshots:
   strip-ansi@7.2.0:
     dependencies:
       ansi-regex: 6.4.0
+
+  stripe@23.0.0(@types/node@22.20.4):
+    optionalDependencies:
+      '@types/node': 22.20.4
 
   style-to-object@1.0.14:
     dependencies:
