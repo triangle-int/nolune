@@ -1,6 +1,6 @@
 ---
 name: nolune
-description: Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates), and whether commands are checked before they run (auto mode). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.
+description: Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, connected services (MCP servers), which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates), and whether commands are checked before they run (auto mode). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.
 ---
 
 # Configuring nolune
@@ -11,7 +11,8 @@ itself safely from your own commands.
 
 Other parts of the CLI have their own instructions: automations (`nolune trigger`, `nolune wake`) in the
 `automations` skill, pictures (`nolune generate image`, `nolune view`) in `generate-images` and
-`view-images`, and memory (`nolune memory`) and your soul (`nolune soul`) in your system prompt.
+`view-images`, the tools of connected services (`nolune mcp`) in `mcp`, and memory (`nolune memory`)
+and your soul (`nolune soul`) in your system prompt.
 
 ## Before you change anything
 
@@ -144,6 +145,27 @@ nolune env set FIRECRAWL_API_KEY 'fc-...'
 nolune env list                     # names only
 nolune env rm FIRECRAWL_API_KEY
 ```
+
+## Connected services (MCP servers)
+
+An admin can connect apps and services as MCP servers, whose tools you then use with `nolune mcp`
+(the `mcp` skill). When one asks you to connect one, take what its instructions say: the command
+that starts it, or its address, and the key it needs. `nolune mcp add` connects to it to check it
+and prints its tools, or why it couldn't:
+
+```sh
+nolune mcp add time -- uvx mcp-server-time
+nolune mcp add notes --env NOTES_TOKEN='…' --description "The family's shared notes" -- npx -y <its package>
+nolune mcp add github https://api.githubcopilot.com/mcp/ --header 'Authorization: Bearer ghp_…'
+nolune mcp add-json files '{"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/anna/Documents"]}'
+nolune mcp list                     # the names of their keys, never the keys
+nolune mcp rm github
+```
+
+`--profile <slug>` (as often as needed) keeps a server to those profiles: one that reaches
+someone's own account belongs in their profile. Chats that started before a server was added or
+removed still list the servers they started with. Servers that only sign in through a web page
+(OAuth) can't be connected yet.
 
 ## Skills
 

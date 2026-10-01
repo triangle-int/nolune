@@ -82,6 +82,7 @@ import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
 import { planCommand, requireClaudePlan } from './plans.ts';
+import { MCP_HELP, mcpCommand } from './mcp.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { RELAY_HELP, RelayUnreachable, connectRelay, enableRelay, relayCommand } from './relay.ts';
@@ -206,6 +207,8 @@ ${PROFILE_HELP}
   nolune skill list [--profile SLUG]
   nolune skill enable <name>... [--profile SLUG]
   nolune skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
+
+${MCP_HELP}
 
 ${TRIGGER_HELP}
 
@@ -1068,6 +1071,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			} else fail('usage: nolune skill new|list|enable|disable');
 			return;
 		}
+
+		case 'mcp':
+			requireInit();
+			return mcpCommand(io, action, rest);
 
 		case 'trigger':
 			requireInit();

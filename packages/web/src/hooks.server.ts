@@ -3,6 +3,7 @@ import { building } from '$app/environment';
 import { svelteKitHandler } from 'better-auth/svelte-kit';
 import { serveGatewayCommands } from '@nolune/cli/serve';
 import {
+	holdMcpConnections,
 	installCliShim,
 	recoverAfterRestart,
 	startScheduler,
@@ -20,6 +21,8 @@ export const init: ServerInit = () => {
 	startUpdateChecks();
 	// The agent's `nolune` commands run here, on the nolune already loaded (packages/cli/src/serve.ts).
 	serveGatewayCommands();
+	// So `nolune mcp` keeps each MCP server's connection open between them (packages/core/src/mcp.ts).
+	holdMcpConnections();
 };
 
 /** Webhook URLs and invite links carry their own secret token instead of a login. */

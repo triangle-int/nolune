@@ -7,6 +7,7 @@ import {
 	listMemoryNotes,
 	readPinnedNote
 } from './memory.ts';
+import { mcpServersSection } from './mcp.ts';
 import { cardRules, cardsSection } from './memory-cards.ts';
 import { PERSON_NOTE_GUIDE, categoryGuide } from './memory-categories.ts';
 import { peopleGuide } from './memory-people.ts';
@@ -23,7 +24,8 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
  * note name, and the agent searches and reads what it needs (facts that match a message go along
  * with the message: recallFor); only the small pinned core note is copied whole. So the prompt
  * changes when a note is added or removed or core changes, not with every fact. The members'
- * cards (memory-cards.ts) are copied whole too, like core. `folderSection`:
+ * cards (memory-cards.ts) are copied whole too, like core. The profile's MCP servers (mcp.ts)
+ * follow the skills, by name and description. `folderSection`:
  * the chat's folder (renderFolderSection), last, so chats outside folders share everything
  * before it. `soul`: the profile's (readSoul), first, since it says who nolune is; the chat keeps
  * its text to tell when the prompt is out of date.
@@ -52,14 +54,19 @@ ${core.text}
 		: 'It is empty so far.';
 	const people = peopleGuide(profile);
 	const cards = cardsSection(profile.id);
-	const skills = listProfileSkills(
-		profileSkillsDir(profile.slug),
-		profile.disabledSkills
-	).skills.filter((s) => s.enabled);
+	const servers = mcpServersSection(profile.slug);
+	const skills = listProfileSkills(profileSkillsDir(profile.slug), profile.disabledSkills)
+		.skills.filter((s) => s.enabled)
+		// The built-in mcp skill is about the profile's MCP servers: without any, it's no use.
+		.filter((s) => servers || s.name !== 'mcp' || s.scope !== 'builtin');
+	const mcpSection =
+		servers && skills.some((s) => s.name === 'mcp')
+			? `\n\nThis profile's MCP servers, the apps and services connected to nolune, as they were when this conversation started (the mcp skill says how to use them):\n${servers}`
+			: '';
 	const skillsSection = skills.length
 		? `When a task matches a skill's description, read its SKILL.md with \`cat\` before doing anything else, and follow it. Relative paths in a skill are relative to that skill's folder.
 
-${renderSkillsCatalog(skills)}`
+${renderSkillsCatalog(skills)}${mcpSection}`
 		: 'There are no skills yet.';
 
 	return `You are nolune, an assistant that lives on a family's computer and helps them get things done on it. You act by running shell commands with the run_command tool.

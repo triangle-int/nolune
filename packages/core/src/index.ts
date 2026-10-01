@@ -266,6 +266,29 @@ export {
 	type ProfileSkill,
 	type Skill
 } from './skills.ts';
+export {
+	MCP_TRANSPORTS,
+	McpServerError,
+	callMcpTool,
+	checkMcpServer,
+	closeMcpConnections,
+	describeFromServer,
+	findMcpServer,
+	holdMcpConnections,
+	isMcpAddress,
+	joinCommandLine,
+	listMcpServers,
+	listMcpTools,
+	mcpServerNameProblem,
+	parseMcpServer,
+	removeMcpServer,
+	saveMcpServer,
+	splitCommandLine,
+	type McpServerConfig,
+	type McpServerStatus,
+	type McpServerTools,
+	type McpTransport
+} from './mcp.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export {
 	MAX_ACTIVE_SUBAGENTS,

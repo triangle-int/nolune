@@ -90,6 +90,8 @@ const NOLUNE_READS: Record<string, readonly string[] | 'any'> = {
 	soul: ['', 'show'],
 	skill: ['list'],
 	profile: ['list'],
+	// What MCP servers there are and what their tools take; calling one goes to the check.
+	mcp: ['', 'list', 'tools'],
 	help: 'any'
 };
 

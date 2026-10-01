@@ -17,6 +17,7 @@
 	import AddCustomProvider from '$lib/components/admin/AddCustomProvider.svelte';
 	import CommandSafety from '$lib/components/admin/CommandSafety.svelte';
 	import CustomProviderRow from '$lib/components/admin/CustomProviderRow.svelte';
+	import McpServers from '$lib/components/admin/McpServers.svelte';
 	import MemorySearch from '$lib/components/admin/MemorySearch.svelte';
 	import PresetForm from '$lib/components/admin/PresetForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
@@ -577,6 +578,8 @@
 				customProviders={data.customProviders}
 				result={form}
 			/>
+
+			<McpServers servers={data.mcpServers} profiles={data.profiles} result={form} />
 
 			<CommandSafety
 				setting={data.commands}
