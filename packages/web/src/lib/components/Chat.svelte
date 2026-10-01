@@ -204,17 +204,23 @@
 	/** The newest entry, past what the note-taker saved after it. */
 	const newest = $derived(entries.findLast((entry) => entry.type !== 'memory'));
 
-	/** Usage of the last reply, and summed over the whole conversation. */
+	/**
+	 * Usage of the last reply, and summed over the whole conversation, summaries of it included
+	 * (the runner's, and those Claude wrote at the start of a reply).
+	 */
 	const usage = $derived.by(() => {
 		let last: Usage | null = null;
 		const total: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 		for (const m of chat.messages) {
-			if (m.kind !== 'assistant' || !m.usage) continue;
-			last = m.usage;
-			total.input += m.usage.input;
-			total.cacheRead += m.usage.cacheRead;
-			total.cacheWrite += m.usage.cacheWrite;
-			total.output += m.usage.output;
+			if ((m.kind !== 'assistant' && m.kind !== 'compaction') || !m.usage) continue;
+			if (m.kind === 'assistant') last = m.usage;
+			for (const part of [m.usage, m.usage.compaction]) {
+				if (!part) continue;
+				total.input += part.input;
+				total.cacheRead += part.cacheRead;
+				total.cacheWrite += part.cacheWrite;
+				total.output += part.output;
+			}
 		}
 		return last && { last, total };
 	});
@@ -231,12 +237,14 @@
 		// When the rows that led to the next request (a message, command output) arrived.
 		let resumedAt = 0;
 		for (const m of chat.messages) {
+			// From a summary of the conversation on, a request reads less than the one before it.
+			if (m.kind === 'compaction') previous = null;
 			if (m.kind !== 'assistant') {
 				resumedAt = Math.max(resumedAt, m.createdAt);
 				continue;
 			}
 			if (!m.usage) continue;
-			if (previous) {
+			if (previous && !m.usage.compaction) {
 				const tokens = cacheMissTokens(previous.usage, m.usage);
 				const expired = resumedAt - previous.at > cacheTtlMs(conversation.cacheTtl);
 				if (tokens > 0) misses[m.id] = { tokens, expired };

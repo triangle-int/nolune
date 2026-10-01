@@ -25,6 +25,11 @@ export interface ToolResult {
 
 export type Step =
 	| { type: 'thinking'; text: string }
+	/**
+	 * The model summarized the conversation so far, which had grown too long for it, and goes on
+	 * from the summary. Empty while it's writing.
+	 */
+	| { type: 'compaction'; summary: string }
 	| {
 			type: 'command';
 			id: string;
@@ -100,15 +105,18 @@ function messageEntry(message: DisplayMessage): Entry | null {
 	}
 }
 
+/** Sums usage, with what a summary of the conversation took in the call that wrote it. */
 function addUsage(total: Usage | null, u: Usage | null): Usage | null {
 	if (!u) return total;
-	if (!total) return { ...u };
-	return {
-		input: total.input + u.input,
-		cacheRead: total.cacheRead + u.cacheRead,
-		cacheWrite: total.cacheWrite + u.cacheWrite,
-		output: total.output + u.output
-	};
+	const sum: Usage = total ? { ...total } : { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+	for (const part of [u, u.compaction]) {
+		if (!part) continue;
+		sum.input += part.input;
+		sum.cacheRead += part.cacheRead;
+		sum.cacheWrite += part.cacheWrite;
+		sum.output += part.output;
+	}
+	return sum;
 }
 
 export function buildTranscript(
@@ -188,6 +196,7 @@ export function buildTranscript(
 			for (const block of message.blocks) {
 				if (block.type === 'text') addText(r, block.text, { media: message.media });
 				else if (block.type === 'thinking') addStep(r, block, message.createdAt);
+				else if (block.type === 'compaction') addStep(r, block, message.createdAt);
 				else
 					addStep(
 						r,
@@ -202,6 +211,11 @@ export function buildTranscript(
 						message.createdAt
 					);
 			}
+		} else if (message.kind === 'compaction') {
+			// The runner had the model summarize the conversation before its next step.
+			const r = openReply();
+			r.usage = addUsage(r.usage, message.usage);
+			addStep(r, { type: 'compaction', summary: message.summary }, message.createdAt);
 		} else if (message.kind === 'tool_results' && reply) {
 			// Command output arrived: the work that ends with these commands took until now.
 			const last = (reply as Reply).parts.at(-1);
@@ -220,7 +234,9 @@ export function buildTranscript(
 		for (const block of streaming) {
 			if (block.type === 'text') addText(r, block.text, { pending: true });
 			else if (block.type === 'thinking') addStep(r, { type: 'thinking', text: block.text }, now);
-			else if (block.id)
+			else if (block.type === 'compaction') {
+				addStep(r, { type: 'compaction', summary: block.text }, now);
+			} else if (block.id)
 				addStep(r, { type: 'command', id: block.id, ...partialToolInput(block.text) }, now);
 		}
 		r.live = running;
@@ -231,7 +247,7 @@ export function buildTranscript(
 
 /**
  * What work in progress is doing, as its collapsed group says it: the summary of the command that
- * is running, or Thinking. The live avatar shows the same on hover.
+ * is running, summarizing the conversation, or Thinking. The live avatar shows the same on hover.
  */
 export function activeStepLabel(
 	part: ActivityPart,
@@ -240,6 +256,7 @@ export function activeStepLabel(
 	m: Messages
 ): string {
 	const last = part.steps.at(-1);
+	if (last?.type === 'compaction' && !last.summary) return m.steps.summarizing;
 	if (last?.type === 'command' && !results[last.id]) {
 		if (technical && last.command) return m.steps.running(firstLine(last.command, 80));
 		return last.summary ?? m.steps.runningACommand;

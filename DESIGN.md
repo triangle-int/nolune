@@ -114,6 +114,9 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
 - Steering messages, stop results and restart-recovery results are **appended** as new rows. Nothing
   is ever edited or deleted. Opus 5.5 and Fable 5.1 require this anyway for "preserved thinking":
   replaying a thinking block after its prefix changed returns a 400 on newer accounts.
+- A conversation that nears its window is **summarized**, and requests start from the summary from
+  then on (see [Compaction](#compaction)). That's a new prefix, written to the cache once; rows
+  still aren't edited, and a summary is one more row (or the start of one).
 - Every assistant row stores `usage`, and the gateway logs `cache_read` / `cache_write` and the hit
   rate for every call. The chat header shows the hit rate (tooltip: last reply and whole conversation),
   and a reply is marked as a cache miss when it read less than the previous call read or wrote, with
@@ -190,9 +193,9 @@ plan's chats are OpenAI's, with the plan's sign-in instead of a key (`chatgpt-pl
   flagships' (`knownContextWindow`): every one since GPT-5.4 (`gpt-5.4`, `gpt-5.5-pro`,
   `gpt-6-astra`, their dated snapshots) has 1,050,000 tokens. Other models (mini, nano, codex,
   older ones) can have far less, and a window set too large would let a conversation grow past
-  what the model takes, for good, since history is never edited; so they get one only when the
-  admin sets it. Without one, the chat's context meter shows "?" and PDFs share 25% of 200k
-  tokens. Titles are asked for at `low` effort.
+  what the model takes before it's summarized (see [Compaction](#compaction)); so they get one
+  only when the admin sets it. Without one, the chat's context meter shows "?", PDFs share 25% of
+  200k tokens and the chat is never summarized. Titles are asked for at `low` effort.
 - **OpenRouter** (`openrouter.ts`) serves models from many providers behind one key, through its
   Chat Completions API. OpenAI's SDK speaks it, pointed at `https://openrouter.ai/api/v1` (or
   `OPENROUTER_BASE_URL`), so it brings the same retries and server-sent events; its errors are
@@ -309,7 +312,7 @@ plan's chats are OpenAI's, with the plan's sign-in instead of a key (`chatgpt-pl
 ### nolune's format
 
 `format.ts` defines what a conversation holds, whichever provider runs it: blocks (`text`,
-`image`, `pdf`, `reasoning`, `tool_call`, `tool_result`) in messages. A picture's or PDF's source
+`image`, `pdf`, `reasoning`, `tool_call`, `compaction`, `tool_result`) in messages. A picture's or PDF's source
 is `media` (kept by nolune, which `resolveFiles` turns into each provider's copy before a request),
 `inline` (base64, which every provider takes) or `uploaded` to one provider's Files API (rows
 from before nolune kept its own copies). Each
@@ -527,7 +530,8 @@ chip in its composer; `nolune agent run <id> --preset` does it for a subagent gi
 `setPreset` takes a new snapshot of the preset (name, provider, model, context window), and the
 next model call uses it, even in the middle of a turn, so a model that keeps failing can be left
 behind with Continue. It's refused when the conversation is already larger than the new model's
-window (from its last call's usage): history is never edited, so it could never fit. Everyone who
+window (from its last call's usage, or a summary no call has read yet): its first call would fail
+before anything could be summarized. Everyone who
 has the chat open gets the change as a live `model` event (also in the snapshot).
 
 - **What it costs.** Caches belong to one model, so the first call on the new one reads the whole
@@ -595,6 +599,40 @@ kick(conversation):                     one loop per conversation at a time
   (`agent_message`). Each one is plain user text with a bracketed first line saying where it comes
   from (`[Background command finished: …]`), not a mid-conversation system message: not every model
   takes those, and a command's output mustn't get system authority.
+
+### Compaction
+
+Once a conversation fills 85% of its model's context window (`COMPACT_SHARE`, `compaction.ts`), the
+model summarizes it, and the calls after that start from the summary rather than the whole
+conversation: a chat no longer stops for good when it outgrows its model.
+
+- **Nothing is edited.** The chat still shows every message, the summary as one more step of
+  nolune's work, and `requestMessages` leaves out what came before the latest summary
+  (`compactedFrom`). Recalled memory counts only what the model still reads, the summary
+  included, as already in the chat.
+- **Claude does it on the server**, at a token threshold (beta `compact-2026-01-12`), on every
+  model since Opus and Sonnet 4.6 (`supportsCompaction`; not Haiku 4.5): each request carries
+  `context_management` with a `compact_20260112` edit whose trigger is 85% of the chat's window
+  (170k without one, and never under the API's 50k). The request that reaches it writes the
+  summary first, a `compaction` block that starts the reply, and goes on from it in the same call.
+  The reply is stored and sent back as it came, as every reply is, and the requests after it start
+  with it (the API would ignore what came before anyway). The chat shows the summary while the API
+  hands it over, in one piece. What it took (`usage.iterations`) is kept apart in the reply's usage
+  (`Usage.compaction`); the reply's own numbers are from the summary on, so the context meter
+  shows what the model reads now.
+- **Other models' chats are summarized by the runner**, before a call, when the latest call read
+  and wrote 85% of the window or more (`needsCompaction`): it sends the conversation's next request
+  with one more message asking for a summary (`SUMMARY_REQUEST`), so the provider's cache holds all
+  the rest, and saves the summary as a `compaction` row, which the model reads as a message
+  (`[Earlier in this conversation, summarized to fit the context window:]`). Never right after a
+  summary (a window the summary itself doesn't leave room in would only get one after another),
+  and never without a known window. A model that writes no summary ends the turn with an error,
+  as a failed call does.
+- **Switching models** keeps the summary: Claude's block goes back only to the model that wrote
+  it, while it compacts on the server; any other model gets its text as a message before the
+  reply (`withoutCompaction`). A chat that comes to a plan with history sends the transcript from
+  the latest summary.
+- **The Claude plan** is left alone: Claude Code keeps the conversation and compacts it itself.
 
 ### `run_command`
 
@@ -1470,6 +1508,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 - **Steps** show the `summary` and `icon` the model wrote with each `run_command` call ("Checking
   tomorrow's weather in Berlin" with `cloud-sun-rain`), in the conversation's language. Opening a
   step shows the command and its output. Calls from before summaries existed say "Ran a command".
+  A summary of the conversation (see [Compaction](#compaction)) is a step too: "Summarizing the
+  conversation so far" while the model writes it, then a line that opens to the summary.
   Any Lucide icon works: `/api/icons/<name>` serves one icon's drawing from the `lucide` package, so
   pages don't download all two thousand; unknown names fall back to a terminal icon.
 - **Technical details** (Settings, per device, in the `nolune-prefs` cookie so the server renders it
@@ -1923,7 +1963,7 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts; the
                 ChatGPT plan's requests in chatgpt-plan.ts, signed in with Sign in with ChatGPT in
                 chatgpt-sign-in.ts), provider
-                file cache, runner, media, users/invites/profiles/presets, API
+                file cache, runner, compaction (compaction.ts), media, users/invites/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
                 openai.ts), the web (web.ts), image templates and assistant avatars.
@@ -2064,9 +2104,6 @@ signing.
 - Cards: notes shared on purpose between profiles, for people who aren't users (a grandmother in
   the family's profile and in Anna and her mother's), only between profiles the person sharing is
   in; and a switch for an owner to stop the agent and the note-taker from writing their card.
-- **Compaction.** The context window is already stored on each conversation and shown in the UI.
-  The next step is server-side compaction (beta `compact-2026-01-12`), triggered at about 85% of the
-  window.
 - Other chat providers (Gemini). See [Model providers](#model-providers) for what each needs.
 - OpenRouter: provider preferences (`provider.order`, data policy), and PDFs for models that don't
   read them, through OpenRouter's parser with its annotations sent back so a PDF is parsed once.

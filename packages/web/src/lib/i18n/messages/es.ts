@@ -347,6 +347,10 @@ export const es: Messages = {
 	steps: {
 		thinking: 'Pensando',
 		thinkingDots: 'Pensando…',
+		summarizing: 'Resumiendo la conversación hasta ahora',
+		summarized: 'Resumió la conversación hasta ahora',
+		summaryHint:
+			'La conversación se había vuelto demasiado larga para el modelo, así que continúa a partir de este resumen.',
 		running: (command: string) => `Ejecutando ${command}`,
 		runningACommand: 'Ejecutando un comando',
 		ranACommand: 'Ejecutó un comando',
