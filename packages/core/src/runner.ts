@@ -24,6 +24,8 @@ import {
 import {
 	appendRow,
 	commitQueuedRows,
+	compactedFrom,
+	compactionSummary,
 	committedRows,
 	foundText,
 	getConversation,
@@ -56,12 +58,21 @@ import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
 import {
+	compactionNote,
 	messageText,
 	type Block,
 	type ImageBlock,
+	type Message,
 	type TextBlock,
 	type ToolResultBlock
 } from './format.ts';
+import {
+	SUMMARY_REQUEST,
+	compactsOnServer,
+	needsCompaction,
+	serverCompactAt,
+	summaryOf
+} from './compaction.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import {
 	BLOCK_STREAK_LIMIT,
@@ -105,7 +116,8 @@ import { TITLE_LIMIT, suggestTitle, typedTitle } from './titles.ts';
 import { cacheHitRate } from './usage.ts';
 
 export interface LiveBlock {
-	type: 'text' | 'thinking' | 'tool';
+	/** `compaction`: the conversation being summarized (compaction.ts); its text, the summary. */
+	type: 'text' | 'thinking' | 'tool' | 'compaction';
 	text: string;
 	id?: string;
 }
@@ -554,8 +566,14 @@ async function recall(
 	const slug = profileSlug(conv.profileId);
 	if (!slug || !text) return null;
 	try {
+		// The model no longer reads what came before the latest summary: only the summary.
 		const rows = [...committedRows(conv.id), ...queuedRows(conv.id)];
-		const known = [conv.systemPrompt, ...rows.map((row) => messageText(readRow(row).blocks))];
+		const known = [
+			conv.systemPrompt,
+			...rows
+				.slice(compactedFrom(rows))
+				.map((row) => `${compactionSummary(row) ?? ''}\n${messageText(readRow(row).blocks)}`)
+		];
 		// What's about who's asking comes first, by any name their note calls them.
 		const words = memberWords({ id: conv.profileId, slug }, sender.id, sender.name);
 		// The members' cards too: one that changed since the chat started has news.
@@ -924,9 +942,12 @@ async function saveReply(
 		: [];
 
 	const { usage } = reply;
+	const summarized = usage?.compaction
+		? ` (summarized the conversation first: in=${usage.compaction.input} cache_read=${usage.compaction.cacheRead} out=${usage.compaction.output})`
+		: '';
 	console.log(
 		usage
-			? `[nolune] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
+			? `[nolune] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}${summarized}`
 			: `[nolune] ${conversationId.slice(0, 8)} ${conv.model} stop=${reply.stopReason}`
 	);
 	const assistantRow = appendRow({
@@ -1019,13 +1040,21 @@ function planInput(
 			.flatMap(content);
 	} else {
 		// Up to the last reply, or the results of its commands when another model's turn was still
-		// going when the chat switched to the plan.
+		// going when the chat switched to the plan. From the latest summary of the conversation on.
 		const seen = rows.findLastIndex((row) => !isPlanInput(row)) + 1;
+		const from = compactedFrom(rows);
 		const earlier = rows
-			.slice(0, seen)
-			.map((row) => (row.role === 'assistant' ? `You: ${plainText(row)}` : plainText(row)))
-			.filter((text) => text && text !== 'You: ');
-		input = rows.slice(seen).flatMap(content);
+			.slice(from, seen)
+			.map((row) => {
+				if (row.role !== 'assistant') return plainText(row);
+				const said = plainText(row);
+				const summary = compactionSummary(row);
+				return [summary !== null && compactionNote(summary).text, said && `You: ${said}`]
+					.filter(Boolean)
+					.join('\n\n');
+			})
+			.filter(Boolean);
+		input = rows.slice(Math.max(from, seen)).flatMap(content);
 		if (earlier.length) {
 			input.unshift({
 				type: 'text',
@@ -1128,6 +1157,92 @@ async function planTurn(
 	}
 }
 
+/** What each model call of the chat sends besides its messages, the same call after call. */
+function modelCall(conv: Conversation) {
+	return {
+		provider: conv.provider,
+		model: conv.model,
+		effort: conv.effort,
+		system: conv.systemPrompt,
+		tools: toolsFor(conv),
+		cacheTtl: conv.cacheTtl,
+		cacheKey: conv.id
+	};
+}
+
+/**
+ * The messages with their pictures and PDFs kept by reference, as this provider gets them, where
+ * the model takes them.
+ */
+async function providerMessages(conv: Conversation, messages: Message[]): Promise<Message[]> {
+	return resolveFiles(await readableMessages(conv.provider, conv.model, messages), conv.provider);
+}
+
+/**
+ * Has the chat's model summarize the conversation, which would soon outgrow its context window
+ * (compaction.ts), and saves the summary as a row of its own: the model calls after it start
+ * there. The request is the conversation's next one with the ask at the end, so the provider's
+ * cache still holds all the rest. The chat shows it as a step while the model writes. False when
+ * the loop should end: stopped, or failed with `st.error`.
+ */
+async function compact(
+	conv: Conversation,
+	rows: MessageRow[],
+	st: State,
+	abort: AbortController
+): Promise<boolean> {
+	const conversationId = conv.id;
+	const block: LiveBlock = { type: 'compaction', text: '' };
+	st.live = [block];
+	emit(conversationId, { type: 'live_block', index: 0, block });
+	const ask: Message = { role: 'user', blocks: [{ type: 'text', text: SUMMARY_REQUEST }] };
+	let reply: ModelReply;
+	try {
+		reply = await streamTurn({
+			...modelCall(conv),
+			messages: await providerMessages(conv, [
+				...requestMessages(rows, conv.promptChangedAtSeq),
+				ask
+			]),
+			signal: abort.signal,
+			// Only the summary shows, once it's saved.
+			onEvent: () => {}
+		});
+	} catch (err) {
+		clearLive(conversationId);
+		if (abort.signal.aborted || isAbortError(err)) {
+			commitQueued(conversationId);
+			return false;
+		}
+		st.error = describeApiError(err);
+		console.error(`[nolune] ${conversationId.slice(0, 8)} summarizing failed:`, err);
+		return false;
+	}
+	const summary = summaryOf(reply);
+	const { usage } = reply;
+	console.log(
+		`[nolune] ${conversationId.slice(0, 8)} ${conv.model} summarized the conversation${usage ? ` in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} out=${usage.output}` : ''} stop=${reply.stopReason}${summary ? '' : ' (no summary)'}`
+	);
+	if (!summary) {
+		clearLive(conversationId);
+		st.error = `${conv.presetName} didn't write the summary this chat needs to fit its context window. Try again, or switch to a model with a larger one.`;
+		return false;
+	}
+	const row = appendRow({
+		conversationId,
+		role: 'user',
+		kind: 'compaction',
+		text: summary,
+		blocks: [compactionNote(summary)],
+		usage
+	});
+	st.live = [];
+	st.toolOutput = null;
+	emit(conversationId, { type: 'message', message: toDisplay(row), replacesLive: true });
+	touchConversation(conversationId);
+	return true;
+}
+
 async function loop(conversationId: string): Promise<void> {
 	const st = stateFor(conversationId);
 	if (st.running) return; // the running loop picks up new messages at its next step
@@ -1162,23 +1277,18 @@ async function loop(conversationId: string): Promise<void> {
 				if (!queuedRows(conversationId).length) return;
 				continue;
 			}
-			const messages = requestMessages(rows, conv.promptChangedAtSeq);
+			if (needsCompaction(conv, rows)) {
+				if (!(await compact(conv, rows, st, abort))) return;
+				continue;
+			}
+			const onServer = compactsOnServer(conv.provider, conv.model);
+			const messages = requestMessages(rows, conv.promptChangedAtSeq, onServer ? conv.model : null);
 			let reply: ModelReply;
 			try {
 				reply = await streamTurn({
-					provider: conv.provider,
-					model: conv.model,
-					effort: conv.effort,
-					system: conv.systemPrompt,
-					tools: toolsFor(conv),
-					cacheTtl: conv.cacheTtl,
-					cacheKey: conv.id,
-					// Pictures and PDFs kept by reference, as this provider gets them, where the model
-					// takes them.
-					messages: await resolveFiles(
-						await readableMessages(conv.provider, conv.model, messages),
-						conv.provider
-					),
+					...modelCall(conv),
+					messages: await providerMessages(conv, messages),
+					compactAt: onServer ? serverCompactAt(conv.contextWindow) : null,
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event)
 				});

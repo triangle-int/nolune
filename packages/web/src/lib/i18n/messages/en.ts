@@ -255,6 +255,9 @@ export const en = {
 	steps: {
 		thinking: 'Thinking',
 		thinkingDots: 'Thinking…',
+		summarizing: 'Summarizing the conversation so far',
+		summarized: 'Summarized the conversation so far',
+		summaryHint: 'The chat had grown too long for the model, so it goes on from this summary.',
 		running: (command: string) => `Running ${command}`,
 		runningACommand: 'Running a command',
 		ranACommand: 'Ran a command',

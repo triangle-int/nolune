@@ -216,10 +216,25 @@ export function supportsAdaptiveThinking(model: string): boolean {
 	return !model.startsWith('claude-haiku-');
 }
 
+/** Compaction at a token threshold, in beta: Claude summarizes the conversation on the server. */
+const COMPACTION_BETA = 'compact-2026-01-12';
+
+/**
+ * Whether the model compacts conversations on the server (compaction.ts): every one since Opus
+ * and Sonnet 4.6, a new one too, but not Haiku 4.5 or anything older.
+ */
+export function supportsCompaction(model: string): boolean {
+	return !/^claude-(3|haiku-|(opus|sonnet)-4-([015]|\d{8})(-|$))/.test(model);
+}
+
 /**
  * One model call. The request shape must stay identical across calls in a conversation (only
  * `messages` grows), otherwise the prompt cache is lost: `tools`, `system` and `cacheTtl` are the
  * conversation's own, fixed when it was created. `api`: Anthropic, or a custom provider.
+ *
+ * With `compactAt`, Claude summarizes the conversation on the server first once a request is that
+ * many tokens (compaction.ts), and the reply starts with the summary: a `compaction` block, which
+ * goes back with the reply. Only on Anthropic, with a model that can.
  */
 export async function streamTurn(
 	opts: {
@@ -229,45 +244,58 @@ export async function streamTurn(
 		tools: Anthropic.Tool[];
 		cacheTtl: CacheTtl;
 		messages: Message[];
+		compactAt?: number | null;
 		signal: AbortSignal;
 		onEvent: (event: StreamEvent) => void;
 	},
 	api: MessagesApi = ANTHROPIC
-): Promise<Anthropic.Message> {
+): Promise<Anthropic.Message | Anthropic.Beta.BetaMessage> {
 	const claude = api.provider === 'anthropic';
 	const adaptive = claude && supportsAdaptiveThinking(opts.model);
 	const cache = { type: 'ephemeral', ttl: opts.cacheTtl } as const;
 	const client = await api.client();
-	const stream = client.messages.stream(
-		{
-			model: api.modelName(opts.model),
-			max_tokens: claude ? 64000 : SERVER_MAX_TOKENS,
-			// Automatic breakpoint on the growing tail, plus an explicit one on the frozen system
-			// prompt. The same TTL on both: longer-TTL entries must come before shorter ones.
-			...(claude
-				? {
-						cache_control: cache,
-						system: [{ type: 'text', text: opts.system, cache_control: cache }]
+	const params: Anthropic.MessageStreamParams = {
+		model: api.modelName(opts.model),
+		max_tokens: claude ? 64000 : SERVER_MAX_TOKENS,
+		// Automatic breakpoint on the growing tail, plus an explicit one on the frozen system
+		// prompt. The same TTL on both: longer-TTL entries must come before shorter ones.
+		...(claude
+			? {
+					cache_control: cache,
+					system: [{ type: 'text', text: opts.system, cache_control: cache }]
+				}
+			: { system: opts.system }),
+		tools: opts.tools,
+		...(adaptive
+			? {
+					// "summarized" also returns the short notes newer models write between tool calls.
+					thinking: { type: 'adaptive', display: 'summarized' },
+					output_config: { effort: opts.effort }
+				}
+			: {}),
+		messages: toAnthropicMessages(opts.messages, api.provider)
+	};
+	const compactAt = claude && supportsCompaction(opts.model) ? opts.compactAt : null;
+	const stream = compactAt
+		? client.beta.messages.stream(
+				{
+					...(params as Anthropic.Beta.Messages.MessageCreateParamsStreaming),
+					betas: [COMPACTION_BETA],
+					context_management: {
+						edits: [
+							{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: compactAt } }
+						]
 					}
-				: { system: opts.system }),
-			tools: opts.tools,
-			...(adaptive
-				? {
-						// "summarized" also returns the short notes newer models write between tool calls.
-						thinking: { type: 'adaptive', display: 'summarized' },
-						output_config: { effort: opts.effort }
-					}
-				: {}),
-			messages: toAnthropicMessages(opts.messages, api.provider)
-		},
-		{ signal: opts.signal }
-	);
+				},
+				{ signal: opts.signal }
+			)
+		: client.messages.stream(params, { signal: opts.signal });
 
 	for await (const event of stream) {
 		if (event.type === 'content_block_start') {
 			const b = event.content_block;
 			const block =
-				b.type === 'text' || b.type === 'thinking'
+				b.type === 'text' || b.type === 'thinking' || b.type === 'compaction'
 					? { type: b.type }
 					: b.type === 'tool_use'
 						? { type: 'tool' as const, id: b.id }
@@ -278,6 +306,9 @@ export async function streamTurn(
 				opts.onEvent({ type: 'delta', index: event.index, text: event.delta.text });
 			} else if (event.delta.type === 'thinking_delta') {
 				opts.onEvent({ type: 'delta', index: event.index, text: event.delta.thinking });
+			} else if (event.delta.type === 'compaction_delta' && event.delta.content) {
+				// The whole summary, in one piece, once it's written.
+				opts.onEvent({ type: 'delta', index: event.index, text: event.delta.content });
 			}
 		}
 	}
