@@ -875,10 +875,33 @@ export const es: Messages = {
 	profiles: {
 		title: 'Perfiles',
 		intro:
-			'Cada perfil tiene sus propios chats, memoria y habilidades, compartidos por sus miembros.',
-		none: 'Todavía no estás en ningún perfil. Crea uno abajo o pide a alguien que te añada al suyo.',
-		new: 'Nuevo perfil',
-		namePlaceholder: 'p. ej. Familia, Abuela, Deberes',
+			'Un perfil es un espacio con sus propios chats, memoria y asistente. Puedes estar en varios y cambiar entre ellos arriba en la barra lateral.',
+		hello: (name: string) => `¡Hola${to(name)}!`,
+		start: 'Empecemos por un perfil solo tuyo.',
+		justYou: 'Solo tú',
+		own: {
+			title: 'Tu propio perfil',
+			about: 'Para tus proyectos, ideas y planes. Solo estás tú, a menos que añadas a alguien.',
+			create: 'Crear mi perfil'
+		},
+		shared: {
+			title: 'Perfiles compartidos',
+			about:
+				'Para la gente con la que haces cosas. Todos en él ven los mismos chats y la misma memoria, y nolune sabe quién escribe.',
+			examples: {
+				family: { name: 'Familia', about: 'Menús, la casa, rutinas familiares' },
+				friends: { name: 'Amigos', about: 'Viajes, noches de juegos, quién debe a quién' },
+				couple: { name: 'Nosotros dos', about: 'Para una pareja: citas, viajes, planes para casa' }
+			},
+			addPeople: 'Cuando esté creado, añade a la gente en {settings}.',
+			needsAccount: 'Antes necesitan una cuenta aquí, que creas en {people}.',
+			askForAccount: 'Antes necesitan una cuenta aquí: pídesela a quien configuró nolune.',
+			custom: 'O ponle tú el nombre'
+		},
+		staysHere:
+			'Lo que se dice en un perfil se queda en él. Solo {card} va contigo a cada uno: lo que le contarías a cualquiera sobre ti, como los idiomas que hablas.',
+		yourCard: 'tu ficha',
+		namePlaceholder: 'p. ej. Abuela, Deberes, Nuestro viaje',
 		name: 'Nombre del perfil',
 		needsName: 'Ponle un nombre al perfil.'
 	},

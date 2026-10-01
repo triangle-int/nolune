@@ -871,10 +871,38 @@ export const fr: Messages = {
 	profiles: {
 		title: 'Profils',
 		intro:
-			'Chaque profil a ses propres discussions, sa mémoire et ses compétences, partagées par ses membres.',
-		none: 'Vous n’êtes encore dans aucun profil. Créez-en un ci-dessous, ou demandez à quelqu’un de vous ajouter au sien.',
-		new: 'Nouveau profil',
-		namePlaceholder: 'p. ex. Famille, Mamie, Devoirs',
+			'Un profil est un espace avec ses propres discussions, sa mémoire et son assistant. Vous pouvez être dans plusieurs et passer de l’un à l’autre en haut de la barre latérale.',
+		hello: (name: string) => `Bonjour${to(name)} !`,
+		start: 'Commençons par un profil rien qu’à vous.',
+		justYou: 'Rien que vous',
+		own: {
+			title: 'Votre propre profil',
+			about:
+				'Pour vos projets, vos idées et vos plans. Personne d’autre n’y est, sauf si vous ajoutez quelqu’un.',
+			create: 'Créer mon profil'
+		},
+		shared: {
+			title: 'Profils partagés',
+			about:
+				'Pour les personnes avec qui vous faites des choses. Tout le monde y voit les mêmes discussions et la même mémoire, et nolune sait qui écrit.',
+			examples: {
+				family: { name: 'Famille', about: 'Menus, la maison, les habitudes de la famille' },
+				friends: { name: 'Amis', about: 'Voyages, soirées jeux, qui doit quoi à qui' },
+				couple: {
+					name: 'Nous deux',
+					about: 'Pour un couple : sorties, voyages, projets pour la maison'
+				}
+			},
+			addPeople: 'Une fois créé, ajoutez des personnes dans {settings}.',
+			needsAccount: 'Il leur faut d’abord un compte ici, que vous créez dans {people}.',
+			askForAccount:
+				'Il leur faut d’abord un compte ici : demandez à la personne qui a installé nolune.',
+			custom: 'Ou choisissez vous-même un nom'
+		},
+		staysHere:
+			'Ce qui est dit dans un profil y reste. Seule {card} vous suit dans chacun : ce que vous diriez de vous à n’importe qui, comme les langues que vous parlez.',
+		yourCard: 'votre fiche',
+		namePlaceholder: 'p. ex. Mamie, Devoirs, Notre voyage',
 		name: 'Nom du profil',
 		needsName: 'Donnez un nom au profil.'
 	},

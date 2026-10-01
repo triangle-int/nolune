@@ -798,12 +798,42 @@ export const en = {
 		satellite: 'Satellite'
 	},
 
+	/**
+	 * The profiles page, where someone in no profile starts: how profiles work, one of their own
+	 * first, and shared ones by example.
+	 */
 	profiles: {
 		title: 'Profiles',
-		intro: 'Each profile has its own chats, memory and skills, shared by its members.',
-		none: "You're not in any profile yet. Create one below, or ask someone to add you to theirs.",
-		new: 'New profile',
-		namePlaceholder: 'e.g. Family, Grandma, Homework',
+		intro:
+			'A profile is a space with its own chats, memory and assistant. You can be in several, and switch between them at the top of the sidebar.',
+		/** Over the page for someone in no profile yet. */
+		hello: (name: string) => `Hi${to(name)}!`,
+		start: "Let's start with a profile of your own.",
+		justYou: 'Just you',
+		own: {
+			title: 'Your own profile',
+			about: 'For your projects, ideas and plans. Only you are in it, unless you add someone.',
+			create: 'Create my profile'
+		},
+		shared: {
+			title: 'Shared profiles',
+			about:
+				"For the people you do things with. Everyone in one sees the same chats and memory, and nolune knows who's speaking.",
+			/** Each one's name is the name the profile gets. */
+			examples: {
+				family: { name: 'Family', about: 'Meal plans, the household, family routines' },
+				friends: { name: 'Friends', about: 'Trips, game nights, who owes whom' },
+				couple: { name: 'Us two', about: 'For a couple: dates, trips, plans for home' }
+			},
+			addPeople: "Once it's made, add people under {settings}.",
+			needsAccount: 'They need an account here first, which you make under {people}.',
+			askForAccount: 'They need an account here first: ask whoever set up nolune.',
+			custom: 'Or name one yourself'
+		},
+		staysHere:
+			"What's said in a profile stays in it. Only {card} goes with you into each one: what you'd tell anyone about yourself, like the languages you speak.",
+		yourCard: 'your card',
+		namePlaceholder: 'e.g. Grandma, Homework, Our trip',
 		name: 'Profile name',
 		needsName: 'Give the profile a name.'
 	},
