@@ -12,12 +12,15 @@ import {
 	createProfile,
 	findInvite,
 	initConfig,
+	paths,
 	readCard,
 	readMemoryNote,
 	readSoulFile,
 	paths,
 	readConfig,
 	runSubagent,
+	setAdmin,
+	setUserPicture,
 	updateConfig
 } from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -265,6 +268,21 @@ describe('nolune user invite', () => {
 		expect(link).toMatch(/^https:\/\/nolune\.example\.com\/invite\/[\w-]{32}$/);
 		expect(findInvite(link.split('/').pop()!)).toMatchObject({ name: 'Grandma', createdBy: null });
 		expect(out).toContain('Works once, within 7 days.');
+	});
+});
+
+describe('nolune user list', () => {
+	it("prints each person's name, email, whether they're an admin, and their picture's file", async () => {
+		const anna = makeUser('Anna');
+		makeUser('Max');
+		setAdmin('Anna', true);
+		const picture = setUserPicture(anna.id, DOT);
+
+		expect(await run(['user', 'list'])).toEqual({
+			code: 0,
+			out: `Anna\tanna@example.com\tadmin\t${join(paths.media, picture)}\nMax\tmax@example.com\n`,
+			err: ''
+		});
 	});
 });
 

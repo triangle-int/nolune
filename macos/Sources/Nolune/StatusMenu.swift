@@ -74,12 +74,8 @@ struct StatusMenu: View {
 
 			if !status.people.isEmpty {
 				HStack(spacing: 6) {
-					ForEach(Array(status.people.prefix(7).enumerated()), id: \.element.id) { index, person in
-						Text(person.name.prefix(1).uppercased())
-							.font(Theme.font(12, weight: 600))
-							.foregroundStyle(Theme.primaryForeground)
-							.frame(width: 26, height: 26)
-							.background(Circle().fill(Theme.avatars[(index + 3) % Theme.avatars.count]))
+					ForEach(status.people.prefix(7)) { person in
+						PersonAvatar(person: person)
 							.help(person.name)
 					}
 				}
@@ -183,6 +179,47 @@ struct StatusMenu: View {
 		case .some(false): return Color(hex: 0xFBBF24)
 		case .none: return .secondary
 		}
+	}
+}
+
+/// Someone as the web app draws them (UserAvatar.svelte): their picture, or their initial on their color.
+private struct PersonAvatar: View {
+	let person: Runtime.Person
+
+	var body: some View {
+		Group {
+			if let picture = person.picture {
+				Image(nsImage: picture)
+					.resizable()
+					.scaledToFill()
+					.background(Color.primary.opacity(0.1))
+			} else {
+				Text(person.name.prefix(1).uppercased())
+					.font(Theme.font(12, weight: 600))
+					.foregroundStyle(.white)
+					.frame(maxWidth: .infinity, maxHeight: .infinity)
+					.background(color)
+			}
+		}
+		.frame(width: 26, height: 26)
+		.clipShape(Circle())
+	}
+
+	/// `hsl(hue 55% 45%)`, the hue from their name as the web works it out, so each person has the
+	/// same color everywhere.
+	private var color: Color {
+		// Each character's first UTF-16 unit, as JavaScript's `charCodeAt(0)`.
+		let hue = person.name.unicodeScalars.reduce(7) { sum, scalar in
+			(sum * 31 + Int(String(scalar).utf16.first ?? 0)) % 360
+		}
+		// HSL's lightness and saturation as HSB's brightness and saturation.
+		let (saturation, lightness) = (0.55, 0.45)
+		let brightness = lightness + saturation * min(lightness, 1 - lightness)
+		return Color(
+			hue: Double(hue) / 360,
+			saturation: 2 * (1 - lightness / brightness),
+			brightness: brightness
+		)
 	}
 }
 

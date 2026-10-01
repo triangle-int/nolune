@@ -70,6 +70,7 @@ import {
 	setSkillsEnabled,
 	splitModel,
 	updateConfig,
+	userPictureFile,
 	viewImage,
 	ViewLimitError,
 	type ApiKeyProvider,
@@ -175,7 +176,8 @@ Users (there's no sign-up page: admins add people here, or on the People page)
   nolune user passwd <name|email> [--password P]
   nolune user admin <name|email> [--off]
   nolune user rm <name|email>
-  nolune user list
+  nolune user list                              name, email, admin, and their picture's
+                                             file if they have one
 
 Model presets (shared by all profiles)
   nolune preset add <model> [--provider anthropic|openai|openrouter|xai|claude-plan|chatgpt-plan|<custom>]
@@ -931,7 +933,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Works once, within ${INVITE_DAYS} days. Take it back on the People page.`);
 			} else if (action === 'list') {
 				for (const u of listUsers()) {
-					io.log(`${u.name}\t${u.email}${u.isAdmin ? '\tadmin' : ''}`);
+					// Their picture's file last, for the macOS app's menu.
+					const picture = u.picture ? userPictureFile(u.picture) : null;
+					const fields = [u.name, u.email, u.isAdmin && 'admin', picture?.path];
+					io.log(fields.filter(Boolean).join('\t'));
 				}
 			} else fail('usage: nolune user create|invite|passwd|admin|rm|list');
 			return;

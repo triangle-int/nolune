@@ -92,7 +92,7 @@ There's no sign-up page: admins add people here, or on the **People** page in th
 - `nolune user passwd <name|email> [--password P]`
 - `nolune user admin <name|email> [--off]`
 - `nolune user rm <name|email>`
-- `nolune user list`
+- `nolune user list`: name, email, admin, and their picture's file if they have one
 
 ## Model presets
 
