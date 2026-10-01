@@ -335,7 +335,8 @@ read nolune's format.
 ### Plans
 
 `claude-plan` and `chatgpt-plan` run chats on someone's own subscription instead of an API key.
-They get there differently:
+(A third, a subscription to nolune itself that covers pictures and embeddings too, is designed in
+[The nolune plan](#the-nolune-plan) but not built.) They get there differently:
 
 - **The Claude plan** runs Anthropic's own agent. Anthropic doesn't let other apps sign in to
   Claude accounts, so nolune doesn't: Claude Code, installed on this computer and unmodified, signs
@@ -1862,6 +1863,150 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
   Encrypt's per-domain limits until the domain is on the Public Suffix List. Families who want
   nobody in between use their own tunnel, or their own relay (`nolune relay enable --server`).
 
+## The nolune plan
+
+_Not built yet: this is the design._
+
+The two plans run chats on a subscription someone already has, and nothing else: pictures still
+need an OpenAI key, and search by meaning an OpenAI or OpenRouter one. The nolune plan is a
+subscription to nolune itself that covers all three, chats, pictures and embeddings, with no key to
+get: the admin signs in once, and a new profile's welcome has nothing else to ask. It works the way
+[Nous Portal](https://hermes-agent.nousresearch.com/docs/integrations/nous-portal) does for Hermes
+Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it.
+
+- **What it is.** `nolune-plan`, a third plan in `plans.ts`. As on the ChatGPT plan, nolune runs the
+  loop and makes the requests itself. They go to nolune's API (`https://api.nolune.dev/v1`), a
+  service of nolune's own like the relay, which checks the plan's token, counts what each request
+  costs and passes it on. Upstream is OpenRouter for chats and embeddings and FAL for pictures, on
+  nolune's accounts there, rather than nolune reselling its own accounts with each model's maker.
+  The service is a package of its own (`packages/api`), deployed like the relay and not part of the npm
+  package.
+- **Signing in** is a device code (OAuth's device authorization grant): `nolune nolune-plan setup`,
+  or Models & keys, shows a short code and `nolune.dev/link`. The person opens it on any device,
+  signs in to their nolune account (where the subscription is paid for) and confirms, while the
+  gateway asks every few seconds until it's confirmed. Unlike the ChatGPT plan's sign-in, nothing
+  comes back to `127.0.0.1`, so it works the same from a phone through the relay.
+- **What's kept** is `~/.nolune/nolune-plan.json` (mode 600, written whole and renamed into place),
+  as `chatgpt.json` is: the account (email, plan name) and a refresh token, never shown or logged.
+  Requests carry a short-lived access token (15 minutes) made from it, never a lasting key. A
+  refresh replaces the refresh token too, so refreshes run one at a time under a lock file, as the
+  ChatGPT plan's do, with the same code. Signing out revokes it.
+- **One subscription per gateway.** The whole family draws on it, as on the keys, and its limits are
+  the family's (below).
+
+### Chats, pictures and embeddings on it
+
+- **Chats** speak OpenRouter's Chat Completions, so `openrouter.ts` runs them. It gets a target, as
+  `openai-chat.ts` has (`ResponsesApi`): OpenRouter's own (its key and address) and the plan's
+  (nolune's API, and the plan's token, which the SDK asks for on every request, as `CHATGPT_PLAN`'s
+  does). Models are OpenRouter's ids (`anthropic/claude-sonnet-5-5`), from the plan's own list
+  (`GET /v1/models`: OpenRouter's shape, only the models the plan offers, with their prices). The
+  plan's replies are stored as `nolune-plan`'s, so moving a chat between it and an OpenRouter key is
+  a switch of provider like any other.
+- **Unchanged on the way.** The API passes a request to OpenRouter as it came, with only the key
+  replaced and `max_tokens` added when there is none (32,000). `cache_control`, `session_id` and
+  the replies' `reasoning_details` go through byte for byte, so the cache works as it does on
+  OpenRouter (see [On OpenRouter](#on-openrouter)). Nous Portal's API may ignore OpenRouter's
+  extensions, which is why nolune runs its own rather than offering Nous Portal as a provider.
+- **No Files API**, as on the other plans: every family's files would be on nolune's one OpenRouter
+  account, where one family could name another's `file_id`. Pictures and PDFs go inline.
+- **Pictures.** A `nolune` module in `image-generation.ts`'s `PROVIDERS`. The API takes OpenAI's
+  Images API (`/v1/images/generations`, `/v1/images/edits`), so the module is `openai.ts`'s
+  requests at nolune's address with the plan's token; behind it is FAL's catalog, as behind Nous
+  Portal's. Image models are `nolune/<model>` (`nolune/flux-2`), and the plan's default is used
+  when no image model is set and there's no OpenAI key.
+- **Embeddings.** `nolune-plan` joins `EMBEDDING_PROVIDERS`, with `text-embedding-3-small` through
+  OpenRouter. Auto picks it last, after the keys, which are paid for already and don't count
+  against the plan's limits. A source is its address and model, so moving onto the plan makes every
+  fact's vector once more, which costs cents.
+
+### Credits and limits
+
+The plan is credits, not unlimited use. The agent works in the background too (automations,
+subagents, the note-taker, titles, auto mode's checks), and one busy day or one automation in a
+loop would otherwise spend the month. As on Claude's plans, a 5-hour limit and a weekly one keep it
+spread out.
+
+- **Counted in dollars**, not tokens: models' prices differ fifty times over, and pictures cost too.
+  OpenRouter says what each request cost (`usage.cost`); FAL prices each picture.
+- **Three limits**, each a share of the plan's credits, set for each tier on the API. For a plan
+  with $20 of credits a month, for example:
+
+  | Limit   | For example | Starts again                                              |
+  | ------- | ----------- | --------------------------------------------------------- |
+  | 5 hours | $1.50       | 5 hours after the request that opened the window          |
+  | Week    | $7          | each week, on the day and at the hour the plan started    |
+  | Month   | $20         | with each payment; up to half of what's left carries over |
+
+- **How they're sized.** A month holds about 4.3 weeks, and 4.3 weeks' limits come to about 1.5
+  times the credits, so ordinary use never meets the weekly limit and only a burst does. About
+  five full 5-hour windows make a week, so that window catches a busy afternoon, not an ordinary
+  day.
+- **Windows, not sliding sums.** A window opens with the first request after the last one closed,
+  so nolune can say exactly when it starts again ("again at 18:40"). A sliding sum is fairer by a
+  few minutes but can't.
+- **Checked before, counted after.** A request is refused when any limit is spent. What it costs is
+  known only once it's done, so the last one may go a little over, which counts. `max_tokens` keeps
+  that bounded, and a request whose input alone (its size times the model's price) is more than
+  what's left is refused before it's sent.
+- **A turn may finish.** An agent turn is many requests, and stopping one between a reply and its
+  commands' results leaves the chat on an error. Requests that go on with a turn that started
+  within the limit (the reply's commands' results, auto mode's check of a command it's about to
+  run), which the gateway marks `X-Nolune-Turn: continue`, may go over by 10% of the 5-hour limit;
+  new turns wait. A client that marks every request gains only that 10%.
+- **Background gets less.** Hidden conversations (automations' and subagents' runs) and the short
+  exchanges nobody waits on (titles, the note-taker, suggestions) are marked
+  `X-Nolune-Use: background` and stop at 80% of the 5-hour and weekly limits, so the people in the
+  family always have the rest for their chats. It's the family's own budget, so the gateway has no
+  reason to mark them wrong.
+- **Embeddings count only against the month.** They cost next to nothing, and search by meaning
+  shouldn't stop with a window: recall would get worse just when someone is told to wait.
+- **Extra credits** are bought on their own, kept for a year, and spent only past a limit, once an
+  admin has turned that on in Models & keys. The windows don't apply to them, so a family can go
+  on now rather than at 18:40.
+- **Rate limits.** Requests a minute and at once, per account. The token works outside nolune too;
+  what it can spend is the family's own, and the limits keep it to that.
+
+### What the family sees
+
+- **Over a limit**, the API answers `429` with OpenAI's error shape, the limit and when it starts
+  again: `{ "error": { "code": "five_hour_limit", "message": …, "resets_at": … } }` (or
+  `weekly_limit`, `background_share`, `credits_spent`). It adds `x-should-retry: false`, since the
+  SDKs retry a 429 themselves and don't wait out a `Retry-After` of hours. nolune makes it a
+  `PlanError` with that `kind`, in words, as the ChatGPT plan's usage limit is said: "nolune's
+  5-hour limit is reached; chats start again at 18:40. An admin can turn on extra credits in Models
+  & keys."
+- **Usage, live.** Every response carries how much of each limit is used and when it starts again
+  (`x-nolune-usage`), and `GET /v1/usage` says the same. The gateway keeps the latest and sends it
+  to open pages: Models & keys shows all three, and from 80% the composer says "5 hours: 85% ·
+  again at 18:40".
+- **Automations** refused by a limit don't fail: the run waits and starts again when the limit
+  does, and the bell says so once. A subagent refused by one ends with the error, which its parent
+  hears from `nolune agent watch`.
+- **Pictures.** `nolune generate image` asks for the plan's usage before it says it has started, as
+  it checks a key now, so a refused picture is said at once rather than after the wait.
+
+### Trust and terms
+
+- **Who sees the chats.** With a key, requests go from this computer to the provider; on the plan
+  they pass through nolune's API, which could read them, as the relay could (see
+  [The relay](#the-relay)). It logs only what it bills (time, model, tokens, cost, the account),
+  never what was said; OpenRouter and the model's maker see requests as they do with an OpenRouter
+  key. The welcome and Models & keys say so where the plan is offered.
+- **Regions.** The API serves only the countries its upstreams serve, and refuses others with a
+  page saying so. The plan isn't a way around a provider's regions, and one family's misuse would
+  cost every family its access.
+
+### Open questions
+
+- The tiers, and their prices and limits.
+- How credits are priced: at OpenRouter's prices with nolune's margin in the subscription, or with
+  a margin on each model's price.
+- Shares for each member of a family. The API knows only the gateway, so the gateway would count
+  them (it knows who started each turn), from what each response says it cost (`x-nolune-cost`).
+- Whether background work's share should be an admin's setting.
+- Who takes the payments: a merchant of record (Paddle, Lemon Squeezy) would handle sales tax.
+
 ## Code layout
 
 ```
@@ -2022,3 +2167,5 @@ signing.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).
+- The nolune plan: a subscription to nolune that covers chats, pictures and embeddings, with 5-hour
+  and weekly limits (see [The nolune plan](#the-nolune-plan)).
