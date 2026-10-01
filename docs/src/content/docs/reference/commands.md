@@ -42,6 +42,8 @@ No tunnel, port forwarding or domain of your own. See [Remote access](/docs/guid
   unchecked (not recommended). Not from the agent's own commands
 - `nolune config set safety-model <preset|chat>`: the preset whose model does auto mode's checks, or
   chat for each chat's own model (the default)
+- `nolune config set update-check <on|off>`: on (the default): the gateway asks GitHub once a day
+  for nolune's newest release, and admins see when there's one
 - `nolune key set <anthropic|openai|openrouter|xai> [key]`: store an API key (prompts if omitted)
   after checking it; OpenAI's runs GPT chats and makes pictures, xAI's runs Grok. Admins can also
   do this on the web, under Models & keys

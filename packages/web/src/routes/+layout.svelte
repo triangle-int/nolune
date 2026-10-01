@@ -19,13 +19,16 @@
 	// Picking another language reloads the page, so this holds for the page's life.
 	setI18n(untrack(() => data.locale));
 
-	// What others change while the page is open: notifications, and profile names and avatars.
+	// What others change while the page is open: notifications, profile names and avatars, and
+	// for admins, a new release.
 	const signedIn = $derived(!!data.user);
 	$effect(() => {
 		if (!signedIn) return;
 		const source = new EventSource('/api/events');
 		source.onmessage = (event) => {
-			const { type } = JSON.parse(event.data) as { type: 'notifications' | 'profiles' };
+			const { type } = JSON.parse(event.data) as {
+				type: 'notifications' | 'profiles' | 'update';
+			};
 			invalidate(`nolune:${type}`);
 		};
 		return () => source.close();

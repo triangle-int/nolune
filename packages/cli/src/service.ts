@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { homedir, userInfo } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { cliCommand, paths } from '@nolune/core';
+import { appManaged, cliCommand, paths } from '@nolune/core';
 
 export const logFile = join(paths.logs, 'gateway.log');
 
@@ -28,14 +28,6 @@ interface ServiceManager {
 /** macOS LaunchAgent: runs as the logged-in user, so commands get their home folder and files. */
 const LABEL = 'dev.nolune.gateway';
 const plistPath = join(homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
-
-/**
- * Run from nolune.app (macos/): its Node sits inside the app, and the app runs the gateway itself
- * while it's open, with no LaunchAgent.
- */
-export function appManaged(execPath = process.execPath): boolean {
-	return /\.app\/Contents\/MacOS\/node$/.test(execPath);
-}
 
 function target(): string {
 	return `gui/${process.getuid?.() ?? 501}/${LABEL}`;

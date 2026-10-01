@@ -209,6 +209,19 @@ export const fr: Messages = {
 		logOut: 'Se déconnecter'
 	},
 
+	update: {
+		available: (version: string) => `nolune ${version} est disponible`,
+		running: (version: string) => `Vous avez la version ${version}.`,
+		npm: 'Pour mettre à jour, lancez ceci dans un terminal sur l’ordinateur où nolune tourne :',
+		source:
+			'Pour mettre à jour, lancez ceci dans le dossier de nolune sur l’ordinateur où il tourne, puis redémarrez nolune :',
+		app: 'Sur le Mac où nolune tourne, téléchargez la nouvelle app, quittez nolune depuis son icône dans la barre des menus, glissez la nouvelle dans Applications et ouvrez-la. L’icône de la barre des menus propose aussi le téléchargement.',
+		kept: 'Les discussions, la mémoire et les paramètres restent tels quels. « Nouveautés » indique s’il y a autre chose à faire.',
+		whatsNew: 'Nouveautés',
+		download: 'Télécharger',
+		copy: 'Copier la commande'
+	},
+
 	header: {
 		openMenu: 'Ouvrir le menu'
 	},

@@ -39,6 +39,8 @@ folder, skills and memory. The agent has a single tool, `run_command`.
                               command mode and the preset that checks commands (mode 600)
   chatgpt.json                the ChatGPT sign-in for the ChatGPT plan: this computer's host id,
                               each account's registration and the signed-in one's tokens (mode 600)
+  latest-release.json         nolune's newest release, as the gateway last heard from GitHub, and
+                              when (Distribution); the macOS app's menu reads it too
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
                               notifications, subagents, running background commands, cards' names
@@ -1953,6 +1955,17 @@ in docs/development.md).
   command when it can't. Unit files expand `%` specifiers everywhere and `$NAME` in ExecStart's
   arguments (not its program path), so the unit doubles those.
 - On shutdown, the gateway kills the process groups of commands that are still running.
+- **New releases** (`packages/core/src/updates.ts`). The gateway asks GitHub for the latest release
+  (`/repos/triangle-int/nolune/releases/latest`, which leaves out drafts and pre-releases) when the
+  last answer in `latest-release.json` is a day old, looking every hour, so a restart doesn't ask
+  again and a failed check is tried within the hour; it warns in the log once until one works. It
+  keeps the version, the release's page and the two disk images, and only links into nolune's own
+  releases, since they're opened. Admins see a newer one in the menu under their name, with a dot
+  on their avatar until they've opened it in that browser, and its dialog says how this install
+  updates: npm's command, a checkout's, or for the app (the gateway's Node is inside nolune.app,
+  `appManaged`) the disk image for this Mac's architecture, which the app's menu also offers.
+  An open page hears of it through `/api/events` (`update`). `nolune config` shows the version and
+  what was heard; `nolune config set update-check off` stops asking and deletes the file.
 - Remote access is nolune's relay (see [The relay](#the-relay)) or the user's own tunnel (Tailscale
   Funnel, Cloudflare Tunnel, a VPS). The gateway only binds to localhost by default.
 - macOS privacy (TCC): the background `node` process needs Full Disk Access to reach Documents,
@@ -1997,7 +2010,11 @@ signing.
   process, since a running one may not see the grant until it relaunches. When the switch goes
   on, the step's own big switch flips with it and the aurora swells.
 - **After.** A menu bar extra: whether the gateway answers, the people with accounts, the address,
-  open, restart, the log, and Quit, which stops nolune. Opening the app again opens nolune in the
+  open, restart, the log, and Quit, which stops nolune. When the gateway has heard of a newer
+  release (`latest-release.json`, see [Distribution](#distribution)) than the app's
+  `CFBundleShortVersionString`, a row on top downloads its disk image for this Mac, with a line on
+  what to do with it and a link to the notes. There's no updater: the new app replaces the old one
+  in Applications, and Full Disk Access holds, since the signature's the same. Opening the app again opens nolune in the
   browser.
 - **The DMG** (`macos/dmg/`) opens to nolune and Applications side by side, their icons at 128
   points, over a planet's rim in deep space, its air in three of the avatar colors as the app

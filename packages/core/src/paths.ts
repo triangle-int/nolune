@@ -36,6 +36,11 @@ export const paths = {
 	 * id, and each account's registration and tokens. Readable by this user only.
 	 */
 	chatgpt: join(home, 'chatgpt.json'),
+	/**
+	 * nolune's newest release, as the gateway last heard from GitHub (updates.ts). The macOS app
+	 * reads it too, for its menu.
+	 */
+	latestRelease: join(home, 'latest-release.json'),
 	db: join(home, 'nolune.db'),
 	bin: join(home, 'bin'),
 	logs: join(home, 'logs'),
@@ -69,6 +74,14 @@ export function cliCommand(): string[] {
 	const source = join(packageRoot, 'packages', 'cli', 'src', 'index.ts');
 	if (existsSync(source)) return [process.execPath, '--no-warnings', source];
 	return [process.execPath, join(packageRoot, 'dist', 'cli.js')];
+}
+
+/**
+ * Run from nolune.app (macos/): its Node sits inside the app, and the app runs the gateway itself
+ * while it's open, with no LaunchAgent.
+ */
+export function appManaged(execPath = process.execPath): boolean {
+	return /\.app\/Contents\/MacOS\/node$/.test(execPath);
 }
 
 export function profileDir(slug: string): string {

@@ -218,6 +218,19 @@ export const es: Messages = {
 		logOut: 'Cerrar sesión'
 	},
 
+	update: {
+		available: (version: string) => `nolune ${version} ya está disponible`,
+		running: (version: string) => `Tienes la versión ${version}.`,
+		npm: 'Para actualizar, ejecuta esto en una terminal del ordenador donde funciona nolune:',
+		source:
+			'Para actualizar, ejecuta esto en la carpeta de nolune del ordenador donde funciona y luego reinicia nolune:',
+		app: 'En el Mac donde funciona nolune, descarga la nueva app, cierra nolune desde su icono en la barra de menús, arrastra la nueva a Aplicaciones y ábrela. El icono de la barra de menús también tiene la descarga.',
+		kept: 'Los chats, la memoria y los ajustes se quedan como están. En «Novedades» dice si hay que hacer algo más.',
+		whatsNew: 'Novedades',
+		download: 'Descargar',
+		copy: 'Copiar el comando'
+	},
+
 	header: {
 		openMenu: 'Abrir menú'
 	},

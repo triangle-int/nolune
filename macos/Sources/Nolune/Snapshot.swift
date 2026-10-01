@@ -118,6 +118,21 @@ enum Snapshot {
 			StatusMenu(status: local).background(Color(hex: 0xF2F2F2)).environment(\.colorScheme, .light),
 			size: nil, as: "16-menu-light", in: folder
 		)
+		// With a new release out: the row that downloads it.
+		let outdated = GatewayStatus()
+		outdated.pose(
+			running: true, people: people,
+			relay: URL(string: "https://smiths.\(RelaySetup.domain)"),
+			update: Runtime.Update(
+				version: "0.4.0",
+				page: URL(string: "https://github.com/triangle-int/nolune/releases/tag/v0.4.0")!,
+				download: URL(string: "https://github.com/triangle-int/nolune/releases/download/v0.4.0/nolune-macos-apple-silicon.dmg")
+			)
+		)
+		await save(
+			StatusMenu(status: outdated).background(Color(hex: 0x2A2A2A)).environment(\.colorScheme, .dark),
+			size: nil, as: "17-menu-update-dark", in: folder
+		)
 	}
 
 	/**

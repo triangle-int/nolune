@@ -124,6 +124,19 @@ export const en = {
 		logOut: 'Log out'
 	},
 
+	update: {
+		available: (version: string) => `nolune ${version} is out`,
+		running: (version: string) => `You have ${version}.`,
+		npm: 'To update, run this in a terminal on the computer nolune runs on:',
+		source:
+			'To update, run this in nolune’s folder on the computer it runs on, then restart nolune:',
+		app: 'On the Mac nolune runs on, download the new app, quit nolune from its icon in the menu bar, then drag the new one to Applications and open it. The menu bar icon has the download too.',
+		kept: 'Chats, memory and settings stay as they are. What’s new says if anything else needs doing.',
+		whatsNew: 'What’s new',
+		download: 'Download',
+		copy: 'Copy the command'
+	},
+
 	header: {
 		openMenu: 'Open menu'
 	},

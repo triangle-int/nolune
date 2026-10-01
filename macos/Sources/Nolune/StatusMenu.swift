@@ -10,6 +10,8 @@ final class GatewayStatus: ObservableObject {
 	@Published private(set) var origin = Runtime.shared.origin
 	/// Whether that's the relay's, which opens from anywhere.
 	@Published private(set) var fromAnywhere = false
+	/// A newer nolune to download, once the gateway has heard of one.
+	@Published private(set) var update: Runtime.Update?
 	private var timer: Timer?
 
 	/// Checks now and every few seconds while the menu is open.
@@ -23,11 +25,12 @@ final class GatewayStatus: ObservableObject {
 	}
 
 	/// For `--snapshot`.
-	func pose(running: Bool, people: [Runtime.Person], relay: URL? = nil) {
+	func pose(running: Bool, people: [Runtime.Person], relay: URL? = nil, update: Runtime.Update? = nil) {
 		self.running = running
 		self.people = people
 		origin = relay ?? Runtime.shared.localURL
 		fromAnywhere = relay != nil
+		self.update = update
 	}
 
 	func stopWatching() {
@@ -39,6 +42,7 @@ final class GatewayStatus: ObservableObject {
 		// First, and from config.json: the address shows as the menu opens.
 		origin = Runtime.shared.origin
 		fromAnywhere = Runtime.shared.config.relay != nil
+		update = Runtime.shared.update
 		running = await Service.isUp()
 		if alsoPeople, let people = await Runtime.shared.people() { self.people = people }
 	}
@@ -108,6 +112,18 @@ struct StatusMenu: View {
 
 			Divider().padding(.vertical, 10)
 
+			if let update = status.update {
+				MenuRow(title: "Download nolune \(update.version)", icon: "arrow.down.circle", tint: Color(hex: 0x38BDF8)) {
+					NSWorkspace.shared.open(update.download ?? update.page)
+				}
+				Text(updateNote(update))
+					.font(Theme.font(11))
+					.foregroundStyle(.secondary)
+					.padding(.horizontal, 14)
+					.padding(.top, 2)
+				Divider().padding(.vertical, 10)
+			}
+
 			MenuRow(title: "Open nolune", icon: "arrow.up.right.square") {
 				NSWorkspace.shared.open(status.origin)
 			}
@@ -144,6 +160,15 @@ struct StatusMenu: View {
 		.onDisappear { status.stopWatching() }
 	}
 
+	/// What to do with the download, and the release's notes.
+	private func updateNote(_ update: Runtime.Update) -> AttributedString {
+		var note = AttributedString("Then quit nolune, drag the new one to Applications and open it. ")
+		var notes = AttributedString("What’s new")
+		notes.link = update.page
+		note.append(notes)
+		return note
+	}
+
 	private var title: String {
 		switch status.running {
 		case .some(true): return "nolune is running"
@@ -164,6 +189,8 @@ struct StatusMenu: View {
 private struct MenuRow: View {
 	let title: String
 	let icon: String
+	/// The icon's color, for a row that stands out; secondary otherwise.
+	var tint: Color?
 	let action: () -> Void
 	@State private var hovered = false
 
@@ -172,7 +199,7 @@ private struct MenuRow: View {
 			HStack(spacing: 10) {
 				Image(systemName: icon)
 					.frame(width: 16)
-					.foregroundStyle(.secondary)
+					.foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
 				Text(title)
 					.font(Theme.font(13))
 				Spacer()

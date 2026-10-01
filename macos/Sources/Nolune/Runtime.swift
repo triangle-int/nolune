@@ -41,13 +41,15 @@ final class Runtime: @unchecked Sendable {
 	var isBundled: Bool { Bundle.main.bundleURL.pathExtension == "app" }
 	var logFile: URL { home.appendingPathComponent("logs/gateway.log") }
 
-	/// Host, port and public URL, as `nolune setup` and `nolune config` keep them, and the relay's
-	/// address, as `nolune relay enable` does.
+	/// Host, port and public URL, as `nolune setup` and `nolune config` keep them, the relay's
+	/// address, as `nolune relay enable` does, and whether the gateway looks for new releases
+	/// (`nolune config set update-check`).
 	struct Config: Decodable {
 		var host: String?
 		var port: Int?
 		var origin: String?
 		var relay: Relay?
+		var updateCheck: Bool?
 
 		struct Relay: Decodable {
 			var url: String
@@ -75,6 +77,62 @@ final class Runtime: @unchecked Sendable {
 
 	/// The gateway on this computer, whatever the public URL: for checking it's up.
 	var localURL: URL { URL(string: "http://localhost:\(port)")! }
+
+	/// This app's version, from its Info.plist. Nil from `swift run`, which has none.
+	static var version: String? {
+		guard let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+			version.first?.isNumber == true
+		else { return nil }
+		return version
+	}
+
+	/// A newer nolune than this app: its version, its page with the notes, and this Mac's disk image.
+	struct Update: Equatable {
+		var version: String
+		var page: URL
+		var download: URL?
+	}
+
+	/// `latest-release.json`, which the gateway writes once a day (packages/core/src/updates.ts).
+	private struct SavedRelease: Decodable {
+		var latest: Release?
+
+		struct Release: Decodable {
+			var version: String
+			var url: String
+			/// The disk images, by Node's names for the architecture: arm64 and x64.
+			var downloads: [String: String]?
+		}
+	}
+
+	/// Where the release's links have to point, as the gateway checks too: the app opens them.
+	private static let releases = "https://github.com/triangle-int/nolune/releases/"
+
+	/// The newest release, as the gateway last heard from GitHub, when it's newer than this app.
+	var update: Update? {
+		guard config.updateCheck != false, let current = Runtime.version,
+			let data = try? Data(contentsOf: home.appendingPathComponent("latest-release.json")),
+			let latest = (try? JSONDecoder().decode(SavedRelease.self, from: data))?.latest,
+			Runtime.isNewer(latest.version, than: current),
+			let page = Runtime.releaseLink(latest.url)
+		else { return nil }
+		#if arch(arm64)
+		let arch = "arm64"
+		#else
+		let arch = "x64"
+		#endif
+		let download: URL? = latest.downloads?[arch].flatMap { Runtime.releaseLink($0) }
+		return Update(version: latest.version, page: page, download: download)
+	}
+
+	private static func releaseLink(_ text: String) -> URL? {
+		text.hasPrefix(releases) ? URL(string: text) : nil
+	}
+
+	/// Whether version `a` comes after `b`, both `major.minor.patch`: 0.10.0 is after 0.9.0.
+	static func isNewer(_ a: String, than b: String) -> Bool {
+		a.compare(b, options: .numeric) == .orderedDescending
+	}
 
 	/// The environment the CLI and the gateway run with.
 	func environment() -> [String: String] {
