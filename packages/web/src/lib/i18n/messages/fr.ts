@@ -481,6 +481,9 @@ export const fr: Messages = {
 	attachments: {
 		open: (name: string) => `Ouvrir ${name}`,
 		download: 'Télécharger',
+		previous: 'Image précédente',
+		next: 'Image suivante',
+		position: (n: number, total: number) => `${n} sur ${total}`,
 		onlyPath: (note: string) => `nolune n’a reçu que l’emplacement du fichier : ${note}`
 	},
 

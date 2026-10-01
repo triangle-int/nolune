@@ -405,6 +405,9 @@ export const en = {
 	attachments: {
 		open: (name: string) => `Open ${name}`,
 		download: 'Download',
+		previous: 'Previous picture',
+		next: 'Next picture',
+		position: (n: number, total: number) => `${n} of ${total}`,
 		onlyPath: (note: string) => `nolune got only where it's saved: ${note}`
 	},
 

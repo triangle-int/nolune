@@ -96,8 +96,8 @@
 							: 'text-muted-foreground'
 				)}>{output || (status === 'running' ? m.steps.noOutputYet : m.steps.noOutput)}</pre>
 			{#if result?.pictures.length}
-				<!-- What the command showed the agent with `nolune view`. -->
-				<div class="flex flex-wrap gap-1.5 border-t px-3 py-2">
+				<!-- What the command showed the agent with `nolune view`, a gallery of its own. -->
+				<div data-media-group class="flex flex-wrap gap-1.5 border-t px-3 py-2">
 					{#each result.pictures as picture (picture.id)}
 						<PictureButton {conversationId} {picture} />
 					{/each}

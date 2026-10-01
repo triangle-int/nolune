@@ -51,7 +51,7 @@
 	import NewFolderDialog from './folders/NewFolderDialog.svelte';
 	import Markdown from './chat/Markdown.svelte';
 	import MemoryLook from './chat/MemoryLook.svelte';
-	import MediaViewer, { pictureClicks, type ViewedPicture } from './chat/MediaViewer.svelte';
+	import MediaViewer, { pictureClicks, type PictureGallery } from './chat/MediaViewer.svelte';
 	import MessageAttachments from './chat/MessageAttachments.svelte';
 	import CommandModeMenu from './chat/CommandModeMenu.svelte';
 	import ModelMenu, { shortModelName } from './chat/ModelMenu.svelte';
@@ -124,7 +124,7 @@
 	let deleteOpen = $state(false);
 	let creatingFolder = $state(false);
 	const folder = $derived(folders.find((f) => f.id === folderId));
-	let viewing = $state<ViewedPicture | null>(null);
+	let viewing = $state<PictureGallery | null>(null);
 	let scroller = $state<HTMLElement>();
 	/** The messages scroll under the composer, so they end this far up. */
 	let composerHeight = $state(160);
@@ -491,7 +491,7 @@
 	{@const senderName = sender.name}
 	<!-- By id: the name is the one it was sent with, which may not be theirs any more. -->
 	{@const mine = sender.id === me}
-	<div class="group/human flex flex-col items-end gap-1">
+	<div data-media-group class="group/human flex flex-col items-end gap-1">
 		{#if !mine || pending}
 			<div class="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
 				{#if pending}
@@ -545,7 +545,7 @@
 	{@const copyable = replyText(r)}
 	{@const miss = prefs.technical ? replyMiss(r) : null}
 	{@const tail = r.parts.at(-1)}
-	<div class="group/reply relative flex flex-col gap-3">
+	<div data-media-group class="group/reply relative flex flex-col gap-3">
 		{@render assistant(last ? mood : undefined, last ? step?.label : undefined)}
 		{#each r.parts as part, i (part.key)}
 			{#if part.type === 'text'}
@@ -729,7 +729,7 @@
 	<div
 		bind:this={scroller}
 		{@attach autoscroll}
-		{@attach pictureClicks((picture) => (viewing = picture))}
+		{@attach pictureClicks((gallery) => (viewing = gallery))}
 		onscroll={onScroll}
 		class="@container/chat h-full overflow-y-auto [overflow-anchor:none]"
 	>
@@ -951,7 +951,7 @@
 	}}
 />
 
-<MediaViewer bind:picture={viewing} />
+<MediaViewer bind:gallery={viewing} />
 
 <RenameChatDialog bind:chat={renaming} slug={page.params.slug ?? ''} />
 

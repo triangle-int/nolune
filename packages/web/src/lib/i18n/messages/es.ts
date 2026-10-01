@@ -489,6 +489,9 @@ export const es: Messages = {
 	attachments: {
 		open: (name: string) => `Abrir ${name}`,
 		download: 'Descargar',
+		previous: 'Imagen anterior',
+		next: 'Imagen siguiente',
+		position: (n: number, total: number) => `${n} de ${total}`,
 		onlyPath: (note: string) => `nolune solo recibió dónde está guardado: ${note}`
 	},
 
