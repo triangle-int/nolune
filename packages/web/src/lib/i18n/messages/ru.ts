@@ -269,6 +269,11 @@ export const ru: Messages = {
 		logOut: 'Выйти'
 	},
 
+	/** In nolune for iOS (ios/), which shows this web app in a window of its own. */
+	app: {
+		connectElsewhere: 'Подключиться к другому nolune'
+	},
+
 	update: {
 		available: (version: string) => `Вышла новая версия nolune: ${version}`,
 		running: (version: string) => `У вас версия ${version}.`,

@@ -155,6 +155,13 @@
 			"when": 1790786986414,
 			"tag": "0021_cards",
 			"breakpoints": true
+		},
+		{
+			"idx": 22,
+			"version": "6",
+			"when": 1790865245707,
+			"tag": "0022_push_devices",
+			"breakpoints": true
 		}
 	]
 }

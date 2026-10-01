@@ -19,7 +19,10 @@ export const RELAY_PROTOCOL = 1;
 /** Where a gateway opens its WebSocket, on the relay's own host. */
 export const CONNECT_PATH = '/api/connect';
 
-/** Registration, status and release: `POST` here, `GET` and `DELETE` on `<path>/<name>`. */
+/**
+ * Registration, status and release: `POST` here, `GET` and `DELETE` on `<path>/<name>`; and
+ * notifications, `POST <path>/<name>/push`.
+ */
 export const GATEWAYS_PATH = '/api/gateways';
 
 export type Hello = { type: 'hello'; protocol: number; name: string; token: string };
@@ -37,6 +40,33 @@ export type GatewayStatus = {
 	traffic: { month: string; bytes: number; limit: number | null };
 	/** Why the relay's operator blocked it, when they have. */
 	blocked?: string;
+};
+
+/**
+ * A notification for the family's iPhones (nolune for iOS, ios/): `POST <path>/<name>/push` with
+ * the gateway's token. The relay sends it on to Apple, which only takes notifications for the
+ * app from whoever holds its key.
+ */
+export const PUSH = 'push';
+
+export type Push = {
+	/** Each iPhone's token from Apple, in hex, and whether it's a development build's. */
+	devices: { token: string; sandbox?: boolean }[];
+	title: string;
+	subtitle?: string;
+	body: string;
+	/** Notifications with the same thread are grouped on the lock screen: a profile's. */
+	thread?: string;
+	/** What the app opens when it's tapped: a path on the family's address. */
+	path?: string;
+};
+
+/** What `POST <path>/<name>/push` answers. */
+export type PushResult = {
+	/** How many iPhones Apple took it for. */
+	sent: number;
+	/** The tokens Apple says no app has any more: the gateway forgets them. */
+	gone: string[];
 };
 
 /** Why the relay closed a gateway's WebSocket (application close codes, 4000-4999). */

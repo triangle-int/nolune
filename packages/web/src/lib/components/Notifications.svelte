@@ -1,6 +1,8 @@
 <script lang="ts">
-	import { goto, invalidate } from '$app/navigation';
+	import { untrack } from 'svelte';
+	import { goto, invalidate, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import type { NotificationItem } from '@nolune/core';
 	import { mediaAsText } from '@nolune/core/media-refs';
 	import BellIcon from '@lucide/svelte/icons/bell';
@@ -52,6 +54,27 @@
 		}
 		markSeen();
 	}
+
+	/**
+	 * `?notification=<id>`, where nolune for iOS goes when one is tapped on the lock screen: the
+	 * menu opens with it in full, and the address loses the query, so reloading doesn't open it
+	 * again.
+	 */
+	$effect(() => {
+		const id = page.url.searchParams.get('notification');
+		if (!id) return;
+		untrack(() => {
+			onOpenChange(true);
+			open = true;
+			expanded = items.some((item) => item.id === id) ? id : null;
+		});
+		const url = new URL(page.url);
+		url.searchParams.delete('notification');
+		// Once the router has started, which it hasn't while the page hydrates.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- this page, less the query
+		const timer = setTimeout(() => replaceState(url, page.state));
+		return () => clearTimeout(timer);
+	});
 
 	async function dismiss(id: string) {
 		busy = id;

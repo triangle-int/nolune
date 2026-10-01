@@ -9,7 +9,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Area               | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Execution          | Commands run as the gateway's macOS user with full access to the disk. There is no sandbox. The profile folder is only the default working folder. In auto mode (the default) a model checks each command before it runs and blocks what could do harm nobody asked for, in place of a person approving each one; unrestricted runs them unchecked. See [Auto mode](#auto-mode).                                                                                                                                                                                                                                                                                                                                                       |
-| Clients            | Family members use the web UI only. The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Clients            | Family members use the web UI: in a browser, or in nolune for iOS (`ios/`), which shows it in an app of its own with the bell's notifications on the lock screen (see [The iOS app](#the-ios-app)). The CLI is for the owner and for the agent itself (skill templates, self-configuration, which the built-in `nolune` skill explains).                                                                                                                                                                                                                                                                                                                                                                                               |
 | Exposure           | Public through nolune's relay (`<name>.nolune.family`, see [The relay](#the-relay)) or the family's own tunnel. Every route requires login, except the invite links an admin sends. The sign-up endpoint is disabled: admins make accounts on the People page or with the local CLI, or send a single-use invite link, and passwords must be long and strong.                                                                                                                                                                                                                                                                                                                                                                          |
 | Profiles           | Any user can create a profile. Any member can add or remove members, rename the profile, or delete it. Deleting moves the folder to `~/.nolune/trash/` instead of erasing it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Conversations      | Shared by every member of the profile. Messages go through a queue, and a message sent while the agent is working is fed into its next step (steering). Anyone can press Stop.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -1300,7 +1300,8 @@ into conversations.
 - **Notifications** belong to the profile, like conversations. Dismissing is per person
   (`notification_dismissal`), and unread means newer than when that person last opened the menu
   (`notification_seen`). Pages listen on `/api/events` (SSE), which also carries profile renames and
-  avatar changes, and reload the bell on change.
+  avatar changes, and reload the bell on change. Each new one also goes to the members' iPhones
+  (see [The iOS app](#the-ios-app)).
 - **Continue in chat** unhides the run's conversation, which moves into the sidebar with its whole
   transcript; sending a message into a hidden run does the same. A notification without a
   conversation (script failures, or the run was deleted) starts a new conversation whose first
@@ -1869,6 +1870,15 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
   removes addresses over a Unix socket (`packages/relay/src/admin.ts`), never over the web; a
   blocked address shows a page saying so, and its gateway is told why and stops. Traffic is counted
   in memory and written with the gateways file once a minute.
+- **Notifications on iPhones.** Apple takes notifications for the iOS app only from whoever
+  holds the app's key, so the relay holds it (`APNS_KEY`) and gateways send through it:
+  `POST /api/gateways/<name>/push` with the gateway's token, the notification and the tokens Apple
+  gave the family's iPhones (`packages/relay/src/push.ts`). The relay signs a token for Apple with
+  the key (ES256, made again every 50 minutes) and passes each notification on over HTTP/2, with
+  the family's address added, to Apple's sandbox for a development build's iPhone. It cuts the
+  text to fit Apple's 4 KB, keeps none of it, and answers with the iPhones Apple says are gone.
+  Each address may send 600 notifications an hour, one for each iPhone. A relay without the key
+  answers 501, and an address its operator blocked can't send any.
 - **Trust.** TLS ends at the relay (Caddy in front, with a wildcard certificate), so its operator
   could read the traffic, as with any hosted tunnel; the relay logs only registrations and
   connections. End-to-end encryption would need each gateway to hold the certificate for its own
@@ -1912,11 +1922,15 @@ packages/web    SvelteKit gateway (adapter-node). @nolune/core is bundled into t
 packages/relay  @nolune/relay. The relay server (relay.ts, with its gateways file, store.ts, and its
                 pages), and what the gateway shares with it: the protocol (protocol.ts), a WebSocket
                 as a byte stream (stream.ts) and the headers that go on to the next hop
-                (headers.ts). Deployed on its own (Dockerfile, compose.yaml with Caddy), not
-                part of the npm package; the CLI bundles only the shared files.
+                (headers.ts). It sends the gateways' notifications on to Apple for the family's
+                iPhones (push.ts). Deployed on its own (Dockerfile, compose.yaml with Caddy), not
+                part of the npm package; the CLI and core bundle only the shared files.
 scripts/        build-cli.mjs bundles the CLI and core into dist/cli.js with esbuild.
 macos/          nolune.app: the SwiftUI onboarding, the gateway's keeper and the menu bar
                 extra (see [The macOS app](#the-macos-app)); scripts/build-app.sh bundles it.
+ios/            nolune for iPhone and iPad (Nolune.xcodeproj): UIKit around a WKWebView, and a
+                SwiftUI first screen that builds in the macOS app's Sky.swift and Theme.swift (see
+                [The iOS app](#the-ios-app)).
 ```
 
 Core finds the package root by walking up to the `package.json` named `nolune`. That works
@@ -2025,6 +2039,51 @@ signing.
   edge, a mid-tone both read on. dmgbuild writes the window's layout into the image's `.DS_Store`
   rather than scripting Finder, which needs a logged-in session.
 
+## The iOS app
+
+`ios/` is nolune for iPhone and iPad: the family's nolune in an app of its own, with the bell's
+notifications on the lock screen. It's a thin app. The web UI does everything, in a WKWebView, and
+the app adds what a browser tab can't. It's built with Xcode (`ios/Nolune.xcodeproj`, whose
+folders Xcode reads as they are, so a new file needs no change to the project), checked by
+`.github/workflows/ios.yml`, and published to the App Store from Xcode: see `ios/README.md`.
+
+- **Connecting.** The first screen (`ConnectView.swift`) wears the macOS onboarding: its sky,
+  type and controls, `Sky.swift` and `Theme.swift`, are built into both apps. It asks which nolune
+  to open: a name on the relay (`smiths` is `https://smiths.nolune.family`), an address, or any
+  link from it, like an invite, whose page opens first (`Address.swift`). It checks that a nolune
+  answers there (its sign-in page, or the relay's page for a computer that's off) before it keeps
+  the address. Plain http only on this network (localhost, `.local`, private IPv4), as App
+  Transport Security allows with `NSAllowsLocalNetworking`.
+- **The web app** (`BrowserController.swift`) is as Safari shows it, with `nolune/<version>` at the
+  end of the user agent. It stays inside the safe area and above the keyboard, so the composer is
+  always in sight, and the page's background (WebKit's `underPageBackgroundColor`) fills the edges,
+  with a status bar that reads on it. That's why the app is UIKit at the root: SwiftUI can't choose
+  the status bar's style. Links elsewhere open in Safari, and new windows of the family's own pages
+  load in place. Files the agent hands over (downloads) open in Quick Look, which shares or saves
+  them; `alert`, `confirm` and `prompt` are native alerts; the file picker and camera are WebKit's.
+- **Notifications** (`Push.swift`). Once someone has signed in (on any of the family's pages but
+  the sign-in and invite pages, and not during a profile's welcome), the app asks to show
+  notifications and registers with Apple. The token goes to the gateway from the page, as whoever
+  is signed in (`POST /api/push`, run with `callAsyncJavaScript`), and belongs to their session
+  (`push_device`, `packages/core/src/push.ts`): signing out stops it, and whoever signs in next on
+  that iPhone takes it over. A development build's token is for Apple's sandbox, as the build's
+  provisioning profile says. Each new notification goes to the iPhones of the profile's members
+  through [the relay](#the-relay): its title, the profile's name, its text as plain text
+  (`notificationText`: pictures as their description, links as their label, no Markdown), a thread
+  for each profile, and the page to open, `/p/<slug>?notification=<id>`, where the bell opens with
+  it in full. The app opens a tapped one only on the nolune it has open, by the address the relay
+  adds. A nolune without the relay sends none; the bell still has them.
+- **Elsewhere.** In the app, the sign-in page and the menu under the person's name have "Connect to
+  another nolune" (`packages/web/src/lib/ios.ts`, a `nolune` message to the app). The app first
+  tells the nolune to stop sending that iPhone notifications (`DELETE /api/push`), then shows the
+  first screen, which offers going back.
+- **When it can't be reached** (no network, an address that's gone), a screen says so, with Try
+  again and Connect to another nolune, and it tries again when the app comes back to the front. A
+  family computer that's off is the relay's page, which reloads itself.
+- **Privacy.** The app collects nothing and tracks no one (`PrivacyInfo.xcprivacy`): what people
+  write goes to their family's nolune. A notification's text passes through the relay and Apple,
+  as any app's notifications pass through Apple; neither keeps it.
+
 ## Not done yet
 
 - Cards: notes shared on purpose between profiles, for people who aren't users (a grandmother in
@@ -2048,6 +2107,11 @@ signing.
   slots), a probe that warns the agent about prompt injection in what its commands print, and a
   look at everything a subagent did when it hands back its result.
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
-- Push notifications (Web Push) for the bell. Today it only updates while a page is open.
+- Web Push for the bell in browsers. Today only the iOS app gets notifications; a page gets them
+  while it's open.
+- The iOS app: a share extension (a photo or a PDF from another app into a chat), a notification
+  when the reply someone is waiting for comes, and a badge; universal links on the family's
+  addresses, so an invite link opens in it; and notifications for a nolune on a tunnel of its own,
+  which has no relay to send them.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).

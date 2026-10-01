@@ -198,6 +198,11 @@ export const de: Messages = {
 		logOut: 'Abmelden'
 	},
 
+	/** In nolune for iOS (ios/), which shows this web app in a window of its own. */
+	app: {
+		connectElsewhere: 'Mit einem anderen nolune verbinden'
+	},
+
 	update: {
 		available: (version: string) => `nolune ${version} ist da`,
 		running: (version: string) => `Du hast ${version}.`,

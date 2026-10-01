@@ -13,13 +13,16 @@ import {
 	CLOSE,
 	CONNECT_PATH,
 	GATEWAYS_PATH,
+	PUSH,
 	RELAY_PROTOCOL,
 	isValidName,
 	type GatewayStatus,
 	type Hello,
+	type PushResult,
 	type Ready,
 	type Registration
 } from './protocol.ts';
+import { MAX_PUSH_REQUEST_BYTES, readPush, type Apns } from './push.ts';
 import { GatewayStore, currentMonth, network, type GatewayRecord } from './store.ts';
 import { webSocketStream } from './stream.ts';
 
@@ -37,11 +40,15 @@ import { webSocketStream } from './stream.ts';
  * sees the requests it passes on, as any tunnel does, and keeps none of them: it logs only
  * registrations and gateways coming and going.
  *
+ * It also passes the gateways' notifications on to Apple for the family's iPhones (push.ts), which
+ * only take them from whoever holds the app's key.
+ *
  * Anyone may register, so it keeps what one person can take in check: a limit on each address's
- * traffic in a month, on the addresses one network can register (in an hour, and in all), and an
- * operator who can block an address (`admin`, served on a Unix socket, never on the web). Names
- * don't stay taken for good: one whose nolune hasn't connected in 90 days is free again (its nolune
- * asks for it back if it returns, as long as nobody else took it).
+ * traffic in a month, on the addresses one network can register (in an hour, and in all), on the
+ * notifications each address sends in an hour, and an operator who can block an address (`admin`,
+ * served on a Unix socket, never on the web). Names don't stay taken for good: one whose nolune
+ * hasn't connected in 90 days is free again (its nolune asks for it back if it returns, as long as
+ * nobody else took it).
  */
 
 export interface RelayOptions {
@@ -79,6 +86,13 @@ export interface RelayOptions {
 	 * to come back, rather than get the offline page at once.
 	 */
 	reconnectGraceMs?: number;
+	/**
+	 * Apple's push service, with nolune for iOS's key (push.ts). Without it, gateways' notifications
+	 * are refused. The relay closes it when it closes.
+	 */
+	apns?: Apns;
+	/** Notifications each address may send in an hour, one an iPhone; 0 for no limit. */
+	pushesPerHour?: number;
 	log?: (message: string) => void;
 }
 
@@ -161,11 +175,11 @@ function closeReason(text: string): string {
 	return characters.join('');
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
+async function readJson(req: IncomingMessage, limit = MAX_API_BODY_BYTES): Promise<unknown> {
 	let body = '';
 	for await (const chunk of req) {
 		body += chunk;
-		if (body.length > MAX_API_BODY_BYTES) throw new Error('too large');
+		if (body.length > limit) throw new Error('too large');
 	}
 	return body.trim() ? JSON.parse(body) : {};
 }
@@ -184,6 +198,7 @@ export function createRelay(options: RelayOptions): Relay {
 	const monthlyLimit = options.monthlyTrafficBytes ?? 30 * 1024 ** 3;
 	const graceMs = options.reconnectGraceMs ?? 15_000;
 	const forgetAfterMs = options.forgetAfterMs ?? 90 * DAY_MS;
+	const pushesPerHour = options.pushesPerHour ?? 600;
 	const log = options.log ?? (() => {});
 
 	const connections = new Map<string, Connection>();
@@ -193,6 +208,8 @@ export function createRelay(options: RelayOptions): Relay {
 	const waiting = new Map<string, Set<(connection: Connection | null) => void>>();
 	/** Recent registrations by network. */
 	const registrations = new Map<string, number[]>();
+	/** The notifications each gateway sent this hour (hours since 1970). */
+	const pushes = new Map<string, { hour: number; count: number }>();
 
 	const urlOf = (name: string) => `${scheme}://${name}.${domain}`;
 
@@ -233,6 +250,17 @@ export function createRelay(options: RelayOptions): Relay {
 		return allowed;
 	}
 
+	/** Counts `count` notifications for a gateway, unless that would be more than it may send. */
+	function mayPush(name: string, count: number): boolean {
+		if (pushesPerHour <= 0) return true;
+		const hour = Math.floor(Date.now() / HOUR_MS);
+		const sent = pushes.get(name);
+		const before = sent?.hour === hour ? sent.count : 0;
+		if (before + count > pushesPerHour) return false;
+		pushes.set(name, { hour, count: before + count });
+		return true;
+	}
+
 	function overQuota(name: string): boolean {
 		return monthlyLimit > 0 && store.trafficThisMonth(name) >= monthlyLimit;
 	}
@@ -260,6 +288,8 @@ export function createRelay(options: RelayOptions): Relay {
 			if (times.every((at) => now - at >= HOUR_MS)) registrations.delete(address);
 		}
 		for (const [name, at] of leftAt) if (now - at >= graceMs) leftAt.delete(name);
+		const hour = Math.floor(now / HOUR_MS);
+		for (const [name, sent] of pushes) if (sent.hour !== hour) pushes.delete(name);
 		forgetUnused();
 	}, HOUR_MS);
 	pruning.unref();
@@ -309,6 +339,36 @@ export function createRelay(options: RelayOptions): Relay {
 		json(res, 201, { name, url: urlOf(name), token } satisfies Registration);
 	}
 
+	/** Sends a gateway's notification to the iPhones it names, through Apple. */
+	async function push(name: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+		if (req.method !== 'POST') return json(res, 405, { error: 'POST a notification' });
+		const blocked = store.get(name)?.blocked;
+		if (blocked) return json(res, 403, { error: blocked.reason });
+		if (!options.apns) {
+			return json(res, 501, { error: "this relay doesn't send notifications to iPhones" });
+		}
+		const message = await readJson(req, MAX_PUSH_REQUEST_BYTES).then(readPush, () => null);
+		if (!message) {
+			return json(res, 400, {
+				error: 'send JSON like {"devices": [{"token": "<hex>"}], "title": "…", "body": "…"}'
+			});
+		}
+		if (!mayPush(name, message.devices.length)) {
+			return json(res, 429, {
+				error: `this address sent ${pushesPerHour} notifications this hour, as many as it may`
+			});
+		}
+		const { devices, ...notification } = message;
+		const apns = options.apns;
+		const outcomes = await Promise.all(
+			devices.map((device) => apns.send(device, { ...notification, origin: urlOf(name) }))
+		);
+		json(res, 200, {
+			sent: outcomes.filter((outcome) => outcome === 'sent').length,
+			gone: devices.filter((_, i) => outcomes[i] === 'gone').map((device) => device.token)
+		} satisfies PushResult);
+	}
+
 	async function api(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		const { pathname } = new URL(req.url ?? '/', 'http://relay');
 		if (pathname === GATEWAYS_PATH) {
@@ -316,10 +376,15 @@ export function createRelay(options: RelayOptions): Relay {
 			return json(res, 405, { error: 'POST to register a gateway' });
 		}
 		if (pathname.startsWith(`${GATEWAYS_PATH}/`)) {
-			const name = decodeURIComponent(pathname.slice(GATEWAYS_PATH.length + 1));
+			const [encoded, action, ...rest] = pathname.slice(GATEWAYS_PATH.length + 1).split('/');
+			const name = decodeURIComponent(encoded);
+			if (rest.length || (action !== undefined && action !== PUSH)) {
+				return json(res, 404, { error: 'not found' });
+			}
 			if (!store.verify(name, bearer(req))) {
 				return json(res, 401, { error: 'no such gateway, or the wrong token' });
 			}
+			if (action === PUSH) return push(name, req, res);
 			if (req.method === 'GET') {
 				const blocked = store.get(name)?.blocked;
 				return json(res, 200, {
@@ -604,6 +669,7 @@ export function createRelay(options: RelayOptions): Relay {
 		async close() {
 			clearInterval(pruning);
 			clearInterval(flushing);
+			options.apns?.close();
 			store.flush();
 			for (const waiters of waiting.values()) for (const resume of waiters) resume(null);
 			for (const { socket } of connections.values()) socket.terminate();

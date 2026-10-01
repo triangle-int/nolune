@@ -13,6 +13,7 @@ import {
 	profileMember
 } from './db/schema.ts';
 import { getDefaultPreset, getPreset } from './presets.ts';
+import { pushNotification } from './push.ts';
 import { formatLocalTime, getTrigger } from './triggers.ts';
 
 export type Notification = typeof notification.$inferSelect;
@@ -64,6 +65,8 @@ export function createNotification(input: {
 		.returning()
 		.get();
 	changed(input.profileId);
+	// And to the members' iPhones, while the gateway goes on.
+	void pushNotification(row);
 	return row;
 }
 

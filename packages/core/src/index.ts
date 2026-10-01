@@ -489,6 +489,7 @@ export {
 	type Notification,
 	type NotificationItem
 } from './notifications.ts';
+export { forgetSessionPushDevice, isDeviceToken, registerPushDevice } from './push.ts';
 export {
 	MAX_PAYLOAD_BYTES,
 	fireWebhook,
