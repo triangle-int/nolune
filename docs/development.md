@@ -57,8 +57,17 @@ The same tag builds the macOS app (`macos/scripts/build-app.sh`) on a Mac for ea
 checks that it runs, and, once npm has the version, makes the GitHub release with
 `nolune-macos-apple-silicon.dmg` and `nolune-macos-intel.dmg`. Named without the version, they're
 always at `https://github.com/triangle-int/nolune/releases/latest/download/<name>`, for the site to
-link to. Running Publish by hand (Actions > Publish > Run workflow) only builds the app, which is
-the way to try the signing without releasing anything: the disk images are in the run's artifacts.
+link to. Running Publish by hand (Actions > Publish > Run workflow) only builds the app and
+drafts the next release's notes, which is the way to try the signing and read the notes without
+releasing anything: the disk images are in the run's artifacts, the notes in its summary.
+
+Claude writes the release notes (`scripts/release-notes.mjs`), for the families who use nolune,
+from the commits since the last tag: squash-merged pull requests, whose messages say what changed
+and why, so a clear message makes clear notes. `scripts/release-notes/example.md` (0.2.0's) sets
+their shape and tone; the workflow adds the download links and the full changelog. It needs the
+`ANTHROPIC_API_KEY` secret, an Anthropic API key. Without it, or when Claude can't, the release
+lists the pull requests instead. Notes are only written when the release is made, so a re-run
+leaves them, and they can be edited on the release page like any.
 
 For macOS to open the app on other Macs, it's signed with a Developer ID and notarized by Apple,
 with these secrets (Settings > Secrets and variables > Actions). Without them the app is ad-hoc

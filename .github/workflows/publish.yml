@@ -3,8 +3,9 @@ name: Publish
 # Pushing a tag like v0.1.0 releases that version: the npm package, and nolune.app for macOS in a
 # GitHub release. The tag must match `version` in package.json. npm trusted publishing (OIDC) signs
 # in to npm, so there's no npm token in the secrets; the app is signed and notarized with the Apple
-# secrets below (docs/development.md). Run by hand (Actions > Publish > Run workflow), it only
-# builds the app, to try the signing without releasing anything.
+# secrets below, and Claude writes the release notes (docs/development.md). Run by hand (Actions >
+# Publish > Run workflow), it only builds the app and drafts the next release's notes, to try them
+# without releasing anything.
 
 on:
   push:
@@ -157,22 +158,71 @@ jobs:
           path: macos/dist/*.dmg
           if-no-files-found: error
 
+  # Claude writes the notes from the commits since the last tag (scripts/release-notes.mjs). Without
+  # ANTHROPIC_API_KEY, or when it can't, the release lists the pull requests instead. Run by hand,
+  # this drafts the next release's notes in the run's summary.
+  notes:
+    name: Release notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          # The tags and the commits since the last one.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Write the notes with Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          mkdir notes
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::No ANTHROPIC_API_KEY in the secrets: the release lists the pull requests instead."
+          elif node scripts/release-notes.mjs HEAD >notes/whats-new.md; then
+            cat notes/whats-new.md >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Claude couldn't write the release notes (the reason is above): the release lists the pull requests instead."
+            rm notes/whats-new.md
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: notes
+          if-no-files-found: ignore
+
   release:
     name: GitHub release
-    if: github.event_name == 'push'
-    needs: [publish, app]
+    # Notes or not: without Claude's, GitHub lists the pull requests.
+    if: github.event_name == 'push' && !cancelled() && needs.publish.result == 'success' && needs.app.result == 'success'
+    needs: [publish, app, notes]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           pattern: nolune-macos-*
           path: dmg
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: release-notes
+          path: notes
       # The disk images are named without the version, so a link like
       # https://github.com/<repo>/releases/latest/download/nolune-macos-apple-silicon.dmg always
-      # gets the newest. A re-run puts them on the release it made before.
+      # gets the newest. A re-run puts them on the release it made before, and leaves its notes.
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -182,22 +232,48 @@ jobs:
           tag="$GITHUB_REF_NAME"
           mv dmg/nolune-*-arm64.dmg dmg/nolune-macos-apple-silicon.dmg
           mv dmg/nolune-*-x86_64.dmg dmg/nolune-macos-intel.dmg
-          cat >notes.md <<'EOF'
-          **On a Mac:** download nolune-macos-apple-silicon.dmg (M1 and later) or
-          nolune-macos-intel.dmg, open it and drag nolune to Applications. **From the terminal**, on
-          macOS or Linux with Node 22.18 or later: `npm install -g nolune`, then `nolune setup`.
+          cat >downloads.md <<'EOF'
+          ## Download
+
+          | | |
+          | --- | --- |
+          | **Mac with Apple silicon** (M1 and later) | [nolune-macos-apple-silicon.dmg](https://github.com/@REPO@/releases/download/@TAG@/nolune-macos-apple-silicon.dmg) |
+          | **Mac with Intel** | [nolune-macos-intel.dmg](https://github.com/@REPO@/releases/download/@TAG@/nolune-macos-intel.dmg) |
+          | **Terminal**, on macOS or Linux with Node 22.18+ | `npm install -g nolune`, then `nolune setup` |
+
+          Open the disk image, drag nolune to Applications, and open it.
           EOF
-          if [ "$NOTARIZED" != true ]; then
-            cat >>notes.md <<'EOF'
+          if [ "$NOTARIZED" = true ]; then
+            echo 'The app is signed and notarized by Apple, so it opens with a double-click.' >>downloads.md
+          else
+            cat >>downloads.md <<'EOF'
 
           > [!WARNING]
           > This build of the app isn't notarized by Apple, so macOS won't open it at first. After
           > trying, allow it in System Settings > Privacy & Security > Open Anyway.
           EOF
           fi
+          sed -i "s|@REPO@|$GH_REPO|g; s|@TAG@|$tag|g" downloads.md
+          if [ -s notes/whats-new.md ]; then
+            # The downloads go where Claude's notes leave a {{downloads}} line, or else first.
+            if grep -qx '{{downloads}}' notes/whats-new.md; then
+              awk '$0 == "{{downloads}}" { while ((getline line < "downloads.md") > 0) print line; next } { print }' \
+                notes/whats-new.md >notes.md
+            else
+              { cat downloads.md; echo; cat notes/whats-new.md; } >notes.md
+            fi
+            if previous=$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null); then
+              printf '\n**Full changelog:** https://github.com/%s/compare/%s...%s\n' \
+                "$GH_REPO" "$previous" "$tag" >>notes.md
+            fi
+            generate=()
+          else
+            cp downloads.md notes.md
+            generate=(--generate-notes)
+          fi
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dmg/*.dmg --clobber
           else
             gh release create "$tag" dmg/*.dmg --verify-tag --title "$tag" \
-              --notes-file notes.md --generate-notes
+              --notes-file notes.md "${generate[@]}"
           fi

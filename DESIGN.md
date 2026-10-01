@@ -1798,7 +1798,8 @@ migrations, `packages/web/build/index.js` and the CLI entry.
 Published to npm as `nolune` from a `v*` tag by `.github/workflows/publish.yml`, with npm trusted
 publishing (see Publishing in the README). `npm install -g nolune` gives the `nolune` command. The
 same tag builds [the macOS app](#the-macos-app) for Apple silicon and Intel, signed and notarized,
-into a GitHub release (see Publishing in docs/development.md).
+into a GitHub release, with notes Claude writes from the commits since the last tag (see Publishing
+in docs/development.md).
 
 - The package ships `packages/web/build/` (the web app, without its source maps, which Node doesn't load unless
   asked to and which are most of its size), `dist/cli.js` with its `dist/chunks`,
