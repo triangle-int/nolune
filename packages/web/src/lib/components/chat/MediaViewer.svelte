@@ -150,7 +150,9 @@
 		ontouchend={onTouchend}
 		ontouchcancel={() => (touch = null)}
 		class={cn(
-			'max-h-[calc(100dvh-2rem)] gap-3 p-3 sm:max-w-[min(72rem,calc(100%-2rem))]',
+			// One column as wide as the viewer, else a long file name with no spaces in it
+			// (a phone's photo) widens it past the screen, and the picture with it.
+			'max-h-[calc(100dvh-2rem)] grid-cols-1 gap-3 p-3 sm:max-w-[min(72rem,calc(100%-2rem))]',
 			swipes && 'touch-pan-y touch-pinch-zoom'
 		)}
 	>
