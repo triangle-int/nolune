@@ -42,11 +42,11 @@ No tunnel, port forwarding or domain of your own. See [Remote access](/docs/guid
   unchecked (not recommended). Not from the agent's own commands
 - `nolune config set safety-model <preset|chat>`: the preset whose model does auto mode's checks, or
   chat for each chat's own model (the default)
-- `nolune key set <anthropic|openai|openrouter> [key]`: store an API key (prompts if omitted) after
-  checking it; OpenAI's runs GPT chats and makes pictures. Admins can also do this on the web, under
-  Models & keys
-- `nolune key rm <anthropic|openai|openrouter>`: remove a stored key (the environment's is used, if
-  set)
+- `nolune key set <anthropic|openai|openrouter|xai> [key]`: store an API key (prompts if omitted)
+  after checking it; OpenAI's runs GPT chats and makes pictures, xAI's runs Grok. Admins can also
+  do this on the web, under Models & keys
+- `nolune key rm <anthropic|openai|openrouter|xai>`: remove a stored key (the environment's is used,
+  if set)
 - `nolune env set <NAME> <value>`: extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
 - `nolune env rm <NAME> | nolune env list`
 
@@ -97,10 +97,11 @@ There's no sign-up page: admins add people here, or on the **People** page in th
 Shared by all profiles.
 
 - `nolune preset add <model> [--provider
-anthropic|openai|openrouter|claude-plan|chatgpt-plan|<custom>] [--name N] [--context-window
+anthropic|openai|openrouter|xai|claude-plan|chatgpt-plan|<custom>] [--name N] [--context-window
 TOKENS]`: the provider checks the model id first (anthropic unless given); OpenAI models other
   than the flagships need `--context-window`. OpenRouter's ids name their maker
-  (anthropic/claude-sonnet-5), and the model must be able to call tools. A custom provider (by its
+  (anthropic/claude-sonnet-5), and the model must be able to call tools. xAI's are Grok's
+  (grok-4.7), and it lists them with their windows. A custom provider (by its
   name) lists its models; its model must call tools too, which shows at its first reply, and
   pictures and PDFs reach it as paths. The plans check their sign-in instead, and chatgpt-plan
   the models the plan offers

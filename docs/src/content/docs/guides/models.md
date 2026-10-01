@@ -1,6 +1,6 @@
 ---
 title: Models and keys
-description: Run chats on an API key, OpenRouter, a model server of your own, or a Claude or ChatGPT plan.
+description: Run chats on an API key (Anthropic, OpenAI, xAI), OpenRouter, a model server of your own, or a Claude or ChatGPT plan.
 ---
 
 A profile's welcome asks for a model the first time. As the admin you can add or replace API keys,
@@ -10,11 +10,20 @@ from the terminal as below. Model presets are shared by all profiles.
 ## API keys
 
 ```sh
-nolune key set anthropic       # or openai / openrouter
+nolune key set anthropic       # or openai / openrouter / xai
 ```
 
 nolune checks a key before it stores it. OpenAI's key also makes pictures on the
 [Images](/docs/guides/images/) page.
+
+## Grok, with an xAI key
+
+With `nolune key set xai` (a key from [console.x.ai](https://console.x.ai)), presets run on xAI's
+Grok models: `nolune preset add grok-4.7 --provider xai`, or the xAI chip in Add a model, which
+lists the models the key can use with their context windows. Each model gets the reasoning
+effort it takes nearest the chat's. Grok sees pictures (sent as JPEG or PNG); PDFs are saved for
+the agent and named in the message. Chats are paid from the key's team credits; when they run
+out, or the team hits its spending limit, the chat says so.
 
 ## Through OpenRouter
 

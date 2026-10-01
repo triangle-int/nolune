@@ -5,6 +5,7 @@ import { isAgentPlan, type AgentPlan } from './plans.ts';
 import {
 	describeApiError,
 	isAbortError,
+	pictureTypes,
 	planSessionProblem,
 	readableMessages,
 	runPlanTurn,
@@ -741,7 +742,7 @@ async function runToolCall(
 
 	st.toolOutput = { id: call.id, text: '' };
 	// `nolune view` in this command leaves images here, to be attached to its result.
-	const viewDir = createViewDir(images);
+	const viewDir = createViewDir(images, pictureTypes(conv.provider));
 	try {
 		const result = await runCommand(input, {
 			defaultCwd: dir,

@@ -773,7 +773,8 @@ export const en = {
 				openrouter: {
 					title: 'OpenRouter API key',
 					about: 'Claude, GPT, Gemini and more, on one key'
-				}
+				},
+				xai: { title: 'xAI API key', about: 'Grok models, paid as you go' }
 			},
 			checkingPlan: 'Checking the sign-in…',
 			pasteKey: (label: string) => `Paste your ${label} key`,
@@ -864,14 +865,16 @@ export const en = {
 			openai:
 				'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.',
 			openrouter:
-				'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.'
+				'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.',
+			xai: "Runs chats and automations on xAI's Grok models."
 		},
 		withoutIt: {
 			anthropic: 'Chats and automations on Claude models stop working until a new key is added.',
 			openai:
 				"Chats and automations on OpenAI models stop working, and nolune can't make pictures, until a new key is added.",
 			openrouter:
-				'Chats and automations on OpenRouter models stop working until a new key is added.'
+				'Chats and automations on OpenRouter models stop working until a new key is added.',
+			xai: 'Chats and automations on Grok models stop working until a new key is added.'
 		},
 		savedInNolune: (hint: string | null) => `Saved in nolune${hint ? ` ending in ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
@@ -956,6 +959,7 @@ export const en = {
 				anthropic: 'Auto uses the window Anthropic reports for the model.',
 				openai: "OpenAI doesn't report it: Auto knows only its flagships' (1.05M since GPT-5.4).",
 				openrouter: 'Auto uses the window OpenRouter lists for the model and its main provider.',
+				xai: 'Auto uses the window xAI lists for the model.',
 				'custom-openai':
 					'Auto uses the window the server lists for the model, if it lists one (vLLM does); otherwise it stays unknown.',
 				'custom-anthropic':

@@ -37,6 +37,7 @@ import {
 	countDocumentTokens,
 	countsDocumentTokens,
 	modelInputs,
+	pictureTypes,
 	shortApiError,
 	type Provider
 } from './models.ts';
@@ -512,7 +513,7 @@ export async function prepareMessage(input: {
 		if (up.mime.startsWith('image/')) {
 			let result: { block: ImageBlock } | { problem: string };
 			try {
-				const image = await prepareImage(path);
+				const image = await prepareImage(path, pictureTypes(conv.provider));
 				result = await imageBlock(conv, image.data, image.info.mediaType, up.name, images);
 			} catch (err) {
 				result = {

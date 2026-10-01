@@ -846,7 +846,8 @@ export const fr: Messages = {
 				openrouter: {
 					title: 'Clé d’API OpenRouter',
 					about: 'Claude, GPT, Gemini et d’autres avec une seule clé'
-				}
+				},
+				xai: { title: 'Clé d’API xAI', about: 'Modèles Grok, payés à l’usage' }
 			},
 			checkingPlan: 'Vérification de la connexion…',
 			pasteKey: (label: string) => `Collez votre clé ${label}`,
@@ -939,7 +940,8 @@ export const fr: Messages = {
 			openai:
 				'Fait tourner les discussions et les automatisations sur les modèles OpenAI, et crée les images de la page Images et celles que dessine l’agent.',
 			openrouter:
-				'Fait tourner les discussions et les automatisations sur les modèles que propose OpenRouter (Claude, GPT, Gemini, DeepSeek et bien d’autres), avec une seule clé et ses crédits.'
+				'Fait tourner les discussions et les automatisations sur les modèles que propose OpenRouter (Claude, GPT, Gemini, DeepSeek et bien d’autres), avec une seule clé et ses crédits.',
+			xai: 'Fait tourner les discussions et les automatisations sur les modèles Grok de xAI.'
 		},
 		withoutIt: {
 			anthropic:
@@ -947,7 +949,8 @@ export const fr: Messages = {
 			openai:
 				'Les discussions et les automatisations sur les modèles OpenAI cessent de fonctionner, et nolune ne peut plus créer d’images, jusqu’à l’ajout d’une nouvelle clé.',
 			openrouter:
-				'Les discussions et les automatisations sur les modèles OpenRouter cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.'
+				'Les discussions et les automatisations sur les modèles OpenRouter cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.',
+			xai: 'Les discussions et les automatisations sur les modèles Grok cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`Enregistrée dans nolune${hint ? `, se termine par ${hint}` : ''}`,
@@ -1037,6 +1040,7 @@ export const fr: Messages = {
 					'OpenAI ne l’indique pas : Auto ne connaît que celle de ses modèles phares (1,05M depuis GPT-5.4).',
 				openrouter:
 					'Auto utilise la fenêtre qu’OpenRouter indique pour le modèle et son fournisseur principal.',
+				xai: 'Auto utilise la fenêtre qu’xAI indique pour le modèle.',
 				'custom-openai':
 					'Auto utilise la fenêtre que le serveur indique pour le modèle, s’il en indique une (vLLM le fait) ; sinon elle reste inconnue.',
 				'custom-anthropic':

@@ -107,18 +107,25 @@ async function getClient(): Promise<OpenAI> {
 }
 
 /**
- * Where Responses API calls go: OpenAI, a custom provider (custom-providers.ts), or OpenAI on the
- * ChatGPT plan (chatgpt-plan.ts). A custom provider gets the same requests without what only
- * OpenAI has: encrypted reasoning, its prompt cache key and reasoning levels above `high`. The
- * plan gets its tools in nolune's namespace, and its short exchanges streamed.
+ * Where Responses API calls go: OpenAI, a custom provider (custom-providers.ts), OpenAI on the
+ * ChatGPT plan (chatgpt-plan.ts), or xAI (xai.ts). A custom provider gets the same requests
+ * without what only OpenAI has: encrypted reasoning, its prompt cache key and reasoning levels
+ * above `high`. The plan gets its tools in nolune's namespace, and its short exchanges streamed.
+ * xAI gets OpenAI's, with each model's own reasoning levels and no reasoning summary, which its
+ * models give anyway.
  */
 export interface ResponsesApi {
-	provider: 'openai' | 'custom-openai' | 'chatgpt-plan';
+	provider: 'openai' | 'custom-openai' | 'chatgpt-plan' | 'xai';
 	client(): Promise<OpenAI>;
 	/** Whose calls these are, for what's learned from refusals: a hash or an address, never a key. */
 	account(): string;
 	/** The model's id where it runs: a custom provider's without its id before it. */
 	modelName(model: string): string;
+	/**
+	 * The effort the model is sent for the chat's, where its provider says which it takes (xAI):
+	 * null sends no reasoning settings. Unset: nolune's levels (effortFor).
+	 */
+	effort?(model: string, effort: Effort): Promise<Effort | null>;
 }
 
 const OPENAI: ResponsesApi = {
@@ -361,15 +368,23 @@ async function withRefusals<T>(
 		return await request(takes());
 	} catch (err) {
 		if (!noSummaries.has(account) && refusesSummaries(err)) noSummaries.add(account);
-		else if (api.provider === 'custom-openai' && takes().reasoning && refusesReasoning(err)) {
+		else if (
+			(api.provider === 'custom-openai' || api.provider === 'xai') &&
+			takes().reasoning &&
+			refusesReasoning(err)
+		) {
 			noReasoning.add(`${account} ${model}`);
 		} else throw err;
 		return request(takes());
 	}
 }
 
-/** OpenAI's levels above `high` are its own; a custom provider gets `high` for them. */
-function effortFor(api: ResponsesApi, effort: Effort): Effort {
+/**
+ * OpenAI's levels above `high` are its own; a custom provider gets `high` for them. A provider
+ * that says which levels each model takes (`api.effort`) is asked.
+ */
+async function effortFor(api: ResponsesApi, model: string, effort: Effort): Promise<Effort | null> {
+	if (api.effort) return api.effort(model, effort);
 	return api.provider !== 'custom-openai' || !['xhigh', 'max'].includes(effort) ? effort : 'high';
 }
 
@@ -447,10 +462,13 @@ export async function streamResponse(
 	api: ResponsesApi = OPENAI
 ): Promise<OpenAI.Responses.Response> {
 	const client = await api.client();
-	// OpenAI's own, with a key or on the ChatGPT plan.
+	// OpenAI's own, with a key or on the ChatGPT plan, and xAI's, which does as OpenAI does.
 	const openai = api.provider !== 'custom-openai';
-	const stream = await withRefusals(api, opts.model, (takes) =>
-		client.responses.create(
+	const xai = api.provider === 'xai';
+	const effort = await effortFor(api, opts.model, opts.effort);
+	const stream = await withRefusals(api, opts.model, (takes) => {
+		const reasoning = takes.reasoning && effort !== null;
+		return client.responses.create(
 			{
 				model: api.modelName(opts.model),
 				instructions: opts.system,
@@ -458,20 +476,24 @@ export async function streamResponse(
 				tools: toolsFor(api, opts.tools),
 				store: false,
 				stream: true,
-				...(takes.reasoning
+				...(reasoning
 					? {
 							reasoning: {
-								effort: effortFor(api, opts.effort),
-								...(takes.summaries ? { summary: 'auto' as const } : {})
-							},
-							...(openai ? { include: ['reasoning.encrypted_content' as const] } : {})
+								effort,
+								...(takes.summaries && !xai ? { summary: 'auto' as const } : {})
+							}
 						}
 					: {}),
+				// xAI's models reason whether or not they take an effort, and want it back.
+				...((openai && reasoning) || xai
+					? { include: ['reasoning.encrypted_content' as const] }
+					: {}),
+				// At xAI, it also keeps the chat on the server that has its cache.
 				...(openai ? { prompt_cache_key: opts.cacheKey } : {})
 			},
 			{ signal: opts.signal }
-		)
-	);
+		);
+	});
 	return readStream(stream, opts.onEvent);
 }
 
@@ -491,6 +513,7 @@ export async function createResponse(
 	api: ResponsesApi = OPENAI
 ): Promise<OpenAI.Responses.Response> {
 	const client = await api.client();
+	const effort = await effortFor(api, opts.model, 'low');
 	if (api.provider === 'chatgpt-plan') {
 		const signal = AbortSignal.timeout(opts.timeoutMs);
 		const stream = await withRefusals(api, opts.model, (takes) =>
@@ -501,7 +524,7 @@ export async function createResponse(
 					input: [{ role: 'user', content: opts.input }],
 					store: false,
 					stream: true,
-					...(takes.reasoning ? { reasoning: { effort: 'low' as const } } : {})
+					...(takes.reasoning && effort ? { reasoning: { effort } } : {})
 				},
 				{ signal }
 			)
@@ -516,7 +539,7 @@ export async function createResponse(
 				input: opts.input,
 				max_output_tokens: opts.maxTokens,
 				store: false,
-				...(takes.reasoning ? { reasoning: { effort: 'low' as const } } : {})
+				...(takes.reasoning && effort ? { reasoning: { effort } } : {})
 			},
 			{ timeout: opts.timeoutMs }
 		)

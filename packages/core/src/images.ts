@@ -359,6 +359,8 @@ export interface ImageUse {
 interface ViewLimits {
 	/** How many more images the conversation has room for. */
 	count: number;
+	/** The formats its model takes, when that isn't all of them; others are converted. */
+	types?: ImageMediaType[];
 }
 
 interface ViewEntry {
@@ -394,10 +396,16 @@ export function imageUse(messages: Message[], inline = false): ImageUse {
 	return use;
 }
 
-/** Gateway, before a command runs: its view folder, with what the conversation has room for. */
-export function createViewDir(used: ImageUse): string {
+/**
+ * Gateway, before a command runs: its view folder, with what the conversation has room for and
+ * the picture formats its model takes (`types`, when that isn't all of them).
+ */
+export function createViewDir(used: ImageUse, types?: readonly ImageMediaType[]): string {
 	const dir = mkdtempSync(join(tmpdir(), 'nolune-view-'));
-	const limits: ViewLimits = { count: MAX_CONVERSATION_IMAGES - used.count };
+	const limits: ViewLimits = {
+		count: MAX_CONVERSATION_IMAGES - used.count,
+		...(types ? { types: [...types] } : {})
+	};
 	writeFileSync(join(dir, LIMITS_FILE), JSON.stringify(limits));
 	return dir;
 }
@@ -437,7 +445,7 @@ export async function viewImage(path: string, dir: string, cwd = process.cwd()):
 		);
 	}
 	if (earlier.length >= limits.count) throw new ViewLimitError(CONVERSATION_FULL);
-	const image = await prepareImage(resolve(cwd, path));
+	const image = await prepareImage(resolve(cwd, path), limits.types);
 
 	const file = `${randomUUID()}.${image.info.mediaType.slice('image/'.length)}`;
 	writeFileSync(join(dir, file), image.data);

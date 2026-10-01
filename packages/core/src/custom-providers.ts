@@ -71,6 +71,7 @@ const RESERVED = [
 	'anthropic',
 	'openai',
 	'openrouter',
+	'xai',
 	'claude-plan',
 	'chatgpt-plan',
 	'custom',
