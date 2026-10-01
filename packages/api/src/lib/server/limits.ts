@@ -191,7 +191,8 @@ function spend(credits: Credit[], kind: Credit['kind'], cost: number, at: number
 	const usable = next
 		.filter((credit) => credit.kind === kind && live(credit, at))
 		.sort((a, b) => (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity));
-	if (!usable.length) return [...next, { source: 'owed', kind, left: -cost, expiresAt: null }];
+	if (!usable.length)
+		return [...next, { source: `owed:${kind}`, kind, left: -cost, expiresAt: null }];
 
 	let owed = cost;
 	for (const credit of usable) {

@@ -1,16 +1,15 @@
 {
+	"extends": "./.svelte-kit/tsconfig.json",
 	"compilerOptions": {
-		"target": "ES2023",
-		"lib": ["ES2023"],
-		"module": "NodeNext",
-		"moduleResolution": "NodeNext",
-		"strict": true,
-		"noEmit": true,
-		"allowImportingTsExtensions": true,
-		"verbatimModuleSyntax": true,
-		"erasableSyntaxOnly": true,
+		"rewriteRelativeImportExtensions": true,
+		"allowJs": true,
+		"checkJs": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
 		"skipLibCheck": true,
-		"types": ["node"]
-	},
-	"include": ["src", "*.config.ts"]
+		"sourceMap": true,
+		"strict": true,
+		"moduleResolution": "bundler"
+	}
 }

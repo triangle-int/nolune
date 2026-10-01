@@ -1879,24 +1879,37 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   service of nolune's own like the relay, which checks the plan's token, counts what each request
   costs and passes it on. Upstream is OpenRouter for chats and embeddings and FAL for pictures, on
   nolune's accounts there, rather than nolune reselling its own accounts with each model's maker.
-  The service is a package of its own (`packages/api`), not part of the npm package.
+  The service is a package of its own (`packages/api`), not part of the npm package: a SvelteKit
+  app (adapter-node, like the gateway's) for both the API and its few pages, on Postgres.
 - **Next to the relay, not in it.** The API runs on the relay's server, behind its Caddy, as a
-  container of its own. They do different jobs: the relay passes bytes and keeps a JSON file, the
-  API keeps money, which wants SQLite's transactions. The OpenRouter key and Stripe's secret stay
+  container of its own, with Postgres in another. They do different jobs: the relay passes bytes
+  and keeps a JSON file, the API keeps money, which wants a database's transactions, and Postgres
+  rather than SQLite so more than one process can serve it. The OpenRouter key and Stripe's secret
+  stay
   out of the process every family's traffic goes through, and deploying one restarts nothing in
   the other: a relay restart holds every family's requests for a moment, and the API changes more
   often. Each also keeps working when the other is down. The gateway reaches the API directly, as
   it reaches OpenRouter, never through the relay.
-- **Signing in** is a device code (OAuth's device authorization grant): `nolune nolune-plan setup`,
-  or Models & keys, shows a short code and `nolune.dev/link`. The person opens it on any device,
-  signs in to their nolune account (where the subscription is paid for) and confirms, while the
-  gateway asks every few seconds until it's confirmed. Unlike the ChatGPT plan's sign-in, nothing
-  comes back to `127.0.0.1`, so it works the same from a phone through the relay.
+- **Accounts** are better-auth's, with no password: the sign-in page emails a 6-digit code (through
+  Resend's API, with plain fetch), good for 5 minutes and 5 tries, and the first sign-in makes the
+  account. Since anyone can ask for a code to any address, the page sends at most 3 to an address
+  and 10 to a network every 10 minutes, and takes 20 tries at codes from a network (its own limits:
+  better-auth's apply to requests through its handler, not to the calls form actions make).
+- **Linking a gateway** is a device code (OAuth's device authorization grant, better-auth's
+  plugin): `nolune nolune-plan setup`, or Models & keys, asks `POST /api/auth/device/code` as
+  client `nolune` and shows the 8-letter code with the API's link page
+  (`https://api.nolune.dev/link?user_code=…`, the code already in it). The person opens it on any
+  device, signs in, sees the code (which makes it theirs to approve) and links it, while the gateway
+  asks `/api/auth/device/token` every 5 seconds until it's linked, for 15 minutes at most. Unlike
+  the ChatGPT plan's sign-in, nothing comes back to `127.0.0.1`, so it works the same from a phone
+  through the relay.
 - **What's kept** is `~/.nolune/nolune-plan.json` (mode 600, written whole and renamed into place),
-  as `chatgpt.json` is: the account (email, plan name) and a refresh token, never shown or logged.
-  Requests carry a short-lived access token (15 minutes) made from it, never a lasting key. A
-  refresh replaces the refresh token too, so refreshes run one at a time under a lock file, as the
-  ChatGPT plan's do, with the same code. Signing out revokes it.
+  as `chatgpt.json` is: the account's email and the token the link gave, never shown or logged. The
+  token is a better-auth session, sent as a bearer token on every request to `/v1`. It lasts 90
+  days and is renewed as it's used, so a gateway that's running stays linked; signing out, in
+  nolune or on the account page, ends it. One token rather than a refresh token and short-lived
+  ones: the API looks the plan up on every request anyway, so a session lookup costs next to
+  nothing, and there's no refresh to run one at a time.
 - **One subscription per gateway.** The whole family draws on it, as on the keys, and its limits are
   the family's (below).
 
@@ -1931,9 +1944,10 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
 The plan is credits, not unlimited use. The agent works in the background too (automations,
 subagents, the note-taker, titles, auto mode's checks), and one busy day or one automation in a
 loop would otherwise spend the month. As on Claude's plans, a 5-hour limit and a weekly one keep it
-spread out. The rules are `packages/api/src/limits.ts`: pure functions over an account's state
-(`admit` before a request, `charge` after it, `grantPeriod` and `addExtra` from Stripe's events),
-which the API runs inside one SQLite transaction each.
+spread out. The rules are `limits.ts` (in `packages/api/src/lib/server`): pure functions over an
+account's state (`admit` before a request, `charge` after it, `grantPeriod` and `addExtra` from
+Stripe's events), which the API runs inside one Postgres transaction each (`accounts.ts`, which
+locks the person's row first, so requests that end together each add what they spent).
 
 - **Counted in dollars**, not tokens: models' prices differ fifty times over, and pictures cost too.
   OpenRouter says what each request cost (`usage.cost`); FAL prices each picture.
@@ -2103,8 +2117,13 @@ packages/web    SvelteKit gateway (adapter-node). @nolune/core is bundled into t
                 profile's welcome in welcome/, its sounds in src/lib/welcome), the interface's
                 languages in src/lib/i18n.
 packages/api    @nolune/api. nolune's API for the nolune plan (see [The nolune
-                plan](#the-nolune-plan)): its credits and limits so far (limits.ts). Deployed
-                next to the relay, not part of the npm package.
+                plan](#the-nolune-plan)), a SvelteKit app (adapter-node) on Postgres with
+                drizzle (migrations in packages/api/drizzle, run when it starts). So far: accounts
+                with better-auth (auth.ts: codes by email, email.ts through Resend; device codes
+                for gateways; bearer tokens), the plan's credits and limits (limits.ts, kept by
+                accounts.ts), the pages (sign-in, link, the plan) and /v1/usage. Its tests run on
+                PGlite, Postgres in the test's own process. Deployed next to the relay, not part
+                of the npm package.
 packages/relay  @nolune/relay. The relay server (relay.ts, with its gateways file, store.ts, and its
                 pages), and what the gateway shares with it: the protocol (protocol.ts), a WebSocket
                 as a byte stream (stream.ts) and the headers that go on to the next hop
