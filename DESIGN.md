@@ -1921,11 +1921,14 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   `openai-chat.ts` has (`ResponsesApi`): OpenRouter's own (its key and address) and the plan's
   (nolune's API, and the plan's token, which the SDK asks for on every request, as `CHATGPT_PLAN`'s
   does). Models are OpenRouter's ids (`anthropic/claude-sonnet-5-5`), from the plan's own list
-  (`GET /v1/models`: OpenRouter's shape, only the models the plan offers, with their prices). The
+  (`GET /v1/models`: OpenRouter's list in its shape, with prices, kept for an hour, and only the
+  models that call tools, since nolune's agent works through one: 395 of 462 in October 2026). The
   plan's replies are stored as `nolune-plan`'s, so moving a chat between it and an OpenRouter key is
   a switch of provider like any other.
 - **Unchanged on the way.** The API passes a request to OpenRouter as it came, with only the key
-  replaced and `max_tokens` added when there is none (32,000). `cache_control`, `session_id` and
+  replaced, and `max_tokens` (or `max_completion_tokens`, when that's the one it uses) set to
+  32,000 when it asks for more or doesn't say. A body that asks for less goes byte for byte; one
+  that's changed is the same JSON written again. `cache_control`, `session_id` and
   the replies' `reasoning_details` go through byte for byte, so the cache works as it does on
   OpenRouter (see [On OpenRouter](#on-openrouter)). Nous Portal's API may ignore OpenRouter's
   extensions, which is why nolune runs its own rather than offering Nous Portal as a provider.
@@ -1952,7 +1955,13 @@ Stripe's events), which the API runs inside one Postgres transaction each (`acco
 locks the person's row first, so requests that end together each add what they spent).
 
 - **Counted in dollars**, not tokens: models' prices differ fifty times over, and pictures cost too.
-  OpenRouter says what each request cost (`usage.cost`); FAL prices each picture.
+  OpenRouter says what each request cost in its usage, in the reply or a stream's last chunk
+  without being asked. A request that went on a provider key of nolune's at OpenRouter (BYOK) has
+  `cost` 0 and what the provider billed in `cost_details.upstream_inference_cost`, so a request's
+  cost is the two together (`costOf` in `openrouter.ts`). A stream cut off before its last chunk
+  (someone pressed Stop, the gateway went away) cancels OpenRouter's too, and is charged from
+  OpenRouter's record of the generation (`GET /generation?id=`), asked 5 s, 20 s, 1 min and 3 min
+  later: it isn't there at once, and was in about 25 s when tried. FAL prices each picture.
 - **Three limits**, each a share of the plan's credits, set on the plan's product in Stripe (see
   [Payments](#payments)). The one plan to start with, Family, is $20 a month for $25 of credits:
 
@@ -1992,7 +2001,8 @@ locks the person's row first, so requests that end together each add what they s
   carries over), so while Stripe retries a failed payment the family still has what was left.
   Packs do, a year after they were bought. A subscription that ends takes the period's credits and
   leaves the packs.
-- **Rate limits.** Requests a minute and at once, per account. The token works outside nolune too,
+- **Rate limits.** 8 requests at once and 120 a minute, per account, in memory (a `429` the SDKs
+  retry after 5 s). The token works outside nolune too,
   and the plan's credits cost less than OpenRouter's (see [Payments](#payments)), which makes them
   worth reselling: one subscription per account and per card (Radar's card fingerprint), and the
   windows keep what one subscription can pass on to what it was given.
@@ -2006,8 +2016,14 @@ locks the person's row first, so requests that end together each add what they s
   `PlanError` with that `kind`, in words, as the ChatGPT plan's usage limit is said: "nolune's
   5-hour limit is reached; chats start again at 18:40. An admin can turn on extra credits in Models
   & keys."
+- **Other errors.** OpenRouter's go on as they came (a request it can't take, a model that's down,
+  input its moderation flagged), except a `401` or `402`, which are about nolune's own key or
+  credits: those are logged for the operator and the family gets a `503` (`upstream_unavailable`).
+  An account with no plan gets a `402` (`no_plan`), a model the plan doesn't offer a `400`
+  (`model_not_offered`); neither asks OpenRouter anything.
 - **Usage, live.** Every response carries how much of each limit is used and when it starts again
-  (`x-nolune-usage`), and `GET /v1/usage` says the same. The gateway keeps the latest and sends it
+  (`x-nolune-usage`): after the request, or for a stream, whose headers go first, before it.
+  `GET /v1/usage` says the same. The gateway keeps the latest and sends it
   to open pages: Models & keys shows all three, and from 80% the composer says "5 hours: 85% ·
   again at 18:40".
 - **Automations** refused by a limit don't fail: the run waits and starts again when the limit
@@ -2123,7 +2139,9 @@ packages/api    @nolune/api. nolune's API for the nolune plan (see [The nolune
                 drizzle (migrations in packages/api/drizzle, run when it starts). So far: accounts
                 with better-auth (auth.ts: codes by email, email.ts through Resend; device codes
                 for gateways; bearer tokens), the plan's credits and limits (limits.ts, kept by
-                accounts.ts), the pages (sign-in, link, the plan) and /v1/usage. Its tests run on
+                accounts.ts), the pages (sign-in, link, the plan), and /v1: usage, models, and
+                chats and embeddings passed on to OpenRouter (proxy.ts, openrouter.ts, with
+                stream.ts reading a stream's usage as it goes on). Its tests run on
                 PGlite, Postgres in the test's own process. Deployed next to the relay, not part
                 of the npm package.
 packages/relay  @nolune/relay. The relay server (relay.ts, with its gateways file, store.ts, and its

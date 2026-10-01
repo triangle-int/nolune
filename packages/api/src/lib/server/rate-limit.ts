@@ -7,11 +7,13 @@
 
 export class RateLimit {
 	private readonly hits = new Map<string, number[]>();
+	private readonly max: number;
+	private readonly windowMs: number;
 
-	constructor(
-		private readonly max: number,
-		private readonly windowMs: number
-	) {}
+	constructor(max: number, windowMs: number) {
+		this.max = max;
+		this.windowMs = windowMs;
+	}
 
 	/** Counts a try for `key`, and whether it's within the limit. */
 	allow(key: string, now = Date.now()): boolean {
