@@ -2082,7 +2082,9 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   family computer that's off is the relay's page, which reloads itself.
 - **Privacy.** The app collects nothing and tracks no one (`PrivacyInfo.xcprivacy`): what people
   write goes to their family's nolune. A notification's text passes through the relay and Apple,
-  as any app's notifications pass through Apple; neither keeps it.
+  as any app's notifications pass through Apple; neither keeps it. The privacy policy, at
+  `nolune.dev/privacy` (`site/src/routes/privacy`), covers nolune, the apps, the relay and the
+  site; the first screen links it, as the App Store asks. Keep it to what the code does.
 
 ## Not done yet
 

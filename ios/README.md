@@ -63,9 +63,10 @@ Once, in the [Apple Developer](https://developer.apple.com/account) account that
    then answers `/api/gateways/<name>/push` instead of 501.
 3. **The app in App Store Connect.** Apps > New App: iOS, the bundle ID above, and a name (the
    App Store's names are unique; "nolune" may need a few words after it). It runs on iPads too,
-   so the listing needs iPad screenshots as well as iPhone ones. It needs a privacy policy's
-   address, and under App Privacy: Data Not Collected (what people write goes to their own
-   nolune, and the relay passes notifications on without keeping them).
+   so the listing needs iPad screenshots as well as iPhone ones. Its privacy policy is
+   `https://nolune.dev/privacy` (`site/src/routes/privacy`), which the first screen links too, and
+   under App Privacy: Data Not Collected (what people write goes to their own nolune, and the
+   relay passes notifications on without keeping them).
 
 For each version:
 

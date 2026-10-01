@@ -54,10 +54,13 @@ struct ConnectView: View {
 						}
 						.buttonStyle(QuietLinkStyle())
 					}
-					Link("What's nolune?", destination: URL(string: "https://nolune.dev")!)
-						.font(Theme.font(13))
-						.foregroundStyle(Theme.muted)
-						.padding(.top, 24)
+					HStack(spacing: 20) {
+						Link("What's nolune?", destination: URL(string: "https://nolune.dev")!)
+						Link("Privacy", destination: URL(string: "https://nolune.dev/privacy")!)
+					}
+					.font(Theme.font(13))
+					.foregroundStyle(Theme.muted)
+					.padding(.top, 24)
 				}
 				.foregroundStyle(Theme.foreground)
 				.padding(.horizontal, 24)

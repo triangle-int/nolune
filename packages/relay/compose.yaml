@@ -1,9 +1,18 @@
 # The relay behind Caddy. Set CLOUDFLARE_API_TOKEN and ACME_EMAIL in .env next to this file,
 # then: docker compose up -d --build (README.md).
+
+# Logs are capped at 30 MB a container: older lines go as new ones come (nolune.dev/privacy).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
 services:
   relay:
     build: .
     restart: unless-stopped
+    logging: *logging
     environment:
       RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.family}
       RELAY_HOST: ${RELAY_HOST:-relay.nolune.dev}
@@ -25,6 +34,7 @@ services:
       context: .
       dockerfile: Caddy.Dockerfile
     restart: unless-stopped
+    logging: *logging
     ports:
       - '80:80'
       - '443:443'

@@ -143,7 +143,8 @@ first; `docker compose restart caddy` tries at once.
 - **Is it all right?** `./check.sh` in this folder, on the server, answers in a few lines: whether
   the containers run, the certificates and until when, whether the relay answers, and the last
   errors in the logs.
-- **The logs** are lines to read (Caddy's in its console format, the relay's as `[relay] ...`):
+- **The logs** are lines to read (Caddy's in its console format, the relay's as `[relay] ...`),
+  capped at 30 MB a container, as nolune's [privacy policy](https://nolune.dev/privacy) says:
   `docker compose logs -f relay` for addresses coming and going, `docker compose logs -f caddy` for
   certificates, `docker compose logs --since 1h` for the last hour of both.
 

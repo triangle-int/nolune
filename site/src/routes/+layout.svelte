@@ -42,6 +42,7 @@
 			<a href={GITHUB}>GitHub</a>
 			<a href={NPM}>npm</a>
 			<a href="{GITHUB}/blob/main/LICENSE">MIT license</a>
+			<a href={resolve('/privacy')}>Privacy</a>
 		</nav>
 		<p>Made by Triangle Interactive</p>
 	</div>
