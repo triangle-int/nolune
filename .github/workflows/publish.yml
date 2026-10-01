@@ -83,6 +83,10 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # For dmgbuild, which makes the DMG.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
       # A Developer ID Application certificate with its private key, as a .p12 in base64, and an
       # App Store Connect API key to notarize with. Without them the app is ad-hoc signed, and
       # macOS won't open it on another Mac until it's allowed in System Settings.
