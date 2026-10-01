@@ -1879,8 +1879,14 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   service of nolune's own like the relay, which checks the plan's token, counts what each request
   costs and passes it on. Upstream is OpenRouter for chats and embeddings and FAL for pictures, on
   nolune's accounts there, rather than nolune reselling its own accounts with each model's maker.
-  The service is a package of its own (`packages/api`), deployed like the relay and not part of
-  the npm package.
+  The service is a package of its own (`packages/api`), not part of the npm package.
+- **Next to the relay, not in it.** The API runs on the relay's server, behind its Caddy, as a
+  container of its own. They do different jobs: the relay passes bytes and keeps a JSON file, the
+  API keeps money, which wants SQLite's transactions. The OpenRouter key and Stripe's secret stay
+  out of the process every family's traffic goes through, and deploying one restarts nothing in
+  the other: a relay restart holds every family's requests for a moment, and the API changes more
+  often. Each also keeps working when the other is down. The gateway reaches the API directly, as
+  it reaches OpenRouter, never through the relay.
 - **Signing in** is a device code (OAuth's device authorization grant): `nolune nolune-plan setup`,
   or Models & keys, shows a short code and `nolune.dev/link`. The person opens it on any device,
   signs in to their nolune account (where the subscription is paid for) and confirms, while the
@@ -1925,7 +1931,9 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
 The plan is credits, not unlimited use. The agent works in the background too (automations,
 subagents, the note-taker, titles, auto mode's checks), and one busy day or one automation in a
 loop would otherwise spend the month. As on Claude's plans, a 5-hour limit and a weekly one keep it
-spread out.
+spread out. The rules are `packages/api/src/limits.ts`: pure functions over an account's state
+(`admit` before a request, `charge` after it, `grantPeriod` and `addExtra` from Stripe's events),
+which the API runs inside one SQLite transaction each.
 
 - **Counted in dollars**, not tokens: models' prices differ fifty times over, and pictures cost too.
   OpenRouter says what each request cost (`usage.cost`); FAL prices each picture.
@@ -1963,7 +1971,11 @@ spread out.
   shouldn't stop with a window: recall would get worse just when someone is told to wait.
 - **Extra credits** are bought on their own, kept for a year, and spent only past a limit, once an
   admin has turned that on in Models & keys. The windows don't apply to them, so a family can go
-  on now rather than at 18:40.
+  on now rather than at 18:40. Background work never spends them: they were bought for people.
+- **A period's credits don't run out by date.** The next paid period replaces them (with what
+  carries over), so while Stripe retries a failed payment the family still has what was left.
+  Packs do, a year after they were bought. A subscription that ends takes the period's credits and
+  leaves the packs.
 - **Rate limits.** Requests a minute and at once, per account. The token works outside nolune too,
   and the plan's credits cost less than OpenRouter's (see [Payments](#payments)), which makes them
   worth reselling: one subscription per account and per card (Radar's card fingerprint), and the
@@ -2090,6 +2102,9 @@ packages/web    SvelteKit gateway (adapter-node). @nolune/core is bundled into t
                 UI components in src/lib/components (shadcn-svelte primitives in ui/, a new
                 profile's welcome in welcome/, its sounds in src/lib/welcome), the interface's
                 languages in src/lib/i18n.
+packages/api    @nolune/api. nolune's API for the nolune plan (see [The nolune
+                plan](#the-nolune-plan)): its credits and limits so far (limits.ts). Deployed
+                next to the relay, not part of the npm package.
 packages/relay  @nolune/relay. The relay server (relay.ts, with its gateways file, store.ts, and its
                 pages), and what the gateway shares with it: the protocol (protocol.ts), a WebSocket
                 as a byte stream (stream.ts) and the headers that go on to the next hop

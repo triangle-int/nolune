@@ -1,0 +1,14 @@
+{
+	"name": "@nolune/api",
+	"private": true,
+	"version": "0.0.1",
+	"type": "module",
+	"scripts": {
+		"check": "tsc -p .",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"devDependencies": {
+		"vitest": "^5.0.2"
+	}
+}
