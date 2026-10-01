@@ -1,6 +1,6 @@
 /*
- * OpenRouter, behind nolune's API: the models the plan offers, requests passed on with nolune's
- * key, and what each one cost.
+ * OpenRouter, behind nolune's API: the models the plan offers (for chats, and for pictures through
+ * OpenRouter's Image API), requests passed on with nolune's key, and what each one cost.
  */
 
 /** A model as OpenRouter's `GET /models` lists it; the gateway reads the same shape. */
@@ -9,6 +9,20 @@ export interface Model {
 	context_length?: number | null;
 	pricing?: Partial<Record<'prompt' | 'completion' | 'input_cache_read', string>>;
 	supported_parameters?: string[];
+	[key: string]: unknown;
+}
+
+/** An image model as OpenRouter's `GET /images/models` lists it, with what each request field takes. */
+export interface ImageModel {
+	id: string;
+	architecture?: { input_modalities?: string[]; output_modalities?: string[] };
+	supported_parameters?: Record<
+		string,
+		| { type: 'enum'; values: string[] }
+		| { type: 'range'; min: number; max: number }
+		| { type: 'boolean' }
+	>;
+	supports_streaming?: boolean;
 	[key: string]: unknown;
 }
 
@@ -45,7 +59,7 @@ export class OpenRouter {
 	private readonly apiKey: string;
 	private readonly baseURL: string;
 	private readonly fetch: typeof fetch;
-	private listed: { at: number; models: Promise<Model[]> } | undefined;
+	private readonly listed = new Map<string, { at: number; models: Promise<unknown[]> }>();
 
 	constructor({ apiKey, baseURL, fetch: fetchImpl }: OpenRouterOptions) {
 		this.apiKey = apiKey;
@@ -64,29 +78,42 @@ export class OpenRouter {
 
 	/** Every model OpenRouter lists, kept for an hour; the last list stays while a new one fails. */
 	models(now = Date.now()): Promise<Model[]> {
-		if (this.listed && now - this.listed.at < HOUR) return this.listed.models;
-		const previous = this.listed;
-		const models = this.list().catch((err) => {
-			if (previous) return previous.models;
-			this.listed = undefined;
+		return this.catalog<Model>('/models', now);
+	}
+
+	/** Every image model, from the Image API's own list, kept the same way. */
+	imageModels(now = Date.now()): Promise<ImageModel[]> {
+		return this.catalog<ImageModel>('/images/models', now);
+	}
+
+	private catalog<T>(path: string, now: number): Promise<T[]> {
+		const kept = this.listed.get(path);
+		if (kept && now - kept.at < HOUR) return kept.models as Promise<T[]>;
+		const models = this.list<T>(path).catch((err) => {
+			if (kept) return kept.models as Promise<T[]>;
+			this.listed.delete(path);
 			throw err;
 		});
-		this.listed = { at: now, models };
+		this.listed.set(path, { at: now, models });
 		return models;
 	}
 
-	private async list(): Promise<Model[]> {
-		const response = await this.fetch(`${this.baseURL}/models`, {
+	private async list<T>(path: string): Promise<T[]> {
+		const response = await this.fetch(`${this.baseURL}${path}`, {
 			headers: this.headers(),
 			signal: AbortSignal.timeout(20_000)
 		});
-		if (!response.ok) throw new Error(`OpenRouter's models: ${response.status}`);
-		const { data } = (await response.json()) as { data: Model[] };
+		if (!response.ok) throw new Error(`OpenRouter's ${path.slice(1)}: ${response.status}`);
+		const { data } = (await response.json()) as { data: T[] };
 		return data;
 	}
 
 	/** Passes a request on, as it is apart from the key. */
-	forward(path: '/chat/completions' | '/embeddings', body: string, signal?: AbortSignal) {
+	forward(
+		path: '/chat/completions' | '/embeddings' | '/images',
+		body: string,
+		signal?: AbortSignal
+	) {
 		return this.fetch(`${this.baseURL}${path}`, {
 			method: 'POST',
 			headers: { ...this.headers(), 'content-type': 'application/json' },

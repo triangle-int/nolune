@@ -716,7 +716,9 @@ async function runToolCall(
 	const env = {
 		NOLUNE_PROFILE: slug,
 		NOLUNE_PROFILE_DIR: dir,
-		NOLUNE_CONVERSATION_ID: conv.id
+		NOLUNE_CONVERSATION_ID: conv.id,
+		// Who the command's work is for: an automation's or subagent's run is background work.
+		NOLUNE_USE: conv.hidden ? 'background' : 'person'
 	};
 
 	const blocked = await safetyCheck(conv, call, input, dir, signal, st);

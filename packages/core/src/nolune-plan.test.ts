@@ -3,6 +3,7 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { committedRows, createConversation } from './conversations.ts';
+import { generateImages, imageGenerationStatus } from './image-generation.ts';
 import { embeddingSource } from './memory-embeddings.ts';
 import { listModels } from './models.ts';
 import {
@@ -50,6 +51,8 @@ const seen: Seen[] = [];
 let decision: 'pending' | 'approved' | 'denied' = 'pending';
 /** The chat endpoint's answers, in turn. */
 let chats: Answer[] = [];
+/** The picture endpoint's answers, in turn; a PNG when there are none left. */
+let pictures: Answer[] = [];
 
 const TOKEN = 'session-token-1';
 const USAGE = {
@@ -57,6 +60,18 @@ const USAGE = {
 	week: { spent: 0, limit: 8_750_000, resetsAt: Date.UTC(2026, 9, 8) },
 	credits: { plan: 25_000_000, extra: 0, renewsAt: Date.UTC(2026, 9, 31) }
 };
+const IMAGE_MODELS = [
+	{
+		id: 'openai/gpt-image-2.5-flare',
+		architecture: { input_modalities: ['text', 'image'], output_modalities: ['image'] },
+		supported_parameters: {
+			aspect_ratio: { type: 'enum', values: ['1:1', '3:2', '2:3', 'auto'] },
+			quality: { type: 'enum', values: ['auto', 'low', 'medium', 'high'] },
+			n: { type: 'range', min: 1, max: 1 },
+			input_references: { type: 'range', min: 0, max: 16 }
+		}
+	}
+];
 const MODELS = [
 	{
 		id: 'anthropic/claude-haiku-4.5',
@@ -102,6 +117,20 @@ function answer(request: Seen): Answer {
 			return { json: { data: MODELS } };
 		case 'POST /v1/embeddings':
 			return { json: { data: [{ index: 0, embedding: [1, 0] }], usage: { cost: 0 } } };
+		case 'GET /v1/images/models':
+			return { json: { data: IMAGE_MODELS } };
+		case 'POST /v1/images':
+			return (
+				pictures.shift() ?? {
+					json: {
+						created: 0,
+						data: [
+							{ b64_json: Buffer.from('a picture').toString('base64'), media_type: 'image/png' }
+						],
+						usage: { cost: 0.04 }
+					}
+				}
+			);
 		case 'POST /v1/chat/completions':
 			if (request.json?.stream !== true) {
 				// A chore (the chat's title): one reply, not streamed.
@@ -156,6 +185,7 @@ beforeEach(() => {
 	seen.length = 0;
 	decision = 'pending';
 	chats = [];
+	pictures = [];
 	cancelNolunePlanSignIn();
 	vi.mocked(runCommand).mockReset();
 	vi.stubEnv('OPENAI_API_KEY', '');
@@ -400,5 +430,58 @@ describe('chats on the nolune plan', () => {
 			key: TOKEN,
 			name: 'nolune-plan/openai/text-embedding-3-small'
 		});
+	});
+});
+
+describe('pictures on the nolune plan', () => {
+	it('makes pictures on the plan when nolune has no key, fitted to the model', async () => {
+		await link();
+		expect(imageGenerationStatus()).toMatchObject({
+			model: 'nolune-plan/openai/gpt-image-2.5-flare',
+			ready: true
+		});
+		// The agent's command, in an automation's hidden chat.
+		vi.stubEnv('NOLUNE_CONVERSATION_ID', 'chat-1');
+		vi.stubEnv('NOLUNE_USE', 'background');
+		const result = await generateImages({ prompt: 'a paper boat', size: 'portrait', count: 2 });
+
+		expect(result.model).toBe('nolune-plan/openai/gpt-image-2.5-flare');
+		expect(result.images.map((i) => [i.format, i.data.toString()])).toEqual([
+			['png', 'a picture'],
+			['png', 'a picture']
+		]);
+		// One picture per request is all this model makes: two requests.
+		const asked = seen.filter((r) => r.path === '/v1/images');
+		expect(asked.map((r) => r.json)).toEqual([
+			{ model: 'openai/gpt-image-2.5-flare', prompt: 'a paper boat', aspect_ratio: '2:3' },
+			{ model: 'openai/gpt-image-2.5-flare', prompt: 'a paper boat', aspect_ratio: '2:3' }
+		]);
+		expect(asked[0].headers).toMatchObject({
+			authorization: `Bearer ${TOKEN}`,
+			'x-nolune-use': 'background',
+			'x-nolune-turn': 'continue'
+		});
+		vi.unstubAllEnvs();
+	});
+
+	it('says a limit in words, and what the model can’t do before asking', async () => {
+		await link();
+		pictures = [
+			{
+				status: 429,
+				json: {
+					error: { code: 'weekly_limit', message: 'Weekly limit.', resets_at: null }
+				}
+			}
+		];
+		await expect(generateImages({ prompt: 'a paper boat' })).rejects.toThrow(
+			"The nolune plan's weekly limit is reached."
+		);
+		await expect(generateImages({ prompt: 'a paper boat', quality: 'max' })).rejects.toThrow(
+			"openai/gpt-image-2.5-flare's quality is one of auto, low, medium, high."
+		);
+		await expect(
+			generateImages({ prompt: 'a paper boat', model: 'nolune-plan/someone/else' })
+		).rejects.toThrow('The nolune plan has no image model someone/else.');
 	});
 });

@@ -24,12 +24,22 @@ const MODELS = {
 		{ id: 'some/model-without-tools', supported_parameters: ['temperature'] }
 	]
 };
+const IMAGE_MODELS = {
+	data: [
+		{
+			id: 'openai/gpt-image-2.5-flare',
+			architecture: { input_modalities: ['text', 'image'], output_modalities: ['image'] },
+			supported_parameters: { n: { type: 'range', min: 1, max: 10 } }
+		}
+	]
+};
 const encoder = new TextEncoder();
 
 interface Call {
 	url: string;
 	body: string;
 	headers: Headers;
+	signal?: AbortSignal | null;
 }
 
 /** OpenRouter as a function of the request's path, and every call it got. */
@@ -43,10 +53,16 @@ async function setup(
 		baseURL: 'https://openrouter.test/api/v1',
 		fetch: async (input, init) => {
 			const url = String(input);
-			const call = { url, body: String(init?.body ?? ''), headers: new Headers(init?.headers) };
+			const call = {
+				url,
+				body: String(init?.body ?? ''),
+				headers: new Headers(init?.headers),
+				signal: init?.signal
+			};
 			calls.push(call);
 			const path = new URL(url).pathname.replace('/api/v1', '');
 			if (path === '/models') return Response.json(MODELS);
+			if (path === '/images/models') return Response.json(IMAGE_MODELS);
 			return reply(path, call);
 		}
 	});
@@ -67,7 +83,15 @@ async function setup(
 			body: typeof body === 'string' ? body : JSON.stringify(body)
 		});
 	const forwarded = () => calls.filter((call) => !call.url.endsWith('/models'));
-	return { db, userId, proxy, send, calls: forwarded, logged };
+	const sendImage = (body: unknown, signal?: AbortSignal) =>
+		proxy.handle({
+			userId,
+			endpoint: 'image',
+			headers: new Headers(),
+			body: JSON.stringify(body),
+			signal
+		});
+	return { db, userId, proxy, send, sendImage, calls: forwarded, logged };
 }
 
 const chat = { model: 'anthropic/claude-haiku-4.5', messages: [{ role: 'user', content: 'Hi' }] };
@@ -234,6 +258,71 @@ describe('nolune’s API in front of OpenRouter', () => {
 		expect((await noTools.json()).error.code).toBe('model_not_offered');
 		const embedding = await s.send({ model: 'someone/else', input: 'x' }, 'embedding');
 		expect(embedding.status).toBe(400);
+		expect(s.calls()).toHaveLength(0);
+	});
+
+	it('passes a picture request on to the Image API, and charges what it cost', async () => {
+		const picture = { model: 'openai/gpt-image-2.5-flare', prompt: 'a paper boat', n: 2 };
+		const reply = JSON.stringify({
+			created: 0,
+			data: [{ b64_json: 'iVBORw0KGgo=', media_type: 'image/png' }],
+			usage: { prompt_tokens: 12, completion_tokens: 6144, cost: 0.08, is_byok: false }
+		});
+		const s = await setup(
+			() => new Response(reply, { headers: { 'content-type': 'application/json' } })
+		);
+		const response = await s.sendImage(picture);
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(reply);
+		const [call] = s.calls();
+		expect(call.url).toBe('https://openrouter.test/api/v1/images');
+		expect(JSON.parse(call.body)).toEqual(picture);
+		const account = await readAccount(s.db, s.userId);
+		// Against the 5-hour and weekly limits as much as a chat.
+		expect(account).toMatchObject({ window: { spent: 80_000 }, week: { spent: 80_000 } });
+	});
+
+	it('charges a picture by its generation when the reply says no cost', async () => {
+		const s = await setup((path) => {
+			if (path === '/generation') return Response.json({ data: { total_cost: 0.04 } });
+			return Response.json(
+				{ created: 0, data: [{ b64_json: 'iVBORw0KGgo=' }] },
+				{ headers: { 'x-generation-id': 'gen-img-1' } }
+			);
+		});
+		await s.sendImage({ model: 'openai/gpt-image-2.5-flare', prompt: 'a paper boat' });
+		await s.proxy.settled();
+		expect(s.calls().at(-1)?.url).toBe('https://openrouter.test/api/v1/generation?id=gen-img-1');
+		expect((await readAccount(s.db, s.userId))?.window?.spent).toBe(40_000);
+	});
+
+	it('finishes and charges a picture whoever asked stopped waiting for', async () => {
+		let upstreamSignal: AbortSignal | null | undefined;
+		const gone = new AbortController();
+		const s = await setup(async (_path, call) => {
+			upstreamSignal = call.signal;
+			gone.abort();
+			return Response.json({ created: 0, data: [], usage: { cost: 0.05 } });
+		});
+		await s.sendImage({ model: 'openai/gpt-image-2.5-flare', prompt: 'a paper boat' }, gone.signal);
+		expect(upstreamSignal ?? undefined).toBeUndefined();
+		expect((await readAccount(s.db, s.userId))?.window?.spent).toBe(50_000);
+	});
+
+	it('refuses pictures from models it doesn’t offer, too many at once, and streams', async () => {
+		const s = await setup(() => Response.json({}));
+		const other = await s.sendImage({ model: 'someone/else', prompt: 'x' });
+		expect(other.status).toBe(400);
+		expect((await other.json()).error.code).toBe('model_not_offered');
+		const many = await s.sendImage({ model: 'openai/gpt-image-2.5-flare', prompt: 'x', n: 5 });
+		expect((await many.json()).error.code).toBe('too_many_images');
+		const streamed = await s.sendImage({
+			model: 'openai/gpt-image-2.5-flare',
+			prompt: 'x',
+			stream: true
+		});
+		expect(streamed.status).toBe(400);
 		expect(s.calls()).toHaveLength(0);
 	});
 

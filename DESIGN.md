@@ -27,7 +27,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Making pictures    | The agent runs `nolune generate image` (`gpt-image-2.5-flare` by default, through OpenAI's Image API with an OpenAI key, or OpenRouter's with an OpenRouter key or on the nolune plan). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ## Files on disk
 
@@ -1158,13 +1158,24 @@ in the system prompt beyond the skills catalog. The built-in `generate-images` s
 how to write prompts, and how to run the Images page's messages.
 
 - **Providers** (`packages/core/src/image-generation.ts`). Models are named `<provider>/<model>`
-  (`openai/gpt-image-2.5-flare`, the default; `nolune config set image-model`). Each provider is one
-  module with the same shape, registered in `PROVIDERS`: its key check, its qualities, how many
-  input pictures it takes and which formats, and `generate`. `openai.ts` is the only one today:
-  `/v1/images/generations` for a prompt, `/v1/images/edits` (multipart) when pictures are given,
-  with plain `fetch` rather than the SDK. OpenRouter, fal or Higgsfield would each add a module;
-  shapes (`square`, `portrait`, `landscape`, `auto`) are provider-neutral and each module maps them
-  to its own sizes.
+  (`openai/gpt-image-2.5-flare`, `openrouter/black-forest-labs/flux.2-pro`,
+  `nolune-plan/openai/gpt-image-2.5-flare`; `nolune config set image-model`). Each provider is one
+  module with the same shape, registered in `PROVIDERS`: what it lacks before it can work (a key,
+  or the plan's link), its qualities, how many input pictures it takes and which formats, and
+  `generate`. With none set, the model is `gpt-image-2.5-flare` on the first of an OpenAI key, an
+  OpenRouter key and the nolune plan that nolune has (keys first: they're paid for already).
+  Shapes (`square`, `portrait`, `landscape`, `auto`) are provider-neutral and each module maps
+  them to its own sizes.
+- **OpenAI** (`openai.ts`): `/v1/images/generations` for a prompt, `/v1/images/edits` (multipart)
+  when pictures are given, with plain `fetch` rather than the SDK.
+- **OpenRouter's Image API** (`openrouter-images.ts`), for `openrouter` and `nolune-plan` alike (an
+  `ImageApi` each, as chats have a `ChatApi`): `POST /images` with the prompt, pictures to start
+  from as data URLs (`input_references`), and the picture back as base64 with its type; 55 models
+  in October 2026, FLUX.2, Seedream, Gemini, Recraft, Qwen and gpt-image among them. Models take
+  different parameters, which `GET /images/models` lists for each, so a request is fitted to its
+  model first (`fitImageRequest`): the nearest aspect ratio it makes, as many requests as its `n`
+  allows, and a plain no for what it can't do (a transparent background, a quality it lacks, more
+  input pictures than it takes) before anything is paid for.
 - **Keys** live in `config.json` (`nolune key set openai` or Models & keys), with `OPENAI_API_KEY` as a
   fallback, and are read by the CLI, so the gateway itself never calls the image API.
   `OPENAI_BASE_URL` points it at a proxy or a compatible server, as in OpenAI's SDKs.
@@ -1868,8 +1879,8 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
 _Built, not open yet._ nolune's API (`packages/api`) signs people in, links gateways, keeps the
 limits, passes chats and embeddings on to OpenRouter, and sells the plan through Stripe (its
 account page and webhook); nolune's side links to it and runs chats, memory search and their
-errors on it. Still to come: pictures, deploying the API (and Stripe's live mode), and automations
-that wait out a limit. Until the API
+errors on it, and makes pictures on it. Still to come: deploying the API (and Stripe's live mode),
+and automations that wait out a limit. Until the API
 is open to everyone, the web UI offers the plan only when `NOLUNE_PLAN_API_URL` points nolune at
 one (`nolunePlanOffered`); the CLI always has it.
 
@@ -1883,8 +1894,8 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
 - **What it is.** `nolune-plan`, a third plan in `plans.ts`. As on the ChatGPT plan, nolune runs the
   loop and makes the requests itself. They go to nolune's API (`https://api.nolune.dev/v1`), a
   service of nolune's own like the relay, which checks the plan's token, counts what each request
-  costs and passes it on. Upstream is OpenRouter for chats and embeddings and FAL for pictures, on
-  nolune's accounts there, rather than nolune reselling its own accounts with each model's maker.
+  costs and passes it on. Upstream is OpenRouter for all three, chats, pictures and embeddings, on
+  nolune's account there, rather than nolune reselling its own accounts with each model's maker.
   The service is a package of its own (`packages/api`), not part of the npm package: a SvelteKit
   app (adapter-node, like the gateway's) for both the API and its few pages, on Postgres. Only
   the API: nolune itself, on the family's computer, keeps its SQLite file and needs no database
@@ -1955,11 +1966,17 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   extensions, which is why nolune runs its own rather than offering Nous Portal as a provider.
 - **No Files API**, as on the other plans: every family's files would be on nolune's one OpenRouter
   account, where one family could name another's `file_id`. Pictures and PDFs go inline.
-- **Pictures.** A `nolune` module in `image-generation.ts`'s `PROVIDERS`. The API takes OpenAI's
-  Images API (`/v1/images/generations`, `/v1/images/edits`), so the module is `openai.ts`'s
-  requests at nolune's address with the plan's token; behind it is FAL's catalog, as behind Nous
-  Portal's. Image models are `nolune/<model>` (`nolune/flux-2`), and the plan's default is used
-  when no image model is set and there's no OpenAI key.
+- **Pictures.** `nolune-plan` in `image-generation.ts`'s `PROVIDERS`: OpenRouter's Image API
+  (`openrouter-images.ts`) at nolune's address with the plan's token (`NOLUNE_PLAN_IMAGES`), which
+  passes requests on as it does chats, and lists OpenRouter's image models
+  (`GET /v1/images/models`). Rather than FAL, as first planned: OpenRouter's catalog has the same
+  models, says what each request cost as chats do, and is one account and one ledger. Image models
+  are `nolune-plan/<OpenRouter's id>`, and the plan's `gpt-image-2.5-flare` is used when none is set
+  and there's no key. The command is part of the turn that ran it (`X-Nolune-Turn: continue`), and
+  background work in a hidden chat or a trigger's script (`NOLUNE_USE`, which the runner and the
+  scheduler set for commands). At most 4 pictures a request and none streamed; and a picture goes
+  on to the end and is charged even when whoever asked went away, since OpenRouter makes, and
+  bills, it anyway.
 - **Embeddings.** `nolune-plan` joins `EMBEDDING_PROVIDERS`, with `text-embedding-3-small` through
   OpenRouter. Auto picks it last, after the keys, which are paid for already and don't count
   against the plan's limits. A source is its address and model, so moving onto the plan makes every
@@ -1982,7 +1999,10 @@ locks the person's row first, so requests that end together each add what they s
   cost is the two together (`costOf` in `openrouter.ts`). A stream cut off before its last chunk
   (someone pressed Stop, the gateway went away) cancels OpenRouter's too, and is charged from
   OpenRouter's record of the generation (`GET /generation?id=`), asked 5 s, 20 s, 1 min and 3 min
-  later: it isn't there at once, and was in about 25 s when tried. FAL prices each picture.
+  later: it isn't there at once, and was in about 25 s when tried. Pictures are charged the same
+  way, from their reply's usage (or their generation, by the `x-generation-id` header), and count
+  against the 5-hour and weekly limits like chats: a FLUX.2 klein picture costs $0.015, one of
+  `gpt-image-2.5-flare`'s at low quality about the same.
 - **Three limits**, each a share of the plan's credits, set on the plan's product in Stripe (see
   [Payments](#payments)). The one plan to start with, Family, is $20 a month for $25 of credits:
 
@@ -2058,8 +2078,8 @@ locks the person's row first, so requests that end together each add what they s
 - **Automations** refused by a limit don't fail: the run waits and starts again when the limit
   does, and the bell says so once. A subagent refused by one ends with the error, which its parent
   hears from `nolune agent watch`.
-- **Pictures.** `nolune generate image` asks for the plan's usage before it says it has started, as
-  it checks a key now, so a refused picture is said at once rather than after the wait.
+- **Pictures.** A refused picture is said at once, in the same words as a chat's limit: the API
+  refuses before asking OpenRouter, so nothing waits for a picture that won't come.
 
 ### Trust and terms
 
@@ -2162,7 +2182,8 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 file cache, runner, media, users/invites/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
-                openai.ts), image templates and assistant avatars.
+                openai.ts, and openrouter-images.ts for OpenRouter and the nolune plan), image
+                templates and assistant avatars.
                 Built-in skills in packages/core/skills, built-in templates in
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
@@ -2186,7 +2207,7 @@ packages/api    @nolune/api. nolune's API for the nolune plan (see [The nolune
                 for gateways; bearer tokens), the plan's credits and limits (limits.ts, kept by
                 accounts.ts), selling it through Stripe (billing.ts: Checkout, the portal, the
                 webhook), the pages (sign-in, link, the plan), and /v1: usage, models, and
-                chats and embeddings passed on to OpenRouter (proxy.ts, openrouter.ts, with
+                chats, pictures and embeddings passed on to OpenRouter (proxy.ts, openrouter.ts, with
                 stream.ts reading a stream's usage as it goes on). Its tests run on
                 PGlite, Postgres in the test's own process. Deployed next to the relay, not part
                 of the npm package.
@@ -2308,8 +2329,8 @@ signing.
 - The ChatGPT plan: "Using ChatGPT plan" with a Manage usage link by the composer, as OpenAI's UI
   guidelines ask; a ChatGPT account per profile (each would be a registration of its own, which
   Sign in with ChatGPT allows).
-- Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
-  in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
+- Other image providers (fal, Higgsfield): a module each next to `openai.ts` and an entry in
+  `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
 - Auto mode: house rules an admin writes for the check (Claude Code's environment, block and allow
   slots), a probe that warns the agent about prompt injection in what its commands print, and a
   look at everything a subagent did when it hands back its result.
@@ -2317,6 +2338,6 @@ signing.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).
-- The nolune plan (see [The nolune plan](#the-nolune-plan)): Stripe's checkout and webhooks,
-  pictures through FAL, deploying the API next to the relay, and automations that wait out a limit
-  rather than fail; then opening it (`OPEN` in `nolune-plan.ts`).
+- The nolune plan (see [The nolune plan](#the-nolune-plan)): deploying the API next to the relay,
+  and automations that wait out a limit rather than fail; then opening it (`OPEN` in
+  `nolune-plan.ts`).

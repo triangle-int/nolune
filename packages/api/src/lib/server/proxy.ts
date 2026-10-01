@@ -10,7 +10,14 @@ import {
 	type Admission,
 	type Request as PlanRequest
 } from './limits.ts';
-import { chatModels, costOf, EMBEDDING_MODELS, type Model, type OpenRouter } from './openrouter.ts';
+import {
+	chatModels,
+	costOf,
+	EMBEDDING_MODELS,
+	type ImageModel,
+	type Model,
+	type OpenRouter
+} from './openrouter.ts';
 import { RateLimit } from './rate-limit.ts';
 import { tapStream } from './stream.ts';
 
@@ -19,7 +26,7 @@ import { tapStream } from './stream.ts';
  * the plan's limits before it goes, passed on as it came with nolune's key (and `max_tokens`, when
  * it asks for more or none), and charged what OpenRouter says it cost once it's done: from the
  * reply, a stream's last chunk, or for a stream cut off before then, OpenRouter's record of the
- * generation, asked a few times as it comes in.
+ * generation, asked a few times as it comes in. Pictures go to OpenRouter's Image API the same way.
  */
 
 /** The most a chat request may write: set when it asks for more, or says nothing. */
@@ -28,8 +35,12 @@ export const MAX_TOKENS = 32_000;
 const AT_ONCE = 8;
 /** When to ask again what a cut-off stream cost: OpenRouter has it within a minute or so. */
 const SETTLE_AFTER = [5_000, 20_000, 60_000, 180_000];
+/** Pictures one request may ask for: each costs cents, and more at once is almost always a slip. */
+export const MAX_IMAGES = 4;
 
-export type Endpoint = 'chat' | 'embedding';
+export type Endpoint = 'chat' | 'embedding' | 'image';
+
+const PATHS = { chat: '/chat/completions', embedding: '/embeddings', image: '/images' } as const;
 
 export interface ProxyOptions {
 	db: Db;
@@ -134,7 +145,10 @@ export class Proxy {
 		}
 		const modelId = typeof json.model === 'string' ? json.model : '';
 		let model: Model | undefined;
-		if (endpoint === 'chat') {
+		if (endpoint === 'image') {
+			const refused = await this.imageRequestProblem(json, modelId);
+			if (refused) return refused;
+		} else if (endpoint === 'chat') {
 			// A variant (`:nitro`) is its model's.
 			const base = modelId.split(':')[0];
 			model = chatModels(await this.openrouter.models()).find((m) => m.id === base);
@@ -165,7 +179,7 @@ export class Proxy {
 		}
 
 		const request: PlanRequest = {
-			kind: endpoint === 'chat' ? 'chat' : 'embedding',
+			kind: endpoint,
 			use: headers.get('x-nolune-use') === 'background' ? 'background' : 'person',
 			continuing: headers.get('x-nolune-turn') === 'continue',
 			inputCost: endpoint === 'chat' ? inputCost(body, model) : undefined
@@ -201,9 +215,11 @@ export class Proxy {
 		let response: Response;
 		try {
 			response = await this.openrouter.forward(
-				endpoint === 'chat' ? '/chat/completions' : '/embeddings',
+				PATHS[endpoint],
 				endpoint === 'chat' ? capped(body, json) : body,
-				signal
+				// A picture is made, and paid for at OpenRouter, even when whoever asked goes away
+				// before it's back: it goes on to the end, and is charged like any other.
+				endpoint === 'image' ? undefined : signal
 			);
 		} catch (err) {
 			release();
@@ -264,7 +280,8 @@ export class Proxy {
 		}
 		const after = await settle(
 			costOf(reply.usage as Parameters<typeof costOf>[0]),
-			typeof reply.id === 'string' ? reply.id : null
+			// The Image API's replies carry no id; their headers do.
+			typeof reply.id === 'string' ? reply.id : response.headers.get('x-generation-id')
 		);
 		return new Response(text, {
 			status: response.status,
@@ -273,6 +290,47 @@ export class Proxy {
 				...usageHeader(after, this.now())
 			}
 		});
+	}
+
+	/** Why a picture request can't go: a model the plan doesn't offer, too many, or a stream. */
+	private async imageRequestProblem(
+		json: Record<string, unknown>,
+		modelId: string
+	): Promise<Response | null> {
+		let model: ImageModel | undefined;
+		try {
+			model = (await this.openrouter.imageModels()).find((m) => m.id === modelId);
+		} catch (err) {
+			this.log.error("[nolune api] OpenRouter's image models could not be listed:", err);
+			return apiError(
+				502,
+				'upstream_unreachable',
+				"nolune's API couldn't reach the model just now."
+			);
+		}
+		if (!model) {
+			return apiError(
+				400,
+				'model_not_offered',
+				`The nolune plan doesn't offer ${modelId || 'that model'} for pictures.`
+			);
+		}
+		const n = json.n ?? 1;
+		if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_IMAGES) {
+			return apiError(
+				400,
+				'too_many_images',
+				`Ask for between 1 and ${MAX_IMAGES} pictures at a time.`
+			);
+		}
+		if (json.stream === true) {
+			return apiError(
+				400,
+				'invalid_request',
+				"The nolune plan's pictures come whole, not streamed."
+			);
+		}
+		return null;
 	}
 
 	/** Charges a request that's done; one with no cost yet is charged once OpenRouter knows it. */

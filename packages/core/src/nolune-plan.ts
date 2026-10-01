@@ -1,12 +1,13 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { ChatApi } from './openrouter.ts';
+import type { ImageApi } from './openrouter-images.ts';
 import { paths } from './paths.ts';
 import { PlanError, describePlanAccount, type PlanAccount, type PlanStatus } from './plans.ts';
 
 /*
  * The nolune plan: a subscription to nolune itself, whose API (packages/api, at api.nolune.dev)
- * passes chats and embeddings on to OpenRouter (DESIGN.md, The nolune plan). Linking this gateway
+ * passes chats, pictures and embeddings on to OpenRouter (DESIGN.md, The nolune plan). Linking this gateway
  * to it is a device code (OAuth's device authorization grant): nolune asks the API for one, shows
  * its code and link, and asks every few seconds until someone signed in on the link page approves
  * it. The API then gives a token, kept in ~/.nolune/nolune-plan.json and sent as a bearer token on
@@ -298,6 +299,36 @@ export const NOLUNE_PLAN: ChatApi = {
 async function planToken(): Promise<string> {
 	return nolunePlanToken();
 }
+
+/**
+ * The plan's pictures: openrouter-images.ts's requests, on nolune's API with the plan's token.
+ * `nolune generate image` is a command the agent runs inside a turn, so it goes on with that turn,
+ * and a hidden chat's (NOLUNE_USE, which the runner sets) is background work.
+ */
+export const NOLUNE_PLAN_IMAGES: ImageApi = {
+	provider: 'nolune-plan',
+	label: 'the nolune plan',
+	baseURL: () => `${nolunePlanApiUrl()}/v1`,
+	key: nolunePlanToken,
+	headers: () => ({
+		'X-Nolune-Use': process.env.NOLUNE_USE === 'background' ? 'background' : 'person',
+		...(process.env.NOLUNE_CONVERSATION_ID ? { 'X-Nolune-Turn': 'continue' } : {})
+	}),
+	failure: (status, error) => {
+		if (status === 401) forget();
+		if (status === 413) {
+			return new PlanError(
+				'The pictures to start from are too large to send to the nolune plan.',
+				null
+			);
+		}
+		const message = typeof error?.message === 'string' ? `: ${error.message}` : '.';
+		return (
+			planRefusal(status, error) ?? new PlanError(`nolune's API answered ${status}${message}`, null)
+		);
+	},
+	after: usageSoon
+};
 
 // --- linking ---
 

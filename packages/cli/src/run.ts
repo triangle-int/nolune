@@ -7,7 +7,7 @@ import {
 	API_KEYS,
 	ApiKeyError,
 	CustomProviderError,
-	DEFAULT_IMAGE_MODEL,
+	configuredImageModel,
 	DEFAULT_PORT,
 	INVITE_DAYS,
 	MAX_MEDIA_BYTES,
@@ -774,7 +774,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				} else if (key === 'host') c.host = value;
 				else if (key === 'origin') c.origin = value.replace(/\/+$/, '');
 				else if (key === 'image-model') {
-					const current = parseImageModel(c.imageModel || DEFAULT_IMAGE_MODEL);
+					const current = parseImageModel(c.imageModel || configuredImageModel());
 					const { provider, model } = parseImageModel(value, current.provider);
 					c.imageModel = `${provider}/${model}`;
 				} else if (key === 'claude-path') c.claudePath = value;

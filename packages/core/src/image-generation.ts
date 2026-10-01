@@ -1,19 +1,39 @@
 import { readFileSync, statSync } from 'node:fs';
 import { basename, extname } from 'node:path';
-import { apiKeyHelp, configuredApiKey, readConfig, type ApiKeyProvider } from './config.ts';
+import {
+	API_KEYS,
+	apiKeyHelp,
+	configuredApiKey,
+	readConfig,
+	type ApiKeyProvider
+} from './config.ts';
 import { inspectImage, prepareImage, stripJpegMetadata, type ImageMediaType } from './images.ts';
+import { NOLUNE_PLAN_IMAGES, nolunePlanToken } from './nolune-plan.ts';
 import { OPENAI_MAX_INPUT_IMAGES, OPENAI_QUALITIES, generateWithOpenAI } from './openai.ts';
+import {
+	IMAGE_API_MAX_INPUT_IMAGES,
+	IMAGE_API_QUALITIES,
+	OPENROUTER_IMAGES,
+	generateWithImageApi
+} from './openrouter-images.ts';
 
 /*
  * `nolune generate image`: making pictures with an image model. The agent runs it like any other
- * command, so the gateway has no code for it. Each provider is a module with the same shape
- * (openai.ts today); openrouter, fal or higgsfield would each add one and an entry in PROVIDERS.
+ * command, so the gateway has no code for it. Each provider is a module with the same shape:
+ * OpenAI's Image API (openai.ts), and OpenRouter's (openrouter-images.ts), with an OpenRouter key
+ * or on the nolune plan.
  */
 
-export const IMAGE_PROVIDERS = ['openai'] as const;
+export const IMAGE_PROVIDERS = ['openai', 'openrouter', 'nolune-plan'] as const;
 export type ImageProvider = (typeof IMAGE_PROVIDERS)[number];
 
 export const DEFAULT_IMAGE_MODEL = 'openai/gpt-image-2.5-flare';
+/** The same model on each provider; the first one nolune has makes pictures when none is set. */
+const DEFAULT_MODELS: Record<ImageProvider, string> = {
+	openai: 'gpt-image-2.5-flare',
+	openrouter: 'openai/gpt-image-2.5-flare',
+	'nolune-plan': 'openai/gpt-image-2.5-flare'
+};
 
 /** The shapes every provider understands. Providers map them to their own sizes. */
 export const IMAGE_SHAPES = ['square', 'portrait', 'landscape', 'auto'] as const;
@@ -58,8 +78,11 @@ export interface GeneratedImage {
 interface ProviderModule {
 	/** The provider's name for people. */
 	label: string;
-	/** Whose API key it uses (config.ts's API_KEYS). */
-	key: ApiKeyProvider;
+	/**
+	 * What it lacks before it can make pictures, in words, and the API key that would add it (null
+	 * for the plan, which is linked instead); null when it's ready.
+	 */
+	missing: () => { problem: string; key: ApiKeyProvider | null } | null;
 	qualities: readonly string[];
 	maxInputImages: number;
 	/** Formats it accepts for input images; others are converted first. */
@@ -67,14 +90,44 @@ interface ProviderModule {
 	generate: (request: ImageRequest) => Promise<GeneratedImage[]>;
 }
 
+function needsKey(key: ApiKeyProvider): ProviderModule['missing'] {
+	return () =>
+		configuredApiKey(key)
+			? null
+			: { problem: `No ${API_KEYS[key].label} API key yet. ${apiKeyHelp(key)}`, key };
+}
+
 const PROVIDERS: Record<ImageProvider, ProviderModule> = {
 	openai: {
 		label: 'OpenAI',
-		key: 'openai',
+		missing: needsKey('openai'),
 		qualities: OPENAI_QUALITIES,
 		maxInputImages: OPENAI_MAX_INPUT_IMAGES,
 		inputTypes: ['image/png', 'image/jpeg', 'image/webp'],
 		generate: generateWithOpenAI
+	},
+	openrouter: {
+		label: 'OpenRouter',
+		missing: needsKey('openrouter'),
+		qualities: IMAGE_API_QUALITIES,
+		maxInputImages: IMAGE_API_MAX_INPUT_IMAGES,
+		inputTypes: ['image/png', 'image/jpeg', 'image/webp'],
+		generate: (request) => generateWithImageApi(OPENROUTER_IMAGES, request)
+	},
+	'nolune-plan': {
+		label: 'the nolune plan',
+		missing: () => {
+			try {
+				nolunePlanToken();
+				return null;
+			} catch (err) {
+				return { problem: (err as Error).message, key: null };
+			}
+		},
+		qualities: IMAGE_API_QUALITIES,
+		maxInputImages: IMAGE_API_MAX_INPUT_IMAGES,
+		inputTypes: ['image/png', 'image/jpeg', 'image/webp'],
+		generate: (request) => generateWithImageApi(NOLUNE_PLAN_IMAGES, request)
 	}
 };
 
@@ -123,20 +176,30 @@ export function checkImageModel(value?: string): string {
 		value?.trim() || configuredImageModel(),
 		configuredProvider()
 	);
-	const entry = PROVIDERS[provider];
-	if (!configuredApiKey(entry.key)) {
-		throw new Error(`No ${entry.label} API key. ${apiKeyHelp(entry.key)}`);
-	}
+	const missing = PROVIDERS[provider].missing();
+	if (missing) throw new Error(missing.problem);
 	return `${provider}/${model}`;
 }
 
-/** The configured image model, or the default. */
+/**
+ * The model when none is set: the default model on the first of an OpenAI key, an OpenRouter key
+ * and the nolune plan that nolune has (the keys first: they're paid for already, and their pictures
+ * count against no plan's limits); OpenAI's when it has none of them.
+ */
+function autoImageModel(): string {
+	const ready = IMAGE_PROVIDERS.find((provider) => !PROVIDERS[provider].missing());
+	return ready ? `${ready}/${DEFAULT_MODELS[ready]}` : DEFAULT_IMAGE_MODEL;
+}
+
+/** The configured image model, or the one picked for it (`autoImageModel`). */
 export function configuredImageModel(): string {
+	let set: string | undefined;
 	try {
-		return readConfig().imageModel || DEFAULT_IMAGE_MODEL;
+		set = readConfig().imageModel;
 	} catch {
-		return DEFAULT_IMAGE_MODEL;
+		// No config yet: picked, as when none is set.
 	}
+	return set || autoImageModel();
 }
 
 export interface ImageGenerationStatus {
@@ -158,10 +221,8 @@ export function imageGenerationStatus(): ImageGenerationStatus {
 	} catch (err) {
 		return { model, ready: false, problem: (err as Error).message, missingKey: null };
 	}
-	if (!configuredApiKey(provider.key)) {
-		const problem = `No ${provider.label} API key yet. ${apiKeyHelp(provider.key)}`;
-		return { model, ready: false, problem, missingKey: provider.key };
-	}
+	const missing = provider.missing();
+	if (missing) return { model, ready: false, problem: missing.problem, missingKey: missing.key };
 	return { model, ready: true, problem: null, missingKey: null };
 }
 
@@ -260,7 +321,8 @@ export async function generateImages(options: GenerateOptions): Promise<{
 	}
 	const paths = options.images ?? [];
 	if (paths.length > provider.maxInputImages) {
-		throw new Error(`${provider.label} takes at most ${provider.maxInputImages} input images.`);
+		const who = provider.label[0].toUpperCase() + provider.label.slice(1);
+		throw new Error(`${who} takes at most ${provider.maxInputImages} input images.`);
 	}
 
 	const inputs: InputImage[] = [];

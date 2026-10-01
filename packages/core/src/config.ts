@@ -29,8 +29,8 @@ export interface Config {
 	 */
 	claudePath?: string;
 	/**
-	 * What `nolune generate image` uses, as `<provider>/<model>`. Defaults to
-	 * `openai/gpt-image-2.5-flare`.
+	 * What `nolune generate image` uses, as `<provider>/<model>`. Unset: gpt-image-2.5-flare on
+	 * the first of an OpenAI key, an OpenRouter key and the nolune plan that nolune has.
 	 */
 	imageModel?: string;
 	/**
