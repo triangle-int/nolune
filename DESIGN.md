@@ -2057,10 +2057,11 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   Transport Security allows with `NSAllowsLocalNetworking`.
 - **The web app** (`BrowserController.swift`) is as Safari shows it, with `nolune/<version>` at the
   end of the user agent. It stays inside the safe area and above the keyboard, so the composer is
-  always in sight, and the page's background (WebKit's `underPageBackgroundColor`) fills the edges,
-  with a status bar that reads on it. That's why the app is UIKit at the root: SwiftUI can't choose
-  the status bar's style. Links elsewhere open in Safari, and new windows of the family's own pages
-  load in place. Files the agent hands over (downloads) open in Quick Look, which shares or saves
+  always in sight, and the page's background fills the edges, with a status bar that reads on it: a
+  script the app adds to the family's pages says the color of `<body>` (WebKit's own
+  `underPageBackgroundColor` reads clear there), and again when the theme changes. That's why the
+  app is UIKit at the root: SwiftUI can't choose the status bar's style. Links elsewhere open in
+  Safari, and new windows of the family's own pages load in place. Files the agent hands over (downloads) open in Quick Look, which shares or saves
   them; `alert`, `confirm` and `prompt` are native alerts; the file picker and camera are WebKit's.
 - **Notifications** (`Push.swift`). Once someone has signed in (a page of the family's has
   loaded, or the web app moved to one, that isn't the sign-in or an invite page, an error, or a

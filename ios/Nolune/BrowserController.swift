@@ -45,6 +45,9 @@ final class BrowserController: UIViewController {
 		configuration.applicationNameForUserAgent = "Mobile/15E148 nolune/\(Bundle.main.version)"
 		configuration.allowsInlineMediaPlayback = true
 		configuration.userContentController.add(ScriptHandler(self), name: "nolune")
+		configuration.userContentController.addUserScript(
+			WKUserScript(source: BrowserController.pageColor, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+		)
 
 		let webView = WKWebView(frame: .zero, configuration: configuration)
 		webView.navigationDelegate = self
@@ -80,9 +83,6 @@ final class BrowserController: UIViewController {
 		observations = [
 			webView.observe(\.url, options: [.new]) { [weak self] _, _ in
 				Task { @MainActor in self?.pageChanged() }
-			},
-			webView.observe(\.underPageBackgroundColor, options: [.new]) { [weak self] _, _ in
-				Task { @MainActor in self?.colorChanged() }
 			}
 		]
 
@@ -159,8 +159,37 @@ final class BrowserController: UIViewController {
 		}
 	}
 
-	private func colorChanged() {
-		view.backgroundColor = webView.underPageBackgroundColor
+	/**
+	 * Says the page's background (`color` messages), now and whenever it changes: the web app's
+	 * theme, picked in its settings or following the system's, is a class and a color scheme on
+	 * `<html>`. Its background is on `<body>`, which WebKit's own `underPageBackgroundColor`
+	 * doesn't see (it reads clear there).
+	 */
+	private static let pageColor = """
+		(() => {
+			const send = () => {
+				for (const element of [document.body, document.documentElement]) {
+					const color = element && getComputedStyle(element).backgroundColor;
+					if (color && color !== 'transparent' && color !== 'rgba(0, 0, 0, 0)') {
+						window.webkit.messageHandlers.nolune.postMessage({ type: 'color', value: color });
+						return;
+					}
+				}
+			};
+			send();
+			addEventListener('load', send);
+			new MutationObserver(send).observe(document.documentElement, {
+				attributes: true,
+				attributeFilter: ['class', 'style']
+			});
+			matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => setTimeout(send, 50));
+		})();
+		"""
+
+	/// The page's background around it, with a status bar that reads on it.
+	private func colorChanged(_ css: String) {
+		guard let color = UIColor(css: css) else { return }
+		view.backgroundColor = color
 		setNeedsStatusBarAppearanceUpdate()
 	}
 
@@ -169,13 +198,19 @@ final class BrowserController: UIViewController {
 		registerDevice()
 	}
 
-	/// A message from the page (packages/web/src/lib/ios.ts).
-	fileprivate func received(_ type: String) {
-		guard type == "connect" else { return }
-		// This nolune stops sending notifications here first.
-		Task {
-			await Push.unregister(on: webView)
-			model.disconnect()
+	/// A message from the page: its web app's (packages/web/src/lib/ios.ts), or `pageColor`'s.
+	fileprivate func received(_ type: String, _ value: String?) {
+		switch type {
+		case "connect":
+			// This nolune stops sending notifications here first.
+			Task {
+				await Push.unregister(on: webView)
+				model.disconnect()
+			}
+		case "color":
+			if let value { colorChanged(value) }
+		default:
+			break
 		}
 	}
 
@@ -290,7 +325,6 @@ extension BrowserController: WKNavigationDelegate {
 
 	func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
 		spinner.stopAnimating()
-		colorChanged()
 		pageChanged()
 	}
 
@@ -436,8 +470,9 @@ private final class ScriptHandler: NSObject, WKScriptMessageHandler {
 			let body = message.body as? [String: Any],
 			let type = body["type"] as? String
 		else { return }
+		let value = body["value"] as? String
 		let controller = controller
-		Task { @MainActor in controller?.received(type) }
+		Task { @MainActor in controller?.received(type, value) }
 	}
 }
 
@@ -447,6 +482,14 @@ extension UIColor {
 	/// The web app's background (packages/web/src/routes/layout.css), until the page says its own.
 	static let page = UIColor { traits in
 		traits.userInterfaceStyle == .dark ? UIColor(red: 0x21 / 255, green: 0x21 / 255, blue: 0x21 / 255, alpha: 1) : .white
+	}
+
+	/// A color as `getComputedStyle` gives it, `rgb(33, 33, 33)`, when it's opaque; nil otherwise.
+	convenience init?(css: String) {
+		guard css.hasPrefix("rgb") else { return nil }
+		let numbers = css.split(whereSeparator: { !"0123456789.".contains($0) }).compactMap { Double($0) }
+		guard numbers.count >= 3, numbers.count < 4 || numbers[3] > 0.99 else { return nil }
+		self.init(red: numbers[0] / 255, green: numbers[1] / 255, blue: numbers[2] / 255, alpha: 1)
 	}
 
 	func isDark(in traits: UITraitCollection) -> Bool {
