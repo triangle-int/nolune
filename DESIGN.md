@@ -1880,7 +1880,9 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   costs and passes it on. Upstream is OpenRouter for chats and embeddings and FAL for pictures, on
   nolune's accounts there, rather than nolune reselling its own accounts with each model's maker.
   The service is a package of its own (`packages/api`), not part of the npm package: a SvelteKit
-  app (adapter-node, like the gateway's) for both the API and its few pages, on Postgres.
+  app (adapter-node, like the gateway's) for both the API and its few pages, on Postgres. Only
+  the API: nolune itself, on the family's computer, keeps its SQLite file and needs no database
+  server, and nothing of the API's (Postgres's drivers included) is in the npm package.
 - **Next to the relay, not in it.** The API runs on the relay's server, behind its Caddy, as a
   container of its own, with Postgres in another. They do different jobs: the relay passes bytes
   and keeps a JSON file, the API keeps money, which wants a database's transactions, and Postgres
