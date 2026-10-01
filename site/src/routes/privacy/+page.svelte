@@ -2,6 +2,7 @@
 	// nolune's privacy policy, at nolune.dev/privacy: the App Store asks for one, and the iOS app
 	// links it. Keep it to what the code does: packages/relay for the relay, ios/ for the app.
 	const GITHUB = 'https://github.com/triangle-int/nolune';
+	const EMAIL = 'timur@triangleint.com';
 	const UPDATED = 'October 1, 2026';
 </script>
 
@@ -131,7 +132,8 @@
 		<p>
 			When this changes, we'll update this page and the date at the top; every version is in
 			<a href="{GITHUB}/commits/main/site/src/routes/privacy/+page.svelte">nolune's repository</a>.
-			For questions, <a href="{GITHUB}/issues">open an issue on GitHub</a>.
+			For questions, write to <a href="mailto:{EMAIL}">{EMAIL}</a>, or
+			<a href="{GITHUB}/issues">open an issue on GitHub</a>.
 		</p>
 	</article>
 </main>
