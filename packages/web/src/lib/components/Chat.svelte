@@ -812,11 +812,16 @@
 {/if}
 
 <div class="relative min-h-0 flex-1">
+	<!--
+		Relative, so what's positioned in the chat (text only screen readers read, say) is placed in
+		it. Placed outside it, deep down a long chat, it would stretch the page itself, and scrolling
+		past the chat's end would carry the page up with it, leaving empty space under the composer.
+	-->
 	<div
 		bind:this={scroller}
 		{@attach autoscroll}
 		{@attach pictureClicks((gallery) => (viewing = gallery))}
-		class="@container/chat h-full overflow-y-auto [overflow-anchor:none]"
+		class="@container/chat relative h-full overflow-y-auto [overflow-anchor:none]"
 	>
 		<div
 			class="mx-auto flex max-w-3xl flex-col gap-7 px-4 pt-4 sm:px-6"
