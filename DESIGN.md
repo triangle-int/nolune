@@ -1929,14 +1929,14 @@ spread out.
 
 - **Counted in dollars**, not tokens: models' prices differ fifty times over, and pictures cost too.
   OpenRouter says what each request cost (`usage.cost`); FAL prices each picture.
-- **Three limits**, each a share of the plan's credits, set for each tier on the API. For a plan
-  with $20 of credits a month, for example:
+- **Three limits**, each a share of the plan's credits, set on the plan's product in Stripe (see
+  [Payments](#payments)). The one plan to start with, Family, is $20 a month for $15 of credits:
 
-  | Limit   | For example | Starts again                                              |
-  | ------- | ----------- | --------------------------------------------------------- |
-  | 5 hours | $1.50       | 5 hours after the request that opened the window          |
-  | Week    | $7          | each week, on the day and at the hour the plan started    |
-  | Month   | $20         | with each payment; up to half of what's left carries over |
+  | Limit   | Family | Starts again                                               |
+  | ------- | ------ | ---------------------------------------------------------- |
+  | 5 hours | $1.10  | 5 hours after the request that opened the window           |
+  | Week    | $5.25  | each week, on the day and at the hour the plan started     |
+  | Month   | $15    | with each payment; up to $7.50 of what's left carries over |
 
 - **How they're sized.** A month holds about 4.3 weeks, and 4.3 weeks' limits come to about 1.5
   times the credits, so ordinary use never meets the weekly limit and only a burst does. About
@@ -2001,6 +2001,16 @@ spread out.
 
 Triangle Interactive, LLC sells the plan, through Stripe.
 
+- **The catalog.** Two products, in the same Stripe account as Gensprite's and named the same way:
+  `nolune Family` ($20 a month, its price's lookup key `nolune-plan-family`) and
+  `nolune extra credits` ($10 once, `nolune-pack-10`). What each grants is in its metadata, in
+  cents: `credits_cents` (1500 and 800), the plan's `limit_5h_cents`, `limit_week_cents` and
+  `rollover_cap_cents`, the pack's `expires_in_days`. The API reads them from the product of what
+  was paid, so another tier is another product rather than new code. Checkout finds prices by their
+  lookup keys.
+- **The margin.** Credits are model use at OpenRouter's prices, and the margin is the difference:
+  $15 of a $20 plan, $8 of a $10 pack. With every credit spent, Stripe's and Managed Payments'
+  fees and OpenRouter's on buying credits leave about 13%; credits not spent are the rest.
 - **Buying.** The account page on nolune.dev opens Stripe Checkout for a tier (a monthly Price for
   each) and Stripe's customer portal for changing the tier or the card, or cancelling. Extra
   credits are a one-time Checkout payment. Nothing is billed for use afterwards: the month's credits
@@ -2022,22 +2032,20 @@ Triangle Interactive, LLC sells the plan, through Stripe.
   doesn't need.
 - **Sales tax and VAT.** The EU and the UK tax digital services sold to people there from the
   first sale, for a seller outside them. Stripe Managed Payments makes Stripe the merchant of
-  record, which collects and pays those (`managed_payments` on the Checkout Session), when it takes
-  the product; otherwise Stripe Tax works them out and collects them, and the LLC registers where
-  it must.
+  record, which collects and pays those in over 80 countries: it's switched on in the Dashboard,
+  and each Checkout Session sets `managed_payments[enabled]`. It takes AI services since June 2026,
+  so both products have the tax code `txcd_10105001` (AI as a service, cloud based, personal use).
+  It sells to nobody in the countries Stripe restricts, Russia among them, which fits the API's
+  regions.
 - **Stripe and OpenRouter.** Stripe agreed to buy OpenRouter in August 2026. Gateways only know
   nolune's API, so whatever changes at OpenRouter is the API's to follow.
 
 ### Open questions
 
-- The tiers, and their prices and limits.
-- How credits are priced: at OpenRouter's prices with nolune's margin in the subscription, or with
-  a margin on each model's price.
+- More tiers, once Family's use is known.
 - Shares for each member of a family. The API knows only the gateway, so the gateway would count
   them (it knows who started each turn), from what each response says it cost (`x-nolune-cost`).
 - Whether background work's share should be an admin's setting.
-- Whether Stripe Managed Payments takes credits for AI models, or the LLC handles sales tax with
-  Stripe Tax.
 
 ## Code layout
 
