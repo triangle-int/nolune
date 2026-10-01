@@ -898,6 +898,10 @@ export const fr: Messages = {
 			askAdmin:
 				'Il me faut un modèle pour discuter. Demandez à la personne qui a installé nolune d’en ajouter un dans Modèles et clés ; tout le reste fonctionne déjà.',
 			choices: {
+				'nolune-plan': {
+					title: 'Abonnement nolune',
+					about: 'Discussions, images et recherche dans la mémoire en un abonnement, sans clé'
+				},
 				'claude-plan': {
 					title: 'Abonnement Claude',
 					about: 'Un abonnement Pro ou Max, via Claude Code sur cet ordinateur'
@@ -933,6 +937,16 @@ export const fr: Messages = {
 				starting: 'Préparation de la page de connexion de ChatGPT…',
 				tryAgain: 'Réessayer',
 				otherDevice: 'Vous vous connectez sur un autre appareil ?'
+			},
+			nolune: {
+				title: 'Associez nolune à votre abonnement',
+				about:
+					'Ouvrez la page d’association sur n’importe quel appareil, connectez-vous à votre compte nolune et vérifiez le code. Les discussions passent alors par votre abonnement, sans clé.',
+				open: 'Ouvrir la page d’association',
+				code: 'Votre code',
+				waiting: 'Dès que c’est associé là-bas, cette page continue d’elle-même.',
+				starting: 'Obtention d’un code…',
+				tryAgain: 'Réessayer'
 			}
 		},
 		avatar: {
@@ -1067,6 +1081,28 @@ export const fr: Messages = {
 		chatgptSignOutBody:
 			'Les discussions avec un préréglage d’abonnement ChatGPT ne fonctionneront plus tant que personne ne se sera reconnecté.',
 		signedOut: 'Déconnecté.',
+		nolunePlan: 'Abonnement nolune',
+		nolunePlanAbout:
+			'Discussions, images et recherche dans la mémoire avec un abonnement à nolune, sans clé d’API.',
+		nolunePlanLink: 'Associer',
+		nolunePlanStarting: 'Obtention d’un code…',
+		nolunePlanCheck: 'Vérifier',
+		nolunePlanUnlink: 'Dissocier',
+		nolunePlanOpen:
+			'Ouvrez {link} sur n’importe quel appareil, connectez-vous et vérifiez qu’il affiche ce code :',
+		nolunePlanLinkPage: 'la page d’association de nolune',
+		nolunePlanWaiting: 'Cette page continue d’elle-même dès que nolune est associé.',
+		nolunePlanLinked:
+			'Associé. Les discussions avec un préréglage d’abonnement nolune utilisent maintenant cet abonnement.',
+		nolunePlanUsage: (window: string, week: string, credits: string) =>
+			`5 heures : ${window} utilisé · cette semaine : ${week} · crédits restants : ${credits}`,
+		nolunePlanNotLinked: 'nolune n’est associé à aucun abonnement nolune.',
+		nolunePlanUnlinked: 'Dissocié.',
+		nolunePlanUnlinkedLocally:
+			'Dissocié ici, mais l’API de nolune n’a pas pu être prévenue : l’association prend fin d’elle-même si elle n’est pas utilisée.',
+		nolunePlanUnlinkTitle: 'Dissocier l’abonnement nolune ?',
+		nolunePlanUnlinkBody:
+			'Les discussions avec un préréglage d’abonnement nolune ne fonctionneront plus tant que nolune ne sera pas de nouveau associé.',
 		notAt: 'Introuvable à {path}, où {command} indique qu’il se trouve.',
 		notInstalled: 'Pas installé sur cet ordinateur.',
 		checkSignIn: 'Vérifier la connexion',
@@ -1113,7 +1149,9 @@ export const fr: Messages = {
 				'claude-plan':
 					'Claude Code ne l’indique pas : Auto ne connaît que ses modèles à 1M de contexte.',
 				'chatgpt-plan':
-					'Auto utilise la fenêtre que ChatGPT indique pour le modèle, s’il en indique une ; sinon elle reste inconnue.'
+					'Auto utilise la fenêtre que ChatGPT indique pour le modèle, s’il en indique une ; sinon elle reste inconnue.',
+				'nolune-plan':
+					'Auto utilise la fenêtre qu’OpenRouter indique pour le modèle et son fournisseur principal, l’abonnement nolune lui transmettant les requêtes.'
 			},
 			onPlan: 'Utilise l’abonnement Pro ou Max auquel Claude Code est connecté.',
 			noClaudeCode: 'Claude Code n’est pas encore installé : voir « Abonnement Claude » plus haut.',
@@ -1121,6 +1159,9 @@ export const fr: Messages = {
 				'Utilise l’abonnement ChatGPT de la personne connectée avec ChatGPT, plus haut.',
 			noChatGpt:
 				'Personne n’est encore connecté avec ChatGPT : voir « Abonnement ChatGPT » plus haut.',
+			onNolunePlan: 'Fonctionne avec l’abonnement nolune auquel ce nolune est associé (plus haut).',
+			noNolunePlan:
+				'nolune n’est encore associé à aucun abonnement nolune : voir « Abonnement nolune » plus haut.',
 			onKey: (provider: string) => `Utilise la clé d’API ${provider}.`,
 			noKey: (provider: string) =>
 				`Pas encore de clé d’API ${provider} : ajoutez-en une dans « Clés d’API » plus haut.`,

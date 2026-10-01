@@ -901,6 +901,10 @@ export const es: Messages = {
 			askAdmin:
 				'Necesito un modelo para chatear. Pide a quien instaló nolune que añada uno en Modelos y claves; lo demás ya funciona.',
 			choices: {
+				'nolune-plan': {
+					title: 'Plan de nolune',
+					about: 'Chats, imágenes y búsqueda en la memoria en una suscripción, sin claves'
+				},
 				'claude-plan': {
 					title: 'Plan de Claude',
 					about: 'Un plan Pro o Max, con Claude Code en este ordenador'
@@ -936,6 +940,16 @@ export const es: Messages = {
 				starting: 'Preparando la página de inicio de sesión de ChatGPT…',
 				tryAgain: 'Intentarlo de nuevo',
 				otherDevice: '¿Inicias sesión en otro dispositivo?'
+			},
+			nolune: {
+				title: 'Vincula nolune a tu plan',
+				about:
+					'Abre la página de vinculación en cualquier dispositivo, inicia sesión en tu cuenta de nolune y comprueba el código. Los chats irán con tu plan, sin claves.',
+				open: 'Abrir la página de vinculación',
+				code: 'Tu código',
+				waiting: 'En cuanto se vincule allí, esta página seguirá sola.',
+				starting: 'Obteniendo un código…',
+				tryAgain: 'Intentar de nuevo'
 			}
 		},
 		avatar: {
@@ -1067,6 +1081,28 @@ export const es: Messages = {
 		chatgptSignOutBody:
 			'Los chats con preajustes del plan de ChatGPT dejarán de funcionar hasta que alguien vuelva a iniciar sesión.',
 		signedOut: 'Sesión cerrada.',
+		nolunePlan: 'Plan de nolune',
+		nolunePlanAbout:
+			'Chats, imágenes y búsqueda en la memoria con una suscripción a nolune, sin claves de API.',
+		nolunePlanLink: 'Vincular',
+		nolunePlanStarting: 'Obteniendo un código…',
+		nolunePlanCheck: 'Comprobar',
+		nolunePlanUnlink: 'Desvincular',
+		nolunePlanOpen:
+			'Abre {link} en cualquier dispositivo, inicia sesión y comprueba que muestra este código:',
+		nolunePlanLinkPage: 'la página de vinculación de nolune',
+		nolunePlanWaiting: 'Esta página seguirá sola en cuanto nolune quede vinculado.',
+		nolunePlanLinked:
+			'Vinculado. Los chats con preajustes del plan de nolune ahora usan este plan.',
+		nolunePlanUsage: (window: string, week: string, credits: string) =>
+			`5 horas: ${window} usado · esta semana: ${week} · créditos restantes: ${credits}`,
+		nolunePlanNotLinked: 'nolune no está vinculado a un plan de nolune.',
+		nolunePlanUnlinked: 'Desvinculado.',
+		nolunePlanUnlinkedLocally:
+			'Desvinculado aquí, pero no se pudo avisar a la API de nolune: la vinculación termina sola si no se usa.',
+		nolunePlanUnlinkTitle: '¿Desvincular el plan de nolune?',
+		nolunePlanUnlinkBody:
+			'Los chats con preajustes del plan de nolune dejarán de funcionar hasta que nolune vuelva a vincularse.',
 		notAt: 'No está en {path}, donde {command} dice que está.',
 		notInstalled: 'No está instalado en este ordenador.',
 		checkSignIn: 'Comprobar la sesión',
@@ -1112,13 +1148,18 @@ export const es: Messages = {
 					'Auto usa la ventana que el servidor indica para el modelo, si la indica (vLLM lo hace); si no, queda como desconocida.',
 				'claude-plan': 'Claude Code no la indica: Auto solo conoce sus modelos de 1M de contexto.',
 				'chatgpt-plan':
-					'Auto usa la ventana que ChatGPT indica para el modelo, si la indica; si no, queda como desconocida.'
+					'Auto usa la ventana que ChatGPT indica para el modelo, si la indica; si no, queda como desconocida.',
+				'nolune-plan':
+					'Auto usa la ventana que OpenRouter indica para el modelo y su proveedor principal, ya que el plan de nolune le pasa las solicitudes.'
 			},
 			onPlan: 'Funciona con el plan Pro o Max con el que inició sesión Claude Code.',
 			noClaudeCode: 'Claude Code aún no está instalado: consulta «Plan de Claude», arriba.',
 			onChatGptPlan:
 				'Funciona con el plan de ChatGPT de quien haya iniciado sesión con ChatGPT, arriba.',
 			noChatGpt: 'Aún nadie ha iniciado sesión con ChatGPT: consulta «Plan de ChatGPT», arriba.',
+			onNolunePlan: 'Funciona con el plan de nolune al que está vinculado este nolune (arriba).',
+			noNolunePlan:
+				'nolune aún no está vinculado a un plan de nolune: consulta «Plan de nolune», arriba.',
 			onKey: (provider: string) => `Funciona con la clave de API de ${provider}.`,
 			noKey: (provider: string) =>
 				`Todavía no hay clave de API de ${provider}: añade una en «Claves de API», arriba.`,

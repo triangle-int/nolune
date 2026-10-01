@@ -74,6 +74,7 @@ const RESERVED = [
 	'xai',
 	'claude-plan',
 	'chatgpt-plan',
+	'nolune-plan',
 	'custom',
 	'custom-openai',
 	'custom-anthropic',

@@ -17,6 +17,7 @@ import {
 	checkApiKey,
 	checkCustomProvider,
 	chatGptPlanStatus,
+	nolunePlanStatus,
 	claudeExecutable,
 	configExists,
 	findCustomProvider,
@@ -162,6 +163,13 @@ Plans (chats on your own subscription instead of an API key)
   nolune chatgpt-plan logout                    sign out; chats on chatgpt-plan presets stop until
                                              someone signs in again
   nolune chatgpt-plan models                    the models the plan offers, for \`nolune preset add\`
+  nolune-plan: a subscription to nolune itself, which covers chats, pictures and memory search
+  with no keys at all, within its 5-hour and weekly limits. Linked with a code you approve on
+  nolune's page, from any device; nolune keeps the link in ~/.nolune/nolune-plan.json.
+  nolune nolune-plan setup                      link nolune to your plan, where needed
+  nolune nolune-plan logout                     unlink; chats on nolune-plan presets stop until it's
+                                             linked again
+  nolune nolune-plan models                     the models the plan offers, for \`nolune preset add\`
 
 Users (there's no sign-up page: admins add people here, or on the People page)
   nolune user create <name> <email> [--password P] [--admin]
@@ -173,7 +181,7 @@ Users (there's no sign-up page: admins add people here, or on the People page)
   nolune user list
 
 Model presets (shared by all profiles)
-  nolune preset add <model> [--provider anthropic|openai|openrouter|xai|claude-plan|chatgpt-plan|<custom>]
+  nolune preset add <model> [--provider anthropic|openai|openrouter|xai|claude-plan|chatgpt-plan|nolune-plan|<custom>]
                  [--name N] [--context-window TOKENS]
                                              the provider checks the model id first (anthropic
                                              unless given); OpenAI models other than the
@@ -324,7 +332,7 @@ function presetTarget(
 	if (!custom) {
 		const names = listCustomProviders().map((c) => c.name);
 		fail(
-			`no provider "${provider}". It's anthropic, openai, openrouter, xai, claude-plan, chatgpt-plan${names.length ? `, or a custom provider: ${names.join(', ')}` : ', or a custom provider added with `nolune provider add <name> <url>`'}.`
+			`no provider "${provider}". It's anthropic, openai, openrouter, xai, claude-plan, chatgpt-plan, nolune-plan${names.length ? `, or a custom provider: ${names.join(', ')}` : ', or a custom provider added with `nolune provider add <name> <url>`'}.`
 		);
 	}
 	const bare = model.startsWith(`${custom.id}/`) ? model.slice(custom.id.length + 1) : model;
@@ -693,6 +701,13 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						? `${chatgpt.signedIn} (nolune chatgpt-plan status checks it)`
 						: 'not signed in (nolune chatgpt-plan setup signs in)'
 				);
+				const noluneLink = await nolunePlanStatus();
+				row(
+					'nolune plan',
+					noluneLink.signedIn
+						? `${noluneLink.signedIn} (nolune nolune-plan status checks it)`
+						: 'not linked (nolune nolune-plan setup links it)'
+				);
 				const images = imageGenerationStatus();
 				row('images', `${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				row('embeddings', embeddingStatus());
@@ -847,6 +862,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 
 		case 'claude-plan':
 		case 'chatgpt-plan':
+		case 'nolune-plan':
 			return planCommand(io, group, action, rest);
 
 		case 'env': {

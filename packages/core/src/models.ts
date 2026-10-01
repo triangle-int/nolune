@@ -7,6 +7,7 @@ import type { ImageMediaType } from './images.ts';
 import * as custom from './custom-providers.ts';
 import { replyBlocks, toolCalls, type Message, type ToolCallBlock } from './format.ts';
 import * as openai from './openai-chat.ts';
+import { NOLUNE_PLAN, requireNolunePlan } from './nolune-plan.ts';
 import * as openrouter from './openrouter.ts';
 import * as xai from './xai.ts';
 import {
@@ -28,7 +29,8 @@ import {
  * The Claude plan is the exception (plans.ts): Claude Code runs the agent loop, so the runner
  * hands it whole turns (runPlanTurn) rather than calling streamTurn. Chats on the ChatGPT plan
  * are OpenAI's, with the plan's sign-in instead of a key (chatgpt-plan.ts), and so are chats on
- * xAI's Grok models, whose API is OpenAI's Responses API at xAI (xai.ts).
+ * xAI's Grok models, whose API is OpenAI's Responses API at xAI (xai.ts). Chats on the nolune plan
+ * are OpenRouter's code on nolune's API, with the plan's token (nolune-plan.ts).
  */
 
 /**
@@ -44,7 +46,8 @@ export const PROVIDERS = [
 	'custom-openai',
 	'custom-anthropic',
 	'claude-plan',
-	'chatgpt-plan'
+	'chatgpt-plan',
+	'nolune-plan'
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -61,7 +64,8 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
 	'custom-openai': custom.CUSTOM_LABELS['custom-openai'],
 	'custom-anthropic': custom.CUSTOM_LABELS['custom-anthropic'],
 	'claude-plan': 'Claude plan',
-	'chatgpt-plan': 'ChatGPT plan'
+	'chatgpt-plan': 'ChatGPT plan',
+	'nolune-plan': 'nolune plan'
 };
 
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -123,13 +127,18 @@ export async function streamTurn(opts: {
 	messages: Message[];
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
+	/** Background work (a hidden chat's turn), which the nolune plan keeps a share of its limits from. */
+	use?: openrouter.Use;
 }): Promise<ModelReply> {
-	const { provider, cacheKey, ...request } = opts;
+	const { provider, cacheKey, use, ...request } = opts;
 	if (isAgentPlan(provider)) {
 		throw new Error('Chats on the Claude plan run whole turns through runPlanTurn');
 	}
-	if (provider === 'openrouter') {
-		const reply = await openrouter.streamTurn({ ...request, cacheKey });
+	if (provider === 'openrouter' || provider === 'nolune-plan') {
+		const reply = await openrouter.streamTurn(
+			{ ...request, cacheKey, use },
+			provider === 'nolune-plan' ? NOLUNE_PLAN : openrouter.OPENROUTER
+		);
 		return fromContent(reply.content, reply.stopReason, reply.usage);
 	}
 	if (
@@ -175,16 +184,26 @@ export function summarizeAnthropicUsage(usage: Anthropic.Usage): Usage {
  * One short exchange at low effort, not streamed, for chores like naming a chat. `text` is null
  * when the reply didn't finish (a refusal, or cut off).
  */
-export async function quickReply(opts: {
+export async function quickReply(options: {
 	provider: Provider;
 	model: string;
 	system: string;
 	input: string;
 	maxTokens: number;
 	timeoutMs: number;
+	/**
+	 * For the nolune plan's limits: most exchanges are chores nobody waits on (the default);
+	 * auto mode's check of a command goes on a turn (`continuing`).
+	 */
+	use?: openrouter.Use;
+	continuing?: boolean;
 }): Promise<{ text: string | null; usage: Usage }> {
+	const { use, continuing, ...opts } = options;
 	if (opts.provider === 'claude-plan') return claudePlan.quickReply(opts);
 	if (opts.provider === 'openrouter') return openrouter.quickReply(opts);
+	if (opts.provider === 'nolune-plan') {
+		return openrouter.quickReply({ ...opts, use, continuing }, NOLUNE_PLAN);
+	}
 	if (
 		opts.provider === 'openai' ||
 		opts.provider === 'custom-openai' ||
@@ -255,6 +274,7 @@ export async function modelInputs(
 	model: string
 ): Promise<{ pictures: boolean; pdfs: boolean }> {
 	if (provider === 'openrouter') return openrouter.modelInputs(model);
+	if (provider === 'nolune-plan') return openrouter.modelInputs(model, NOLUNE_PLAN);
 	if (provider === 'xai') return xai.modelInputs(model);
 	if (custom.isCustomProvider(provider)) return custom.modelInputs();
 	return { pictures: true, pdfs: true };
@@ -280,6 +300,7 @@ export function readableMessages(
 	messages: Message[]
 ): Promise<Message[]> {
 	if (provider === 'openrouter') return openrouter.readableMessages(messages, model);
+	if (provider === 'nolune-plan') return openrouter.readableMessages(messages, model, NOLUNE_PLAN);
 	if (provider === 'xai') return xai.readableMessages(messages, model);
 	if (custom.isCustomProvider(provider)) return custom.readableMessages(messages, model);
 	return Promise.resolve(messages);
@@ -301,6 +322,10 @@ export async function fetchContextWindow(
 		return claudePlan.knownContextWindow(model);
 	}
 	if (provider === 'chatgpt-plan') return chatgptPlan.fetchContextWindow(model);
+	if (provider === 'nolune-plan') {
+		requireNolunePlan();
+		return openrouter.fetchContextWindow(model, NOLUNE_PLAN);
+	}
 	if (provider === 'openrouter') return openrouter.fetchContextWindow(model);
 	if (provider === 'xai') return xai.fetchContextWindow(model);
 	if (custom.isCustomProvider(provider)) return custom.fetchContextWindow(provider, model);
@@ -329,6 +354,7 @@ export interface ModelChoice {
 export async function listModels(provider: Provider, customId = ''): Promise<ModelChoice[]> {
 	if (provider === 'claude-plan') return claudePlan.listModels();
 	if (provider === 'chatgpt-plan') return chatgptPlan.listModels();
+	if (provider === 'nolune-plan') return openrouter.listModels(NOLUNE_PLAN);
 	if (provider === 'openrouter') return openrouter.listModels();
 	if (provider === 'xai') return xai.listModels();
 	if (custom.isCustomProvider(provider)) return custom.listModels(customId);

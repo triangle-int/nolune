@@ -335,8 +335,8 @@ read nolune's format.
 ### Plans
 
 `claude-plan` and `chatgpt-plan` run chats on someone's own subscription instead of an API key.
-(A third, a subscription to nolune itself that covers pictures and embeddings too, is designed in
-[The nolune plan](#the-nolune-plan) but not built.) They get there differently:
+(A third, `nolune-plan`, a subscription to nolune itself that covers pictures and embeddings too,
+is in [The nolune plan](#the-nolune-plan): built, and not open yet.) They get there differently:
 
 - **The Claude plan** runs Anthropic's own agent. Anthropic doesn't let other apps sign in to
   Claude accounts, so nolune doesn't: Claude Code, installed on this computer and unmodified, signs
@@ -1865,7 +1865,12 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
 
 ## The nolune plan
 
-_Not built yet: this is the design._
+_Built, not open yet._ nolune's API (`packages/api`) signs people in, links gateways, keeps the
+limits and passes chats and embeddings on to OpenRouter; nolune's side links to it and runs chats,
+memory search and their errors on it. Still to come: Stripe's checkout and webhooks, pictures,
+deploying the API, the usage by the composer, and automations that wait out a limit. Until the API
+is open to everyone, the web UI offers the plan only when `NOLUNE_PLAN_API_URL` points nolune at
+one (`nolunePlanOffered`); the CLI always has it.
 
 The two plans run chats on a subscription someone already has, and nothing else: pictures still
 need an OpenAI key, and search by meaning an OpenAI or OpenRouter one. The nolune plan is a
@@ -1898,33 +1903,48 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   and 10 to a network every 10 minutes, and takes 20 tries at codes from a network (its own limits:
   better-auth's apply to requests through its handler, not to the calls form actions make).
 - **Linking a gateway** is a device code (OAuth's device authorization grant, better-auth's
-  plugin): `nolune nolune-plan setup`, or Models & keys, asks `POST /api/auth/device/code` as
-  client `nolune` and shows the 8-letter code with the API's link page
+  plugin): nolune (`nolune-plan.ts`) asks `POST /api/auth/device/code` as client `nolune` and shows
+  the 8-letter code, read in fours (`FXGY-BXJD`), with the API's link page
   (`https://api.nolune.dev/link?user_code=…`, the code already in it). The person opens it on any
-  device, signs in, sees the code (which makes it theirs to approve) and links it, while the gateway
-  asks `/api/auth/device/token` every 5 seconds until it's linked, for 15 minutes at most. Unlike
-  the ChatGPT plan's sign-in, nothing comes back to `127.0.0.1`, so it works the same from a phone
-  through the relay.
+  device, signs in, sees the code (which makes it theirs to approve) and links it, while nolune
+  asks `/api/auth/device/token` every 5 seconds until it's linked, for 15 minutes at most; one link
+  at a time, which every page that starts one follows. Unlike the ChatGPT plan's sign-in, nothing
+  comes back to `127.0.0.1`, so it works the same from a phone through the relay. It's started
+  from `nolune nolune-plan setup` (which prints the page and the code), from the plan's row in
+  Models & keys (which shows them and asks until it's linked), or from the welcome's model step,
+  where the plan comes first, across the top, and is the one picked when no key is set.
 - **What's kept** is `~/.nolune/nolune-plan.json` (mode 600, written whole and renamed into place),
   as `chatgpt.json` is: the account's email and the token the link gave, never shown or logged. The
   token is a better-auth session, sent as a bearer token on every request to `/v1`. It lasts 90
   days and is renewed as it's used, so a gateway that's running stays linked; signing out, in
-  nolune or on the account page, ends it. One token rather than a refresh token and short-lived
-  ones: the API looks the plan up on every request anyway, so a session lookup costs next to
-  nothing, and there's no refresh to run one at a time.
+  nolune or on the account page, ends it, and nolune forgets a token the API answers `401` to.
+  One token rather than a refresh token and short-lived ones: the API looks the plan up on every
+  request anyway, so a session lookup costs next to nothing, and there's no refresh to run one at a
+  time. The token goes only to the API it was given by: a file from another `NOLUNE_PLAN_API_URL`
+  is read as no link.
 - **One subscription per gateway.** The whole family draws on it, as on the keys, and its limits are
   the family's (below).
 
 ### Chats, pictures and embeddings on it
 
-- **Chats** speak OpenRouter's Chat Completions, so `openrouter.ts` runs them. It gets a target, as
-  `openai-chat.ts` has (`ResponsesApi`): OpenRouter's own (its key and address) and the plan's
-  (nolune's API, and the plan's token, which the SDK asks for on every request, as `CHATGPT_PLAN`'s
-  does). Models are OpenRouter's ids (`anthropic/claude-sonnet-5-5`), from the plan's own list
+- **Chats** speak OpenRouter's Chat Completions, so `openrouter.ts` runs them. Each of its functions
+  takes the API it calls (a `ChatApi`), as `openai-chat.ts`'s take a `ResponsesApi`: `OPENROUTER`,
+  with its key and address, the default, and the plan's `NOLUNE_PLAN` (in `nolune-plan.ts`), with
+  nolune's API and the plan's token, which the SDK asks for on every request, as `CHATGPT_PLAN`'s
+  does, and never an OpenAI organization or project from the environment. Each keeps its own client
+  and model list. What the plan's calls throw becomes a `PlanError` (`planErrorOf`), a stop aside.
+  Models are OpenRouter's ids (`anthropic/claude-sonnet-5-5`), from the plan's own list
   (`GET /v1/models`: OpenRouter's list in its shape, with prices, kept for an hour, and only the
   models that call tools, since nolune's agent works through one: 395 of 462 in October 2026). The
   plan's replies are stored as `nolune-plan`'s, so moving a chat between it and an OpenRouter key is
   a switch of provider like any other.
+- **What each request is for.** The plan's requests say so in two headers the API reads (OpenRouter
+  gets neither). `X-Nolune-Use: background` for a hidden chat's turn (automations' and subagents'
+  runs, which the runner knows) and for the short exchanges nobody waits on, which `quickReply`
+  takes as the default (a title, the note-taker, suggestions); `person` for everything else,
+  memories brought over in the welcome included. `X-Nolune-Turn: continue` when the conversation's
+  last message carries command results, which only a turn that's going sends, and on auto mode's
+  checks of a command, which are part of the turn that asked for it.
 - **Unchanged on the way.** The API passes a request to OpenRouter as it came, with only the key
   replaced, and `max_tokens` (or `max_completion_tokens`, when that's the one it uses) set to
   32,000 when it asks for more or doesn't say. A body that asks for less goes byte for byte; one
@@ -2113,7 +2133,8 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 request, and custom-providers.ts, your own servers in either API),
                 plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts; the
                 ChatGPT plan's requests in chatgpt-plan.ts, signed in with Sign in with ChatGPT in
-                chatgpt-sign-in.ts), provider
+                chatgpt-sign-in.ts; the nolune plan's link and errors in nolune-plan.ts, its chats
+                openrouter.ts's on nolune's API), provider
                 file cache, runner, media, users/invites/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
@@ -2271,5 +2292,7 @@ signing.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).
-- The nolune plan: a subscription to nolune that covers chats, pictures and embeddings, with 5-hour
-  and weekly limits (see [The nolune plan](#the-nolune-plan)).
+- The nolune plan (see [The nolune plan](#the-nolune-plan)): Stripe's checkout and webhooks,
+  pictures through FAL, deploying the API next to the relay, its usage by the composer from
+  `x-nolune-usage`, and automations that wait out a limit rather than fail; then opening it
+  (`OPEN` in `nolune-plan.ts`).

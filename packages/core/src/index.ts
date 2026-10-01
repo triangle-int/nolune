@@ -258,6 +258,20 @@ export {
 	type ChatGptSignIn
 } from './chatgpt-sign-in.ts';
 export {
+	NOLUNE_PLAN_HELP,
+	cancelNolunePlanSignIn,
+	checkNolunePlan,
+	nolunePlanApiUrl,
+	nolunePlanOffered,
+	nolunePlanSignInState,
+	nolunePlanStatus,
+	signOutNolunePlan,
+	startNolunePlanSignIn,
+	type NolunePlanSignIn,
+	type NolunePlanStatus,
+	type NolunePlanUsage
+} from './nolune-plan.ts';
+export {
 	createSkill,
 	isValidSkillName,
 	listProfileSkills,

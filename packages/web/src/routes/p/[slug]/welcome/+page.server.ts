@@ -17,6 +17,8 @@ import {
 	listPresets,
 	membersWithNotes,
 	normalizeApiKey,
+	nolunePlanOffered,
+	nolunePlanStatus,
 	parseMemoryExport,
 	reformatMemoryExport,
 	saveApiKey,
@@ -44,6 +46,8 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		person: user.name,
 		needsModel,
 		isAdmin,
+		// The nolune plan, first among the choices once it's offered.
+		nolunePlan: needsModel && isAdmin && nolunePlanOffered(),
 		keys:
 			needsModel && isAdmin
 				? apiKeyStatuses().map((k) => ({
@@ -77,20 +81,30 @@ export const actions: Actions = {
 
 	/**
 	 * Whether a plan is signed in and works. The Claude plan signs in on Models & keys or in a
-	 * terminal; the ChatGPT plan right in the step (/api/chatgpt/sign-in).
+	 * terminal; the ChatGPT plan right in the step (/api/chatgpt/sign-in), and the nolune plan is
+	 * linked there too (/api/nolune-plan/sign-in).
 	 */
 	plan: async ({ locals, request }) => {
 		requireAdmin(locals);
 		const plan = (await request.formData()).get('plan')?.toString() ?? '';
 		if (!isPlan(plan)) error(400, 'Unknown plan');
 		const status =
-			plan === 'claude-plan' ? await claudePlanStatus() : await chatGptPlanStatus({ check: true });
+			plan === 'claude-plan'
+				? await claudePlanStatus()
+				: plan === 'chatgpt-plan'
+					? await chatGptPlanStatus({ check: true })
+					: await nolunePlanStatus({ check: true });
 		if (status.signedIn && !status.problem) return { plan, signedIn: status.signedIn };
 		const { m } = translations(locals.locale);
 		return fail(400, {
 			plan,
 			planError:
-				status.problem ?? (plan === 'claude-plan' ? m.admin.claudeNoAnswer : m.admin.chatgptNobody),
+				status.problem ??
+				(plan === 'claude-plan'
+					? m.admin.claudeNoAnswer
+					: plan === 'chatgpt-plan'
+						? m.admin.chatgptNobody
+						: m.admin.nolunePlanNotLinked),
 			// Who's signed in anyway: the step says what's wrong with their plan rather than asking
 			// someone to sign in.
 			signedIn: status.signedIn,

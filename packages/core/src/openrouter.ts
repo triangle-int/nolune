@@ -27,6 +27,11 @@ import type { CacheTtl, Effort, ModelChoice, StreamEvent } from './models.ts';
  * its `tool_calls`. nolune's own blocks (Anthropic's format) become chat messages the same way on
  * every call, so the prefix stays byte-identical for the prompt cache. Pictures and PDFs go
  * through OpenRouter's Files API (in beta), and only to models that take them (`modelInputs`).
+ *
+ * The nolune plan's chats run on the same code (nolune-plan.ts): nolune's API speaks OpenRouter's
+ * Chat Completions and passes them on to it. Each function takes the API it calls (a ChatApi):
+ * OpenRouter's with its key, the default, or the plan's with its token. Only OpenRouter's has a
+ * Files API; the plan's pictures and PDFs go inline.
  */
 
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
@@ -100,16 +105,49 @@ function apiKey(): string {
 	return found.key;
 }
 
-let cached: { key: string; baseURL: string; client: OpenAI } | undefined;
+/** An API that speaks OpenRouter's Chat Completions: OpenRouter's own, or the nolune plan's. */
+export interface ChatApi {
+	/** Whose replies these are, as rows record it: only that provider's model reads its reasoning. */
+	provider: 'openrouter' | 'nolune-plan';
+	/** For messages people read: "OpenRouter", "The nolune plan". */
+	label: string;
+	baseURL: () => string;
+	/** The key, or a function the SDK asks on every request (the plan's token). */
+	key: () => string | (() => Promise<string>);
+	/** Runs a call, turning what it throws into what nolune says. */
+	wrap: <T>(call: () => Promise<T>) => Promise<T>;
+	/** Whether requests say what they're for (`X-Nolune-Use`, `X-Nolune-Turn`): nolune's API reads them. */
+	saysUse: boolean;
+}
 
-async function getClient(): Promise<OpenAI> {
-	const key = apiKey();
-	const baseURL = openrouterBaseUrl();
+/** OpenRouter itself, on the key in config.json or OPENROUTER_API_KEY. */
+export const OPENROUTER: ChatApi = {
+	provider: 'openrouter',
+	label: 'OpenRouter',
+	baseURL: openrouterBaseUrl,
+	key: apiKey,
+	wrap: tagged,
+	saysUse: false
+};
+
+const clients = new Map<ChatApi['provider'], { key: unknown; baseURL: string; client: OpenAI }>();
+
+async function getClient(api: ChatApi = OPENROUTER): Promise<OpenAI> {
+	const key = api.key();
+	const baseURL = api.baseURL();
 	const { OpenAI: Client } = await loadSdk();
+	const cached = clients.get(api.provider);
 	if (!cached || cached.key !== key || cached.baseURL !== baseURL) {
-		// X-Title names nolune on the account's activity page.
-		const client = new Client({ apiKey: key, baseURL, defaultHeaders: { 'X-Title': 'nolune' } });
-		cached = { key, baseURL, client };
+		// X-Title names nolune on the account's activity page. The plan's token goes to nolune's API
+		// only: never an OpenAI organization or project from the environment.
+		const client = new Client({
+			apiKey: key,
+			baseURL,
+			defaultHeaders: { 'X-Title': 'nolune' },
+			...(api.provider === 'nolune-plan' ? { organization: null, project: null } : {})
+		});
+		clients.set(api.provider, { key, baseURL, client });
+		return client;
 	}
 	return cached.client;
 }
@@ -155,10 +193,10 @@ function toolCallItem(id: string, name: string, input: unknown): ToolCallItem {
  * A text, picture or PDF block as a content part: an uploaded one as a `file` part with its id,
  * which Chat Completions takes for pictures too; one OpenRouter can't open, as a note.
  */
-function inputPart(block: Block): Part | null {
+function inputPart(block: Block, provider: ChatApi['provider']): Part | null {
 	if (block.type === 'text') return { type: 'text', text: block.text };
 	if (block.type !== 'image' && block.type !== 'pdf') return null;
-	if (heldElsewhere(block, 'openrouter')) {
+	if (heldElsewhere(block, provider)) {
 		return { type: 'text', text: heldElsewhereNote(block).text };
 	}
 	const { source } = block;
@@ -177,14 +215,17 @@ function inputPart(block: Block): Part | null {
  * A command's result as a tool message's text, and the pictures and PDFs in it (`nolune view`), each
  * after the line naming it: a tool message takes only text, so they follow in a user message.
  */
-function toolResult(content: ToolResultBlock['content']): { text: string; files: Part[] } {
+function toolResult(
+	content: ToolResultBlock['content'],
+	provider: ChatApi['provider']
+): { text: string; files: Part[] } {
 	if (typeof content === 'string') return { text: content, files: [] };
 	const texts: string[] = [];
 	const files: Part[] = [];
 	content.forEach((b, i) => {
 		if (b.type === 'text') texts.push(b.text);
 		else if (b.type === 'other') texts.push(`[${placeholder(b)}]`);
-		const part = b.type === 'image' || b.type === 'pdf' ? inputPart(b) : null;
+		const part = b.type === 'image' || b.type === 'pdf' ? inputPart(b, provider) : null;
 		if (!part) return;
 		const label = content[i - 1];
 		if (label?.type === 'text') files.push({ type: 'text', text: label.text });
@@ -231,13 +272,15 @@ function nativeMessage(content: unknown[], withReasoning: boolean): ChatMessage 
  * they came, reasoning included, except from before the system prompt was built again: through
  * OpenRouter it may be Claude's thinking, which is bound to the prompt. Replies from another model
  * or provider (the conversation switched), and nolune's own, go as their text and calls. `cache`:
- * Claude only caches what's marked.
+ * Claude only caches what's marked. `provider`: whose chat it is (the nolune plan's replies are its
+ * own, though the same models write them).
  */
 export function toChatMessages(
 	system: string,
 	messages: Message[],
 	model: string,
-	cache: CacheControl | null = null
+	cache: CacheControl | null = null,
+	provider: ChatApi['provider'] = 'openrouter'
 ): ChatMessage[] {
 	const out: ChatMessage[] = [
 		{
@@ -251,7 +294,7 @@ export function toChatMessages(
 			let reply: ChatMessage | null;
 			if (
 				native &&
-				(native.provider === null || (native.provider === 'openrouter' && native.model === model))
+				(native.provider === null || (native.provider === provider && native.model === model))
 			) {
 				reply = nativeMessage(native.content, !m.beforePromptChange);
 			} else {
@@ -270,11 +313,11 @@ export function toChatMessages(
 		const parts: Part[] = [];
 		for (const b of m.blocks) {
 			if (b.type === 'tool_result') {
-				const result = toolResult(b.content);
+				const result = toolResult(b.content, provider);
 				out.push({ role: 'tool', tool_call_id: b.callId, content: result.text });
 				parts.push(...result.files);
 			} else {
-				const part = inputPart(b);
+				const part = inputPart(b, provider);
 				if (part) parts.push(part);
 			}
 		}
@@ -288,8 +331,12 @@ export function toChatMessages(
  * uploads them: a chat that switched to a text-only model may hold them, and a request carrying
  * one would fail. Messages without any are returned as they are.
  */
-export function readableMessages(messages: Message[], model: string): Promise<Message[]> {
-	return withoutUnreadable(messages, model, () => modelInputs(model));
+export function readableMessages(
+	messages: Message[],
+	model: string,
+	api: ChatApi = OPENROUTER
+): Promise<Message[]> {
+	return withoutUnreadable(messages, model, () => modelInputs(model, api));
 }
 
 /** A tool as nolune saves it (Anthropic's format) as a function tool. */
@@ -464,31 +511,56 @@ export function stopReason(finish: string | null, calls: boolean, refused = fals
 	return calls ? 'tool_use' : 'end_turn';
 }
 
+/** Who a request is for: people waiting on it, or background work (hidden chats, chores). */
+export type Use = 'person' | 'background';
+
+/**
+ * What a request says it's for, to an API that reads it (nolune's, whose limits keep a share for
+ * people and let a turn that's going finish): nothing, to OpenRouter.
+ */
+function useHeaders(
+	api: ChatApi,
+	use: Use,
+	continuing: boolean
+): Record<string, string> | undefined {
+	if (!api.saysUse) return undefined;
+	return { 'X-Nolune-Use': use, ...(continuing ? { 'X-Nolune-Turn': 'continue' } : {}) };
+}
+
+/** A turn goes on when the last message carries command results: the model asked for them. */
+function goesOn(messages: Message[]): boolean {
+	return !!messages.at(-1)?.blocks.some((b) => b.type === 'tool_result');
+}
+
 /**
  * One model call, streamed. See models.ts for what stays fixed between calls. `cacheKey` keeps a
  * conversation on the same provider behind OpenRouter, whose cache has its earlier calls.
  */
-export function streamTurn(opts: {
-	model: string;
-	effort: Effort;
-	system: string;
-	tools: Anthropic.Tool[];
-	cacheTtl: CacheTtl;
-	cacheKey: string;
-	/** In nolune's format, with pictures and PDFs as OpenRouter gets them (resolveFiles). */
-	messages: Message[];
-	signal: AbortSignal;
-	onEvent: (event: StreamEvent) => void;
-}): Promise<Reply> {
-	return tagged(async () => {
-		const client = await getClient();
+export function streamTurn(
+	opts: {
+		model: string;
+		effort: Effort;
+		system: string;
+		tools: Anthropic.Tool[];
+		cacheTtl: CacheTtl;
+		cacheKey: string;
+		/** In nolune's format, with pictures and PDFs as OpenRouter gets them (resolveFiles). */
+		messages: Message[];
+		signal: AbortSignal;
+		onEvent: (event: StreamEvent) => void;
+		use?: Use;
+	},
+	api: ChatApi = OPENROUTER
+): Promise<Reply> {
+	return api.wrap(async () => {
+		const client = await getClient(api);
 		// Claude: the same marks as in anthropic.ts, on the system prompt and the growing tail.
 		const cache = marksCache(opts.model)
 			? ({ type: 'ephemeral', ttl: opts.cacheTtl } as const)
 			: null;
 		const body = {
 			model: opts.model,
-			messages: toChatMessages(opts.system, opts.messages, opts.model, cache),
+			messages: toChatMessages(opts.system, opts.messages, opts.model, cache, api.provider),
 			tools: opts.tools.map(functionTool),
 			reasoning: { effort: opts.effort },
 			...(cache ? { cache_control: cache } : {}),
@@ -497,22 +569,33 @@ export function streamTurn(opts: {
 		};
 		const stream = await client.chat.completions.create(
 			body as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming,
-			{ signal: opts.signal }
+			{
+				signal: opts.signal,
+				headers: useHeaders(api, opts.use ?? 'person', goesOn(opts.messages))
+			}
 		);
 		return readStream(stream as AsyncIterable<Chunk>, opts.onEvent);
 	});
 }
 
-/** One short exchange, not streamed, at low effort (see models.ts). */
-export function quickReply(opts: {
-	model: string;
-	system: string;
-	input: string;
-	maxTokens: number;
-	timeoutMs: number;
-}): Promise<{ text: string | null; usage: Usage }> {
-	return tagged(async () => {
-		const client = await getClient();
+/**
+ * One short exchange, not streamed, at low effort (see models.ts). Most are chores nobody waits
+ * on (a title, the note-taker's look at a chat); auto mode's check of a command goes on a turn.
+ */
+export function quickReply(
+	opts: {
+		model: string;
+		system: string;
+		input: string;
+		maxTokens: number;
+		timeoutMs: number;
+		use?: Use;
+		continuing?: boolean;
+	},
+	api: ChatApi = OPENROUTER
+): Promise<{ text: string | null; usage: Usage }> {
+	return api.wrap(async () => {
+		const client = await getClient(api);
 		const body = {
 			model: opts.model,
 			messages: [
@@ -524,7 +607,10 @@ export function quickReply(opts: {
 		};
 		const reply = await client.chat.completions.create(
 			body as unknown as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
-			{ timeout: opts.timeoutMs }
+			{
+				timeout: opts.timeoutMs,
+				headers: useHeaders(api, opts.use ?? 'background', !!opts.continuing)
+			}
 		);
 		const choice = reply.choices?.[0];
 		const usage = summarizeUsage(reply.usage as ChatUsage);
@@ -613,37 +699,52 @@ interface ModelInfo {
 	architecture?: { input_modalities?: string[] | null } | null;
 }
 
-let catalog: { at: number; models: Promise<Map<string, ModelInfo>> } | undefined;
+const catalogs = new Map<
+	ChatApi['provider'],
+	{ at: number; models: Promise<Map<string, ModelInfo>> }
+>();
 
-/** Every model OpenRouter has, by id, kept for an hour. `fresh` asks again. */
-function catalogOf(fresh = false): Promise<Map<string, ModelInfo>> {
+/**
+ * Every model the API has, by id, kept for an hour. `fresh` asks again. The nolune plan's are
+ * OpenRouter's, in its shape, that the plan offers.
+ */
+function catalogOf(api: ChatApi, fresh = false): Promise<Map<string, ModelInfo>> {
+	const catalog = catalogs.get(api.provider);
 	if (fresh || !catalog || Date.now() - catalog.at > MODELS_TTL_MS) {
-		const models = tagged(async () => {
-			const client = await getClient();
+		const models = api.wrap(async () => {
+			const client = await getClient(api);
 			const list = await client.get<{ data?: ModelInfo[] }>('/models', {
 				timeout: REQUEST_TIMEOUT_MS
 			});
 			return new Map((list.data ?? []).map((m) => [m.id, m]));
 		});
 		const entry = { at: Date.now(), models };
-		catalog = entry;
+		catalogs.set(api.provider, entry);
 		// A failed list isn't kept.
 		models.catch(() => {
-			if (catalog === entry) catalog = undefined;
+			if (catalogs.get(api.provider) === entry) catalogs.delete(api.provider);
 		});
+		return models;
 	}
-	return catalog!.models;
+	return catalog.models;
 }
 
 /** A variant (`:nitro`, `:online`...) is its model, routed differently, unless it's listed itself. */
-async function modelInfo(model: string, fresh = false): Promise<ModelInfo | undefined> {
-	const models = await catalogOf(fresh);
+async function modelInfo(
+	model: string,
+	api: ChatApi,
+	fresh = false
+): Promise<ModelInfo | undefined> {
+	const models = await catalogOf(api, fresh);
 	return models.get(model) ?? models.get(model.replace(/:[^/]*$/, ''));
 }
 
 /** What the model can be sent besides text, as OpenRouter lists it. */
-export async function modelInputs(model: string): Promise<{ pictures: boolean; pdfs: boolean }> {
-	const inputs = (await modelInfo(model))?.architecture?.input_modalities ?? [];
+export async function modelInputs(
+	model: string,
+	api: ChatApi = OPENROUTER
+): Promise<{ pictures: boolean; pdfs: boolean }> {
+	const inputs = (await modelInfo(model, api))?.architecture?.input_modalities ?? [];
 	// A PDF goes only to models that read it themselves: for others, OpenRouter would run it
 	// through a paid OCR service at every request, since each one carries the whole history.
 	return { pictures: inputs.includes('image'), pdfs: inputs.includes('file') };
@@ -654,16 +755,21 @@ export async function modelInputs(model: string): Promise<{ pictures: boolean; p
  * commands, and says how large its window is: the smaller of the model's and its main
  * provider's, since a window set too large would let a conversation outgrow the model for good.
  */
-export async function fetchContextWindow(model: string): Promise<number | null> {
-	const info = await modelInfo(model, true);
+export async function fetchContextWindow(
+	model: string,
+	api: ChatApi = OPENROUTER
+): Promise<number | null> {
+	const info = await modelInfo(model, api, true);
 	if (!info) {
 		throw new OpenRouterError(
-			`Model not found: OpenRouter has no model "${model}". Its ids look like anthropic/claude-sonnet-5 (see https://openrouter.ai/models).`
+			api.provider === 'openrouter'
+				? `Model not found: OpenRouter has no model "${model}". Its ids look like anthropic/claude-sonnet-5 (see https://openrouter.ai/models).`
+				: `Model not found: the nolune plan doesn't offer "${model}". Its ids are OpenRouter's, like anthropic/claude-sonnet-5.`
 		);
 	}
 	if (!callsTools(info)) {
 		throw new OpenRouterError(
-			`${model} can't call tools on OpenRouter, and nolune needs them to run commands.`
+			`${model} can't call tools on ${api.label}, and nolune needs them to run commands.`
 		);
 	}
 	return windowOf(info);
@@ -685,8 +791,8 @@ function windowOf(info: ModelInfo): number | null {
  * OpenRouter's names and the window a preset gets. `:batch` variants are left out: they're for
  * OpenRouter's batch API, not chats.
  */
-export async function listModels(): Promise<ModelChoice[]> {
-	const models = [...(await catalogOf(true)).values()].filter(
+export async function listModels(api: ChatApi = OPENROUTER): Promise<ModelChoice[]> {
+	const models = [...(await catalogOf(api, true)).values()].filter(
 		(m) => callsTools(m) && !m.id.endsWith(':batch')
 	);
 	models.sort((a, b) => (b.created ?? 0) - (a.created ?? 0));

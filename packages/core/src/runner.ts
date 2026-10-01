@@ -1180,7 +1180,9 @@ async function loop(conversationId: string): Promise<void> {
 						conv.provider
 					),
 					signal: abort.signal,
-					onEvent: (event) => onStreamEvent(conversationId, event)
+					onEvent: (event) => onStreamEvent(conversationId, event),
+					// Automations' and subagents' runs, which the nolune plan keeps a share of its limits from.
+					use: conv.hidden ? 'background' : 'person'
 				});
 			} catch (err) {
 				clearLive(conversationId);

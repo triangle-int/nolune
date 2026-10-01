@@ -11,6 +11,7 @@ import {
 	addPreset,
 	apiKeyStatuses,
 	cancelChatGptSignIn,
+	cancelNolunePlanSignIn,
 	checkApiKey,
 	checkCustomProvider,
 	claudePlanStatus,
@@ -36,6 +37,9 @@ import {
 	listCustomProviders,
 	normalizeApiKey,
 	normalizeProviderUrl,
+	nolunePlanOffered,
+	nolunePlanSignInState,
+	nolunePlanStatus,
 	removeApiKey,
 	removePreset,
 	removeCustomProvider,
@@ -47,7 +51,9 @@ import {
 	saveEmbeddingSetting,
 	setDefaultPreset,
 	signOutChatGpt,
+	signOutNolunePlan,
 	startChatGptSignIn,
+	startNolunePlanSignIn,
 	startEmbeddingMemory,
 	type CustomApi,
 	type EmbeddingSetting,
@@ -61,8 +67,11 @@ import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, depends }) => {
 	requireAdmin(locals);
-	// The page asks again while a ChatGPT sign-in waits for the browser to come back.
+	// The page asks again while a ChatGPT sign-in waits for the browser to come back, and while a
+	// nolune plan's code waits to be approved.
 	depends('nolune:chatgpt-plan');
+	depends('nolune:nolune-plan');
+	const offered = nolunePlanOffered();
 	const defaultId = getDefaultPreset()?.id;
 	const signIn = chatGptSignInState();
 	return {
@@ -70,8 +79,10 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 		keys: apiKeyStatuses(),
 		// Custom providers: each one's API, address and whether it has a key, never the key.
 		customProviders: listCustomProviders(),
-		// Custom providers are chips of their own.
-		providers: PROVIDERS.filter((id) => !isCustomProvider(id)).map((id) => ({
+		// Custom providers are chips of their own; the nolune plan's once it's offered.
+		providers: PROVIDERS.filter(
+			(id) => !isCustomProvider(id) && (id !== 'nolune-plan' || offered)
+		).map((id) => ({
 			id,
 			label: PROVIDER_LABELS[id]
 		})),
@@ -84,6 +95,9 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 			usageUrl: CHATGPT_USAGE_URL,
 			status: await chatGptPlanStatus()
 		},
+		// Who nolune is linked to the nolune plan as, and a code waiting to be approved; asking the
+		// API (and where the limits stand) is Check's. Never the token.
+		nolunePlan: offered ? { ...nolunePlanSignInState(), status: await nolunePlanStatus() } : null,
 		// What memory search finds meaning with.
 		embeddings: embeddingState(),
 		embeddingDefaults: DEFAULT_EMBEDDING_MODELS,
@@ -134,7 +148,12 @@ function planResult(plan: Plan, status: PlanStatus, locale: App.Locals['locale']
 		return fail(400, {
 			plan,
 			planError:
-				status.problem ?? (plan === 'claude-plan' ? m.admin.claudeNoAnswer : m.admin.chatgptNobody)
+				status.problem ??
+				(plan === 'claude-plan'
+					? m.admin.claudeNoAnswer
+					: plan === 'chatgpt-plan'
+						? m.admin.chatgptNobody
+						: m.admin.nolunePlanNotLinked)
 		});
 	}
 	const { signedIn } = status;
@@ -278,6 +297,42 @@ export const actions: Actions = {
 		return {
 			plan: 'chatgpt-plan' as const,
 			planMessage: told ? m.admin.signedOut : m.admin.chatgptSignedOutLocally
+		};
+	},
+	/** Asks the API for a code, which someone approves on its link page; the page asks until then. */
+	nolunePlanLink: async ({ locals }) => {
+		requireAdmin(locals);
+		try {
+			await startNolunePlanSignIn();
+		} catch (err) {
+			if (!(err instanceof PlanError)) throw err;
+			return fail(400, { plan: 'nolune-plan' as const, planError: err.message });
+		}
+	},
+	nolunePlanCancel: ({ locals }) => {
+		requireAdmin(locals);
+		cancelNolunePlanSignIn();
+	},
+	/** Asks the API whether the link works, and where the limits stand: nothing is charged. */
+	nolunePlanCheck: async ({ locals }) => {
+		requireAdmin(locals);
+		const status = await nolunePlanStatus({ check: true });
+		if (status.problem || !status.signedIn) {
+			const { m } = translations(locals.locale);
+			return fail(400, {
+				plan: 'nolune-plan' as const,
+				planError: status.problem ?? m.admin.nolunePlanNotLinked
+			});
+		}
+		return { plan: 'nolune-plan' as const, usage: status.usage };
+	},
+	nolunePlanUnlink: async ({ locals }) => {
+		requireAdmin(locals);
+		const { m } = translations(locals.locale);
+		const told = await signOutNolunePlan();
+		return {
+			plan: 'nolune-plan' as const,
+			planMessage: told ? m.admin.nolunePlanUnlinked : m.admin.nolunePlanUnlinkedLocally
 		};
 	},
 	add: async ({ locals, request }) => {

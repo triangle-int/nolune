@@ -36,10 +36,11 @@ export interface Config {
 	/**
 	 * Where memory search gets embeddings, to find facts by meaning (memory-embeddings.ts): off, or
 	 * a provider's model with its key, or a custom provider's that speaks OpenAI's API
-	 * (`custom-openai`, the model `<id>/<model>`) like Ollama, LM Studio or oMLX. Unset: OpenAI's
-	 * key, else OpenRouter's.
+	 * (`custom-openai`, the model `<id>/<model>`) like Ollama, LM Studio or oMLX, or the nolune plan's.
+	 * Unset: OpenAI's key, else OpenRouter's, else the nolune plan.
 	 */
-	embeddings?: 'off' | { provider: 'openai' | 'openrouter' | 'custom-openai'; model: string };
+	embeddings?:
+		'off' | { provider: 'openai' | 'openrouter' | 'nolune-plan' | 'custom-openai'; model: string };
 	/** Extra environment variables for commands the agent runs (e.g. FIRECRAWL_API_KEY). */
 	commandEnv?: Record<string, string>;
 	/**

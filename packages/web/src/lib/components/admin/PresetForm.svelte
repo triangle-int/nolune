@@ -24,6 +24,8 @@
 		claudeInstalled: boolean;
 		/** Whether someone is signed in with ChatGPT, for the ChatGPT plan. */
 		chatgptSignedIn: boolean;
+		/** Whether nolune is linked to the nolune plan. */
+		nolunePlanLinked?: boolean;
 		/** The preset being changed, with its own context window if it has one; a new one without. */
 		preset?: { id: string; name: string; provider: string; model: string; override: number | null };
 		/** Why the last save failed. */
@@ -39,6 +41,7 @@
 		customProviders,
 		claudeInstalled,
 		chatgptSignedIn,
+		nolunePlanLinked = false,
 		preset,
 		problem,
 		class: className,
@@ -107,9 +110,11 @@
 			? claudeInstalled
 			: provider === 'chatgpt-plan'
 				? chatgptSignedIn
-				: isCustom(provider)
-					? !!custom
-					: !!key?.source
+				: provider === 'nolune-plan'
+					? nolunePlanLinked
+					: isCustom(provider)
+						? !!custom
+						: !!key?.source
 	);
 	/** A new provider or model is checked with the provider when it's saved. */
 	const checks = $derived(!start || provider !== start.provider || fullModel !== start.model);
@@ -149,6 +154,11 @@
 				? { text: t.onChatGptPlan, warn: false }
 				: { text: t.noChatGpt, warn: true };
 		}
+		if (provider === 'nolune-plan') {
+			return nolunePlanLinked
+				? { text: t.onNolunePlan, warn: false }
+				: { text: t.noNolunePlan, warn: true };
+		}
 		if (isCustom(provider)) {
 			return custom
 				? {
@@ -173,7 +183,9 @@
 			? 'Claude Code'
 			: provider === 'chatgpt-plan'
 				? 'ChatGPT'
-				: (custom?.name ?? label);
+				: provider === 'nolune-plan'
+					? messages.admin.nolunePlan
+					: (custom?.name ?? label);
 	}
 
 	/** What Auto (no override) gets with each provider. */

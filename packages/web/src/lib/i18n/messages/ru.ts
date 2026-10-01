@@ -962,6 +962,10 @@ export const ru: Messages = {
 			askAdmin:
 				'Чтобы общаться, мне нужна модель. Попросите того, кто установил nolune, добавить её в «Моделях и ключах»; всё остальное уже работает.',
 			choices: {
+				'nolune-plan': {
+					title: 'Подписка nolune',
+					about: 'Чаты, картинки и поиск по памяти по одной подписке, без ключей'
+				},
 				'claude-plan': {
 					title: 'Подписка Claude',
 					about: 'Тариф Pro или Max через Claude Code на этом компьютере'
@@ -1000,6 +1004,16 @@ export const ru: Messages = {
 				starting: 'Готовим страницу входа ChatGPT…',
 				tryAgain: 'Попробовать снова',
 				otherDevice: 'Входите с другого устройства?'
+			},
+			nolune: {
+				title: 'Привяжите nolune к подписке',
+				about:
+					'Откройте страницу привязки на любом устройстве, войдите в аккаунт nolune и проверьте код. Чаты пойдут по вашей подписке, без ключей.',
+				open: 'Открыть страницу привязки',
+				code: 'Ваш код',
+				waiting: 'Как только там привяжут, эта страница продолжит сама.',
+				starting: 'Получаем код…',
+				tryAgain: 'Попробовать снова'
 			}
 		},
 		avatar: {
@@ -1139,6 +1153,25 @@ export const ru: Messages = {
 		chatgptSignOutBody:
 			'Чаты на пресетах с подпиской ChatGPT перестанут работать, пока кто-нибудь снова не войдёт.',
 		signedOut: 'Выход выполнен.',
+		nolunePlan: 'Подписка nolune',
+		nolunePlanAbout: 'Чаты, картинки и поиск по памяти по подписке на nolune, без API-ключей.',
+		nolunePlanLink: 'Привязать',
+		nolunePlanStarting: 'Получаем код…',
+		nolunePlanCheck: 'Проверить',
+		nolunePlanUnlink: 'Отвязать',
+		nolunePlanOpen: 'Откройте {link} на любом устройстве, войдите и проверьте, что там этот код:',
+		nolunePlanLinkPage: 'страницу привязки nolune',
+		nolunePlanWaiting: 'Эта страница продолжит сама, как только nolune будет привязан.',
+		nolunePlanLinked: 'Привязано. Чаты на пресетах с подпиской nolune теперь работают по ней.',
+		nolunePlanUsage: (window: string, week: string, credits: string) =>
+			`5 часов: использовано ${window} · эта неделя: ${week} · осталось кредитов: ${credits}`,
+		nolunePlanNotLinked: 'nolune не привязан к подписке nolune.',
+		nolunePlanUnlinked: 'Отвязано.',
+		nolunePlanUnlinkedLocally:
+			'Отвязано здесь, но API nolune сообщить не удалось: привязка закончится сама, если её не использовать.',
+		nolunePlanUnlinkTitle: 'Отвязать подписку nolune?',
+		nolunePlanUnlinkBody:
+			'Чаты на пресетах с подпиской nolune перестанут работать, пока nolune не привяжут снова.',
 		notAt: 'Не найден по пути {path}, который указан в {command}.',
 		notInstalled: 'Не установлен на этом компьютере.',
 		checkSignIn: 'Проверить вход',
@@ -1185,12 +1218,16 @@ export const ru: Messages = {
 					'В режиме «Авто» берётся окно, которое сервер указывает для модели, если указывает (vLLM указывает); иначе оно остаётся неизвестным.',
 				'claude-plan': 'Claude Code его не сообщает: «Авто» знает только модели с контекстом 1M.',
 				'chatgpt-plan':
-					'«Авто» берёт окно, которое ChatGPT указывает для модели, если указывает; иначе оно остаётся неизвестным.'
+					'«Авто» берёт окно, которое ChatGPT указывает для модели, если указывает; иначе оно остаётся неизвестным.',
+				'nolune-plan':
+					'«Авто» берёт окно, которое OpenRouter указывает для модели и её основного провайдера: подписка nolune передаёт запросы туда.'
 			},
 			onPlan: 'Работает по тарифу Pro или Max, с которым вошли в Claude Code.',
 			noClaudeCode: 'Claude Code ещё не установлен: см. «Подписка Claude» выше.',
 			onChatGptPlan: 'Работает по подписке ChatGPT того, кто вошёл через ChatGPT выше.',
 			noChatGpt: 'Через ChatGPT ещё никто не вошёл: см. «Подписка ChatGPT» выше.',
+			onNolunePlan: 'Работает по подписке nolune, к которой привязан этот nolune (см. выше).',
+			noNolunePlan: 'nolune ещё не привязан к подписке nolune: см. «Подписка nolune» выше.',
 			onKey: (provider: string) => `Работает по API-ключу ${provider}.`,
 			noKey: (provider: string) =>
 				`API-ключа ${provider} пока нет: добавьте его в разделе «API-ключи» выше.`,

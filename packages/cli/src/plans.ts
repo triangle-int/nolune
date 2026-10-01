@@ -9,17 +9,23 @@ import {
 	claudeSignInCommand,
 	finishChatGptSignIn,
 	listChatGptModels,
+	listModels,
+	nolunePlanStatus,
 	signOutChatGpt,
+	signOutNolunePlan,
 	startChatGptSignIn,
+	startNolunePlanSignIn,
+	cancelNolunePlanSignIn,
 	type Plan
 } from '@nolune/core';
 import { ask } from './input.ts';
 import { fail, type Io } from './io.ts';
 
 /*
- * `nolune claude-plan` and `nolune chatgpt-plan`. The Claude plan runs Claude Code, which keeps
- * the sign-in: these check it, and offer to install Claude Code and sign it in where needed. The
- * ChatGPT plan needs nothing installed: these sign in with ChatGPT, which nolune keeps.
+ * `nolune claude-plan`, `nolune chatgpt-plan` and `nolune nolune-plan`. The Claude plan runs Claude
+ * Code, which keeps the sign-in: these check it, and offer to install Claude Code and sign it in
+ * where needed. The ChatGPT plan needs nothing installed: these sign in with ChatGPT, which nolune
+ * keeps. The nolune plan is linked with a code approved on nolune's API, from any device.
  */
 
 async function confirm(io: Io, question: string): Promise<boolean> {
@@ -155,12 +161,62 @@ export async function requireChatGptPlan(
 	io.log(`ChatGPT plan: ${status.signedIn}`);
 }
 
+/** Links nolune to the plan: shows the code and the page to approve it on, and waits. */
+async function linkNolunePlan(io: Io): Promise<void> {
+	io.signal.throwIfAborted();
+	const stop = () => cancelNolunePlanSignIn();
+	io.signal.addEventListener('abort', stop, { once: true });
+	try {
+		const signIn = await startNolunePlanSignIn();
+		io.log(`To link nolune to your nolune plan, open this on any device, sign in, and check the code:
+
+  ${signIn.url}
+
+  Code: ${signIn.code}
+`);
+		if (io.stdinIsTTY) openBrowser(signIn.url);
+		io.log('Waiting…');
+		await signIn.done;
+	} finally {
+		io.signal.removeEventListener('abort', stop);
+	}
+}
+
+/**
+ * Fails unless nolune is linked to a nolune plan the API takes; says who as, and where its limits
+ * stand. With `guide`, it first links nolune when it isn't, or the link no longer works.
+ */
+export async function requireNolunePlan(io: Io, guide = false): Promise<void> {
+	let status = await nolunePlanStatus({ check: true });
+	if (guide && (!status.signedIn || status.problem)) {
+		if (status.problem) io.log(status.problem.split('. ')[0].replace(/\.?$/, '.'));
+		await linkNolunePlan(io);
+		status = await nolunePlanStatus({ check: true });
+	}
+	if (status.problem || !status.signedIn)
+		fail(status.problem ?? "nolune isn't linked to a nolune plan.");
+	io.log(`nolune plan: ${status.signedIn}`);
+	if (status.usage) {
+		const { window, week, credits } = status.usage;
+		const share = (spent: number, limit: number) =>
+			limit > 0 ? `${Math.min(100, Math.round((spent / limit) * 100))}%` : 'none';
+		const dollars = (micros: number) => `$${(micros / 1_000_000).toFixed(2)}`;
+		io.log(
+			`  5 hours: ${share(window.spent, window.limit)} · week: ${share(week.spent, week.limit)} · credits left: ${dollars(credits.plan)}${credits.extra > 0 ? ` + ${dollars(credits.extra)} extra` : ''}`
+		);
+	}
+}
+
 /**
  * `nolune <plan> setup`: installs the plan's agent and signs it in where needed, then says who it's
  * signed in as.
  */
 function setUpPlan(io: Io, plan: Plan, args: string[]): Promise<void> {
 	if (plan === 'claude-plan') return requireClaudePlan(io, true);
+	if (plan === 'nolune-plan') {
+		if (args.length) fail(`unknown option ${args[0]}. usage: nolune nolune-plan setup`);
+		return requireNolunePlan(io, true);
+	}
 	const anotherAccount = args.includes('--another-account');
 	const unknown = args.find((arg) => arg !== '--another-account');
 	if (unknown)
@@ -168,7 +224,7 @@ function setUpPlan(io: Io, plan: Plan, args: string[]): Promise<void> {
 	return requireChatGptPlan(io, { guide: true, anotherAccount });
 }
 
-/** `nolune claude-plan …` and `nolune chatgpt-plan …`. */
+/** `nolune claude-plan …`, `nolune chatgpt-plan …` and `nolune nolune-plan …`. */
 export async function planCommand(
 	io: Io,
 	plan: Plan,
@@ -177,7 +233,11 @@ export async function planCommand(
 ): Promise<void> {
 	switch (action) {
 		case 'status':
-			return plan === 'claude-plan' ? requireClaudePlan(io) : requireChatGptPlan(io);
+			return plan === 'claude-plan'
+				? requireClaudePlan(io)
+				: plan === 'chatgpt-plan'
+					? requireChatGptPlan(io)
+					: requireNolunePlan(io);
 		case 'setup':
 			// Claude Code signs in on the terminal; ChatGPT's sign-in is a page in a browser.
 			if (plan === 'claude-plan' && !io.stdinIsTTY) {
@@ -203,6 +263,23 @@ export async function planCommand(
 			return;
 		}
 		fail('usage: nolune chatgpt-plan status|setup [--another-account]|logout|models');
+	}
+	if (plan === 'nolune-plan') {
+		if (action === 'logout') {
+			const { signedIn } = await nolunePlanStatus();
+			const told = await signOutNolunePlan();
+			io.log(
+				signedIn
+					? `Unlinked (was ${signedIn}).${told ? '' : " nolune's API couldn't be told; the link ends by itself unused."} Chats on nolune-plan presets stop until nolune is linked again.`
+					: 'Not linked.'
+			);
+			return;
+		}
+		if (action === 'models') {
+			for (const m of await listModels('nolune-plan')) io.log(`${m.id}\t${m.name ?? ''}`);
+			return;
+		}
+		fail('usage: nolune nolune-plan status|setup|logout|models');
 	}
 	fail('usage: nolune claude-plan status|setup');
 }
