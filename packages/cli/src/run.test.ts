@@ -16,7 +16,6 @@ import {
 	readCard,
 	readMemoryNote,
 	readSoulFile,
-	paths,
 	readConfig,
 	runSubagent,
 	setAdmin,
