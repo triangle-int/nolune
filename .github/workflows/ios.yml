@@ -62,22 +62,27 @@ jobs:
             -destination 'generic/platform=iOS' -derivedDataPath "$BUILD" CODE_SIGNING_ALLOWED=NO
       - name: Draw the screens
         continue-on-error: true
-        timeout-minutes: 5
+        timeout-minutes: 6
         run: |
           udid=${{ steps.simulator.outputs.udid }}
           screens="$RUNNER_TEMP/screens"
           mkdir -p "$screens"
-          xcrun simctl boot "$udid" || true
-          xcrun simctl bootstatus "$udid" -b
-          xcrun simctl install "$udid" "$BUILD/Build/Products/Debug-iphonesimulator/Nolune.app"
-          xcrun simctl launch "$udid" dev.nolune.app
+          # Each step of it may take a minute at most, and says what it's doing, so one that
+          # hangs shows which.
+          step() { echo "> $*"; perl -e 'alarm shift; exec @ARGV' 60 "$@"; }
+          # A fresh start: the tests leave the simulator busy, and installing can wait on it.
+          step xcrun simctl shutdown "$udid" || true
+          step xcrun simctl boot "$udid"
+          step xcrun simctl bootstatus "$udid" -b
+          step xcrun simctl install "$udid" "$BUILD/Build/Products/Debug-iphonesimulator/Nolune.app"
+          step xcrun simctl launch "$udid" dev.nolune.app
           sleep 6
-          xcrun simctl io "$udid" screenshot "$screens/connect.png"
+          step xcrun simctl io "$udid" screenshot "$screens/connect.png"
           # A page open, as if connected: the launch argument stands in for the saved address.
-          xcrun simctl terminate "$udid" dev.nolune.app
-          xcrun simctl launch "$udid" dev.nolune.app -origin https://nolune.dev
+          step xcrun simctl terminate "$udid" dev.nolune.app
+          step xcrun simctl launch "$udid" dev.nolune.app -origin https://nolune.dev
           sleep 10
-          xcrun simctl io "$udid" screenshot "$screens/page.png"
+          step xcrun simctl io "$udid" screenshot "$screens/page.png"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
