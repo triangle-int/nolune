@@ -323,91 +323,169 @@
 
 	/** How close to the end the chat has to be to count as scrolled to the bottom. */
 	const BOTTOM_SLACK = 80;
-	/** Where the view was, and how tall the chat, when last placed or scrolled. */
-	let lastScrollTop = 0;
-	let lastScrollHeight = 0;
-	/** A pointer is down in the chat: dragging its scrollbar, or selecting text. */
-	let pointerDown = false;
+	/** How long a wheel, keys or a flick may still be moving the view after their last event. */
+	const SETTLE_MS = 250;
+	/** What a gesture sends to the element it began on, wherever that element has gone. */
+	const GESTURE_EVENTS = ['wheel', 'touchmove', 'touchend', 'touchcancel'];
 
 	/**
 	 * Keeps the view pinned to the newest content while the reader is at the bottom, whenever
 	 * anything changes size: new messages and streamed text, but also pictures that finish loading
-	 * and the composer growing. Starting to scroll up (wheel, trackpad, finger or keys) lets go
-	 * right away, before the view has moved far.
+	 * and the composer growing.
+	 *
+	 * Only the reader decides: starting to scroll up (wheel, trackpad, finger or keys) lets go
+	 * right away, before the view has moved far, and scrolling down to the end sticks to the bottom.
+	 * While they move the view it's theirs, and the chat follows again once it settles. When the
+	 * browser moves the view by itself (content changing size, focus), the choice stays, so the
+	 * chat never jumps to the bottom on its own.
 	 */
 	function autoscroll(node: HTMLElement) {
-		const observer = new ResizeObserver(() => {
+		/** Where the view was, and how tall the chat, when last placed or scrolled. */
+		let lastTop = node.scrollTop;
+		let lastHeight = node.scrollHeight;
+		let fingers = 0;
+		let touchY = 0;
+		/** A mouse or pen is down in the chat: dragging its scrollbar, or selecting text. */
+		let pointerDown = false;
+		/** Pending while a wheel, keys, a flick or a dragged scrollbar may still be moving the view. */
+		let settling: ReturnType<typeof setTimeout> | undefined;
+		const holding = () => fingers > 0 || settling !== undefined;
+
+		const remember = () => {
+			lastTop = node.scrollTop;
+			lastHeight = node.scrollHeight;
+		};
+		const follow = () => {
 			if (stickToBottom) node.scrollTop = node.scrollHeight;
+			remember();
+		};
+		const settle = () => {
+			clearTimeout(settling);
+			settling = setTimeout(() => {
+				settling = undefined;
+				if (holding()) return;
+				unwatch();
+				follow();
+			}, SETTLE_MS);
+		};
+		const release = () => {
+			if (node.scrollTop > 0) stickToBottom = false;
+		};
+
+		const observer = new ResizeObserver(() => {
+			if (!holding()) follow();
 			// Content that got shorter pulled the view up with it. Its scroll event only comes a
 			// frame later, maybe after the content grew back, and must not read as the reader
 			// scrolling up.
-			lastScrollTop = node.scrollTop;
-			lastScrollHeight = node.scrollHeight;
+			else remember();
 		});
 		observer.observe(node);
 		// The border box, so the padding the composer sets counts too.
 		for (const child of node.children) observer.observe(child, { box: 'border-box' });
 
-		const release = () => {
-			if (node.scrollTop > 0) stickToBottom = false;
+		/**
+		 * Touch events, and in Safari all of a wheel gesture's, go to the element the gesture began
+		 * on even once it's gone from the page, and from there they no longer reach the chat. The
+		 * reply being written is drawn anew with every word, so a gesture that starts on it is
+		 * listened to where it began too, until the view settles.
+		 */
+		const origins: EventTarget[] = [];
+		const watch = (target: EventTarget | null) => {
+			if (!target || target === node || origins.includes(target)) return;
+			origins.push(target);
+			for (const type of GESTURE_EVENTS) target.addEventListener(type, onOrigin, { passive: true });
 		};
-		let touchY = 0;
+		const unwatch = () => {
+			for (const target of origins.splice(0))
+				for (const type of GESTURE_EVENTS) target.removeEventListener(type, onOrigin);
+		};
+		const onOrigin = (event: Event) => {
+			if (node.contains(event.target as Node)) return; // it reaches the chat as well
+			if (event.type === 'wheel') onWheel(event as WheelEvent);
+			else if (event.type === 'touchmove') onTouchMove(event as TouchEvent);
+			else onTouchEnd(event as TouchEvent);
+		};
+
 		const onWheel = (event: WheelEvent) => {
+			watch(event.target);
 			if (event.deltaY < 0) release();
+			settle();
 		};
-		const onTouchStart = (event: TouchEvent) => (touchY = event.touches[0]?.clientY ?? 0);
+		/** The fingers down that began on the chat, wherever the elements they began on went. */
+		const countFingers = (event: TouchEvent) =>
+			Array.from(event.touches).filter(
+				(touch) => touch.target === node || origins.includes(touch.target)
+			).length;
+		const onTouchStart = (event: TouchEvent) => {
+			watch(event.target);
+			fingers = countFingers(event);
+			touchY = event.touches[0]?.clientY ?? 0;
+		};
 		const onTouchMove = (event: TouchEvent) => {
 			const y = event.touches[0]?.clientY ?? touchY;
 			if (y > touchY) release(); // a finger moving down scrolls up
 			touchY = y;
 		};
+		const onTouchEnd = (event: TouchEvent) => {
+			fingers = countFingers(event);
+			settle(); // a flick glides on after the finger lifts
+		};
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.defaultPrevented || !['ArrowUp', 'PageUp', 'Home'].includes(event.key)) return;
 			// Not in the composer or a menu, where the key does something else.
 			const target = event.target as Node;
-			if (target === document.body || node.contains(target)) release();
+			if (target !== document.body && !node.contains(target)) return;
+			release();
+			settle();
 		};
-		const onPointerDown = () => (pointerDown = true);
+		const onPointerDown = (event: PointerEvent) => {
+			// A finger's pointer events stop once the chat scrolls; its touch events don't.
+			if (event.pointerType === 'touch') return;
+			pointerDown = true;
+			settle();
+		};
 		const onPointerUp = () => (pointerDown = false);
+		const onScroll = () => {
+			const top = node.scrollTop;
+			const atBottom = node.scrollHeight - top - node.clientHeight < BOTTOM_SLACK;
+			if (top > lastTop && atBottom) stickToBottom = true;
+			else if (top < lastTop && !atBottom && stickToBottom) {
+				// The chat changed size since the view was placed: it got shorter, which pulled the
+				// view up, and grew again before this event (Safari and Firefox can lay it out in
+				// between). That was the browser, not the reader, so back to the end.
+				if (node.scrollHeight !== lastHeight && !pointerDown && !holding())
+					node.scrollTop = node.scrollHeight;
+				else stickToBottom = false;
+			}
+			if (holding()) settle(); // still moving: a flick gliding, keys repeating
+			remember();
+		};
+
+		node.addEventListener('scroll', onScroll, { passive: true });
 		node.addEventListener('wheel', onWheel, { passive: true });
 		node.addEventListener('touchstart', onTouchStart, { passive: true });
 		node.addEventListener('touchmove', onTouchMove, { passive: true });
+		node.addEventListener('touchend', onTouchEnd);
+		node.addEventListener('touchcancel', onTouchEnd);
 		node.addEventListener('pointerdown', onPointerDown);
 		window.addEventListener('pointerup', onPointerUp);
 		window.addEventListener('pointercancel', onPointerUp);
 		window.addEventListener('keydown', onKeyDown);
 		return () => {
 			observer.disconnect();
+			clearTimeout(settling);
+			unwatch();
+			node.removeEventListener('scroll', onScroll);
 			node.removeEventListener('wheel', onWheel);
 			node.removeEventListener('touchstart', onTouchStart);
 			node.removeEventListener('touchmove', onTouchMove);
+			node.removeEventListener('touchend', onTouchEnd);
+			node.removeEventListener('touchcancel', onTouchEnd);
 			node.removeEventListener('pointerdown', onPointerDown);
 			window.removeEventListener('pointerup', onPointerUp);
 			window.removeEventListener('pointercancel', onPointerUp);
 			window.removeEventListener('keydown', onKeyDown);
 		};
-	}
-
-	/**
-	 * Only the reader decides: scrolling down to the end sticks to the bottom, scrolling up lets
-	 * go. When the browser moves the view by itself (content changing size, focus), the choice
-	 * stays, so the chat never jumps to the bottom on its own.
-	 */
-	function onScroll(event: Event & { currentTarget: HTMLElement }) {
-		const node = event.currentTarget;
-		const top = node.scrollTop;
-		const atBottom = node.scrollHeight - top - node.clientHeight < BOTTOM_SLACK;
-		if (top > lastScrollTop && atBottom) stickToBottom = true;
-		else if (top < lastScrollTop && !atBottom && stickToBottom) {
-			// The chat changed size since the view was placed: it got shorter, which pulled the view
-			// up, and grew again before this event (Safari and Firefox can lay it out in between).
-			// That was the browser, not the reader, so back to the end.
-			if (node.scrollHeight !== lastScrollHeight && !pointerDown)
-				node.scrollTop = node.scrollHeight;
-			else stickToBottom = false;
-		}
-		lastScrollTop = node.scrollTop;
-		lastScrollHeight = node.scrollHeight;
 	}
 
 	/** Follows the newest content from now on, even what arrives while the view is on its way. */
@@ -730,7 +808,6 @@
 		bind:this={scroller}
 		{@attach autoscroll}
 		{@attach pictureClicks((gallery) => (viewing = gallery))}
-		onscroll={onScroll}
 		class="@container/chat h-full overflow-y-auto [overflow-anchor:none]"
 	>
 		<div
