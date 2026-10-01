@@ -118,6 +118,7 @@ export const en = {
 		account: 'Account',
 		settings: 'Settings',
 		allProfiles: 'All profiles',
+		card: 'Your card',
 		modelsAndKeys: 'Models & keys',
 		people: 'People',
 		logOut: 'Log out'
@@ -534,6 +535,24 @@ export const en = {
 			'From before memory had categories: nolune reads it, but adds nothing to it. Move it into a category to keep it growing.',
 		/** On a person's note that is about a member of the profile. */
 		memberNote: (name: string) => `member: ${name}`,
+		/** Members' cards: a note each that goes with them into all their profiles. */
+		cards: {
+			group: 'Cards',
+			title: (name: string) => `${name}'s card`,
+			yours: 'Your card',
+			intro:
+				"Each member's card says what they told nolune about themselves that they'd tell anyone. It goes with them into every profile they're in, and every chat starts with it. Only they change it.",
+			everywhere: 'goes with them into all their profiles',
+			yoursEverywhere: 'goes with you into all your profiles',
+			readBy: (profiles: string[]) => `Everyone in ${list(profiles)} can read it.`,
+			empty: (name: string) => `${name}'s card is empty so far.`,
+			yoursEmpty:
+				'Your card is empty so far. Tell nolune about yourself in any chat, like "I\'m vegetarian", and it goes on your card, for all your profiles.',
+			edit: 'Edit your card',
+			make: 'Make your card',
+			makeHint: (n: number) =>
+				`Your notes in your profiles already say ${p(n, { one: `${n} thing`, other: `${n} things` })} about you. Pick what should go with you everywhere.`
+		},
 		move: {
 			button: (topic: string) => `Move ${topic}`,
 			title: (topic: string) => `Move "${topic}"`,
@@ -566,12 +585,56 @@ export const en = {
 			changedSince:
 				"It changed since, so it can't be undone here. Edit the note on the Memory page.",
 			alreadyUndone: 'It was already undone.',
+			/** On a change to a card, for its owner: take it off the card, into their note here. */
+			keepHere: 'Keep only here',
+			keepHereHint: (profile: string) =>
+				`Take it off your card and keep it in your note in ${profile} only`,
+			ownerOnly: (name: string) => `Only ${name} can undo this.`,
 			recent: 'Saved from chats',
 			recentHint: 'What nolune noted by itself after chats went quiet, in the last two weeks.',
 			fromChat: 'from {chat}',
 			deletedChat: 'from a deleted chat',
 			showAll: (n: number) => `Show all ${n}`,
 			untitled: 'a chat'
+		}
+	},
+
+	/** The person's own card, on a page of its own. */
+	card: {
+		title: 'Your card',
+		intro:
+			"What nolune knows about you wherever you are: the languages you speak, what you eat, how you like answers. It goes with you into every profile you're in, and every new chat there starts with it. Only what you say about yourself goes on it, and only you change it here.",
+		readBy: (profiles: string[]) => `Everyone in ${list(profiles)} can read it.`,
+		inNoProfile: "You aren't in any profile yet, so nobody reads it.",
+		empty:
+			'Nothing yet. Tell nolune about yourself in any chat, or bring in what your notes in your profiles already say, below.',
+		placeholder:
+			'For example:\n- Speaks English and German\n- Vegetarian\n- Likes short answers, in metric units',
+		edit: 'Edit',
+		emptyText: 'Your card is empty. To clear it, use Empty.',
+		saved: 'Saved. New chats in all your profiles will see it.',
+		clear: 'Empty',
+		clearTitle: 'Empty your card?',
+		clearBody:
+			'nolune forgets what your card says, in all your profiles. Chats that already started keep what they read.',
+		cleared: 'Your card is empty now.',
+		bring: {
+			title: 'Bring in from your notes',
+			intro:
+				'What your notes in your profiles say about you. Checked are what several of them say, and your rules pinned in a profile. What you add moves onto your card and out of the notes it came from, which read your card now. Who you are to the people in a profile and what they call you there stay there.',
+			rule: 'your rule',
+			add: (n: number) => `Add ${n} to your card`,
+			added: (n: number, left: number) =>
+				n || left
+					? `Added ${p(n, { one: `${n} thing`, other: `${n} things` })} to your card.${left ? ` ${left} didn't fit: it holds a few things, not everything.` : ''}`
+					: 'Nothing was added.'
+		},
+		changes: {
+			title: 'What nolune changed',
+			intro:
+				'What nolune put on your card in chats, in any of your profiles. Only you see where each came from.',
+			inProfile: 'in {profile}',
+			fromChat: 'in {profile}, from {chat}'
 		}
 	},
 

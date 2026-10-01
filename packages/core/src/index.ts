@@ -292,6 +292,7 @@ export {
 } from './memory-changes.ts';
 export {
 	CORE_NOTE,
+	MAX_CARD_CHARS,
 	MAX_PINNED_CHARS,
 	MemoryConflictError,
 	MemoryError,
@@ -317,9 +318,33 @@ export {
 export {
 	MEMORY_CATEGORIES,
 	categoryOf,
+	isCardPath,
 	noteName,
 	type MemoryCategory
 } from './memory-categories.ts';
+export {
+	addToCard,
+	bringToCard,
+	cardByPath,
+	cardCandidates,
+	cardChanges,
+	cardFiles,
+	cardOf,
+	cardProfiles,
+	checkCardWrite,
+	forgetCardFile,
+	forgetInCard,
+	keepOnlyInProfile,
+	profileCard,
+	profileCards,
+	readCard,
+	recordAgentCardChanges,
+	replaceInCard,
+	writeCardFile,
+	type Card,
+	type CardCandidate,
+	type CardChange
+} from './memory-cards.ts';
 export {
 	addMemberWithNote,
 	linkPersonNote,
@@ -332,7 +357,13 @@ export {
 	type MemberNote,
 	type PersonNote
 } from './memory-people.ts';
-export { recallFor, searchMemory, startEmbeddingMemory, type MemoryHit } from './memory-search.ts';
+export {
+	embedMemory,
+	recallFor,
+	searchMemory,
+	startEmbeddingMemory,
+	type MemoryHit
+} from './memory-search.ts';
 export {
 	DEFAULT_EMBEDDING_MODELS,
 	embeddingProblem,

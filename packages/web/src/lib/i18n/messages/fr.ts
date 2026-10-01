@@ -203,6 +203,7 @@ export const fr: Messages = {
 		account: 'Compte',
 		settings: 'Paramètres',
 		allProfiles: 'Tous les profils',
+		card: 'Votre fiche',
 		modelsAndKeys: 'Modèles et clés',
 		people: 'Personnes',
 		logOut: 'Se déconnecter'
@@ -606,6 +607,24 @@ export const fr: Messages = {
 		unsortedHint:
 			'D’avant que la mémoire ait des catégories : nolune la lit, mais n’y ajoute rien. Déplacez-la dans une catégorie pour qu’elle continue de s’enrichir.',
 		memberNote: (name: string) => `membre : ${name}`,
+		/** Members' cards: a note each that goes with them into all their profiles. */
+		cards: {
+			group: 'Fiches',
+			title: (name: string) => `Fiche de ${name}`,
+			yours: 'Votre fiche',
+			intro:
+				'La fiche de chaque membre dit ce qu’il a raconté de lui-même à nolune et raconterait à n’importe qui. Elle le suit dans tous ses profils, et chaque discussion commence avec elle. Lui seul la modifie.',
+			everywhere: 'suit son propriétaire dans tous ses profils',
+			yoursEverywhere: 'vous suit dans tous vos profils',
+			readBy: (profiles: string[]) => `Tout le monde dans ${list(profiles)} peut la lire.`,
+			empty: (name: string) => `La fiche de ${name} est vide pour l’instant.`,
+			yoursEmpty:
+				'Votre fiche est vide pour l’instant. Parlez de vous à nolune dans n’importe quelle discussion, par exemple « Je suis végétarien », et cela ira sur votre fiche, pour tous vos profils.',
+			edit: 'Modifier votre fiche',
+			make: 'Créez votre fiche',
+			makeHint: (n: number) =>
+				`Vos notes dans vos profils disent déjà ${p(n, { one: `${n} chose`, other: `${n} choses` })} sur vous. Choisissez ce qui doit vous suivre partout.`
+		},
 		move: {
 			button: (topic: string) => `Déplacer ${topic}`,
 			title: (topic: string) => `Déplacer « ${topic} »`,
@@ -638,6 +657,10 @@ export const fr: Messages = {
 			changedSince:
 				'Cela a changé depuis, donc impossible d’annuler ici. Modifiez la note sur la page Mémoire.',
 			alreadyUndone: 'C’est déjà annulé.',
+			keepHere: 'Garder seulement ici',
+			keepHereHint: (profile: string) =>
+				`Le retirer de votre fiche et le garder seulement dans votre note de ${profile}`,
+			ownerOnly: (name: string) => `Ceci ne peut être annulé que par ${name}.`,
 			recent: 'Enregistré depuis les discussions',
 			recentHint:
 				'Ce que nolune a noté de lui-même quand les discussions se sont calmées, ces deux dernières semaines.',
@@ -645,6 +668,45 @@ export const fr: Messages = {
 			deletedChat: 'd’une discussion supprimée',
 			showAll: (n: number) => `Tout afficher (${n})`,
 			untitled: 'une discussion'
+		}
+	},
+
+	/** The person's own card, on a page of its own. */
+	card: {
+		title: 'Votre fiche',
+		intro:
+			'Ce que nolune sait de vous, où que vous soyez : les langues que vous parlez, ce que vous mangez, comment vous aimez les réponses. Elle vous suit dans tous vos profils, et chaque nouvelle discussion y commence avec elle. Seul ce que vous dites de vous-même y va, et c’est vous qui la modifiez ici.',
+		readBy: (profiles: string[]) => `Tout le monde dans ${list(profiles)} peut la lire.`,
+		inNoProfile: 'Vous n’êtes encore dans aucun profil, donc personne ne la lit.',
+		empty:
+			'Rien pour l’instant. Parlez de vous à nolune dans une discussion, ou reprenez ci-dessous ce que disent déjà vos notes dans vos profils.',
+		placeholder:
+			'Par exemple :\n- Parle français et anglais\n- Végétarienne\n- Préfère les réponses courtes, en unités métriques',
+		edit: 'Modifier',
+		emptyText: 'Votre fiche est vide. Pour la vider, utilisez Vider.',
+		saved: 'Enregistré. Les nouvelles discussions de tous vos profils le verront.',
+		clear: 'Vider',
+		clearTitle: 'Vider votre fiche ?',
+		clearBody:
+			'nolune oublie ce que dit votre fiche, dans tous vos profils. Les discussions déjà commencées gardent ce qu’elles ont lu.',
+		cleared: 'Votre fiche est vide maintenant.',
+		bring: {
+			title: 'Reprendre de vos notes',
+			intro:
+				'Ce que vos notes dans vos profils disent de vous. Est coché ce que plusieurs d’entre elles disent, ainsi que vos règles épinglées dans un profil. Ce que vous ajoutez passe sur votre fiche et quitte les notes d’où il vient, qui lisent maintenant votre fiche. Qui vous êtes pour les gens d’un profil et comment ils vous y appellent restent là.',
+			rule: 'votre règle',
+			add: (n: number) => `Ajouter ${n} à votre fiche`,
+			added: (n: number, left: number) =>
+				n || left
+					? `${p(n, { one: `${n} chose ajoutée`, other: `${n} choses ajoutées` })} à votre fiche.${left ? ` ${left} n’y ${left === 1 ? 'tenait' : 'tenaient'} plus : elle garde quelques choses, pas tout.` : ''}`
+					: 'Rien n’a été ajouté.'
+		},
+		changes: {
+			title: 'Ce que nolune a changé',
+			intro:
+				'Ce que nolune a mis sur votre fiche dans les discussions de vos profils. Personne d’autre que vous ne voit d’où vient chaque chose.',
+			inProfile: 'dans {profile}',
+			fromChat: 'dans {profile}, depuis {chat}'
 		}
 	},
 

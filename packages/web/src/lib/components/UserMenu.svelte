@@ -4,6 +4,7 @@
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import ContactIcon from '@lucide/svelte/icons/contact';
+	import IdCardIcon from '@lucide/svelte/icons/id-card';
 	import UsersIcon from '@lucide/svelte/icons/users';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Sidebar from '$lib/components/ui/sidebar';
@@ -63,6 +64,11 @@
 		<DropdownMenu.Item>
 			{#snippet child({ props })}
 				<a {...props} href={resolve('/profiles')}><UsersIcon />{m.userMenu.allProfiles}</a>
+			{/snippet}
+		</DropdownMenu.Item>
+		<DropdownMenu.Item>
+			{#snippet child({ props })}
+				<a {...props} href={resolve('/card')}><IdCardIcon />{m.userMenu.card}</a>
 			{/snippet}
 		</DropdownMenu.Item>
 		{#if user.isAdmin}

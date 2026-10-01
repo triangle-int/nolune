@@ -1,4 +1,5 @@
 import { CORE_NOTE, addMemoryFacts, type MemoryFact } from './memory.ts';
+import { addFactsToCard, type Card } from './memory-cards.ts';
 import { noteName } from './memory-categories.ts';
 import {
 	EXPORT_PROMPT,
@@ -11,12 +12,15 @@ import { describeApiError, quickReply } from './models.ts';
 import type { Preset } from './presets.ts';
 
 /*
- * Memories brought over from another assistant, on the welcome page. A profile is shared by the
- * family, so what's about one person goes in their note, and the rules they set are pinned with
- * their name on them:
+ * Memories brought over from another assistant, on the welcome page. They're about the person
+ * importing, so their rules, who they are and what they like go on their card (memory-cards.ts),
+ * which goes with them into all their profiles, while it has room. A profile is shared by the
+ * family, so the rest goes in their note, and rules that don't fit are pinned with their name on
+ * them:
  *
- *   Instructions  core.md, as "Anna: keep answers short" (what doesn't fit: Anna's note)
- *   Identity, Career, Preferences, other headings  their note (people/anna.md), a heading each
+ *   Instructions  their card, else core.md as "Anna: keep answers short", else Anna's note
+ *   Identity, Preferences  their card, else their note (people/anna.md), a heading each
+ *   Career, other headings  their note
  *   Projects  projects/<name>.md, one per project; unnamed ones in projects.md
  *
  * Each fact keeps the date the export gave it, so the Memory page shades it by its real age.
@@ -43,14 +47,16 @@ export interface ImportedNote {
 }
 
 /**
- * Writes the facts into the profile's memory. Facts memory already has are skipped. `personNote`:
- * the person's note (membersWithNotes), or one named after them.
+ * Writes the facts into the profile's memory, and onto the person's `card` when given. Facts
+ * memory already has are skipped. `personNote`: the person's note (membersWithNotes), or one
+ * named after them.
  */
 export function importMemoryExport(
 	slug: string,
 	person: string,
 	facts: ExportedFact[],
-	personNote?: string
+	personNote?: string,
+	card?: Card
 ): { notes: ImportedNote[]; added: number; skipped: number } {
 	const firstName = person.trim().split(/\s+/)[0] || person.trim() || 'Someone';
 	personNote ??= `people/${noteName(firstName)}`;
@@ -63,17 +69,29 @@ export function importMemoryExport(
 		return left;
 	};
 	const of = (section: ExportSection) => facts.filter((f) => f.section === section);
+	/** Onto the card while it has room; what's left comes back. */
+	const toCard = (list: ExportedFact[], heading: string): MemoryFact[] => {
+		const dated = list.map((f) => ({ text: f.text, learnedAt: learnedAt(f) }));
+		if (!card) return dated;
+		const { added, left } = addFactsToCard(card, dated, heading);
+		if (added.length) notes.set(card.path, [...(notes.get(card.path) ?? []), ...added]);
+		return left;
+	};
 
-	const rules = of('instructions').map((f) => ({ ...f, text: `${firstName}: ${f.text}` }));
+	const rules = toCard(of('instructions'), 'Instructions').map((f) => ({
+		...f,
+		text: `${firstName}: ${f.text}`
+	}));
 	const overflow = add(CORE_NOTE, rules);
 	add(
 		personNote,
 		overflow.map((f) => ({ ...f, text: f.text.slice(firstName.length + 2) })),
 		'Instructions'
 	);
-	for (const section of ['identity', 'career', 'preferences', 'other'] as const) {
-		add(personNote, of(section), HEADINGS[section]);
-	}
+	add(personNote, toCard(of('identity'), HEADINGS.identity), HEADINGS.identity);
+	add(personNote, of('career'), HEADINGS.career);
+	add(personNote, toCard(of('preferences'), HEADINGS.preferences), HEADINGS.preferences);
+	add(personNote, of('other'), HEADINGS.other);
 	const projects = new Map<string, ExportedFact[]>();
 	for (const fact of of('projects')) {
 		const name = projectName(fact.text);

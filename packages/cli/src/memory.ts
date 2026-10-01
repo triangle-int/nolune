@@ -1,23 +1,37 @@
 import {
+	MAX_CARD_CHARS,
 	MAX_PINNED_CHARS,
 	MEMORY_CATEGORIES,
 	addMemoryFact,
+	addToCard,
+	cardFiles,
 	categoryOf,
+	checkCardWrite,
 	factLines,
+	forgetInCard,
 	forgetMemoryFact,
 	formatLocalTime,
+	isCardPath,
 	isPinnedNote,
 	listMemoryFiles,
 	membersWithNotes,
 	mergeProfileNotes,
 	moveProfileNote,
+	paths,
+	profileCard,
+	profileCards,
 	profileMemoryDir,
+	readCard,
 	readMemoryNote,
+	recordAgentCardChanges,
 	removeMemoryNote,
+	replaceInCard,
 	replaceInMemory,
 	searchMemory,
 	setLearnFromChats,
-	writeMemoryNote
+	writeMemoryNote,
+	type Card,
+	type Profile
 } from '@nolune/core';
 import type { Io } from './io.ts';
 import { profileFor } from './profile.ts';
@@ -37,7 +51,10 @@ export const MEMORY_HELP = `Memory (short notes in fixed categories; the agent r
                                              looking over each chat once it goes quiet
   Categories: ${MEMORY_CATEGORIES.map((c) => (c === 'people' || c === 'projects' ? `${c}/<name>` : c)).join(', ')}.
   Facts go only into these; a note from before them can be read and rewritten until it's moved.
-  The note core is pinned: every new chat starts with it, so it holds at most ${MAX_PINNED_CHARS} characters.`;
+  The note core is pinned: every new chat starts with it, so it holds at most ${MAX_PINNED_CHARS} characters.
+  Each member also has a card, cards/<name>: a note about them that goes with them into all their
+  profiles (at most ${MAX_CARD_CHARS} characters). show, search, add, replace and forget work on it; a change
+  is refused unless its owner wrote one of the messages the agent is answering.`;
 
 /**
  * `--profile` is picked out by hand: facts are free text and may start with a dash, which an
@@ -67,6 +84,37 @@ function plural(n: number, one: string, many: string): string {
 	return `${n} ${n === 1 ? one : many}`;
 }
 
+/** Why `nolune memory <action>` doesn't take a card. */
+function notOnCards(action: string, topics: string[]): void {
+	const card = topics.find(isCardPath);
+	if (!card) return;
+	throw new Error(
+		action === 'write'
+			? `${card} is a card: change it a fact at a time with add, replace and forget. Only its owner rewrites it, on its page.`
+			: `${card} is a card, which isn't ${action === 'rm' ? 'deleted' : 'moved or merged'}: change it a fact at a time with add, replace and forget.`
+	);
+}
+
+/** A card of the profile's, after checking the agent of this chat may change it. */
+function writableCard(io: Io, profile: Profile, topic: string): Card {
+	const card = profileCard(profile, topic);
+	checkCardWrite(card, {
+		profileId: profile.id,
+		conversationId: io.env.NOLUNE_CONVERSATION_ID
+	});
+	return card;
+}
+
+/** Records the agent's change to a card for its owner, when it runs in a chat. */
+function recordCardChange(
+	io: Io,
+	profile: Profile,
+	change: Parameters<typeof recordAgentCardChanges>[1][number]
+): void {
+	const conversationId = io.env.NOLUNE_CONVERSATION_ID;
+	if (conversationId) recordAgentCardChanges({ profileId: profile.id, conversationId }, [change]);
+}
+
 export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 	const { profile: flag, words } = splitProfile(args);
 	const [action = 'list', ...rest] = words;
@@ -84,6 +132,7 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 				io.log(
 					`No notes yet for ${profile.name}. Start one with: nolune memory add <topic> "<fact>"`
 				);
+				listCards(io, profileCards(profile.id));
 				return;
 			}
 			const members = membersWithNotes(profile);
@@ -110,12 +159,14 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 						: `  Which note is ${m.name}'s isn't known yet: maybe ${m.candidates.map((c) => c.path).join(', ')}. Link it in the profile's settings.`
 				);
 			}
+			listCards(io, profileCards(profile.id));
 			return;
 		}
 		case 'search': {
 			need(rest, 1, 'search <words>...');
 			const query = rest.join(' ');
-			const hits = await searchMemory(slug, query);
+			const cards = profileCards(profile.id).map((card) => card.path);
+			const hits = await searchMemory(slug, query, 20, cards);
 			if (!hits.length) {
 				io.log(
 					`Nothing in ${profile.name}'s memory matches "${query}". Try other words (or another language), or read a note with \`nolune memory show <topic>\`.`
@@ -130,7 +181,9 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		case 'show': {
 			need(rest, 1, 'show <topic>...');
 			for (const [i, topic] of rest.entries()) {
-				const note = readMemoryNote(slug, topic);
+				const note = isCardPath(topic)
+					? cardNote(profileCard(profile, topic))
+					: readMemoryNote(slug, topic);
 				if (rest.length > 1) io.log(`${i ? '\n' : ''}==> ${note.path} <==`);
 				io.stdout(note.text.endsWith('\n') ? note.text : `${note.text}\n`);
 			}
@@ -139,9 +192,17 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		case 'add': {
 			need(rest, 2, 'add <topic> <fact>');
 			const [topic, ...fact] = rest;
+			const card = isCardPath(topic) ? writableCard(io, profile, topic) : null;
 			// A quoted list is a fact a line.
 			const lines = factLines(fact.join(' '));
-			const results = (lines.length ? lines : ['']).map((line) => addMemoryFact(slug, topic, line));
+			const results = (lines.length ? lines : ['']).map((line) =>
+				card ? addToCard(card, line) : addMemoryFact(slug, topic, line)
+			);
+			if (card) {
+				for (const r of results.filter((r) => !r.duplicate)) {
+					recordCardChange(io, profile, { op: 'add', note: r.path, line: r.line });
+				}
+			}
 			const { path } = results[0];
 			const saved = results.filter((r) => !r.duplicate).length;
 			const verb = results.some((r) => r.created) ? 'Started' : 'Saved to';
@@ -157,6 +218,18 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		}
 		case 'replace': {
 			need(rest, 3, 'replace <topic> <old text> <new text>');
+			if (isCardPath(rest[0])) {
+				const card = writableCard(io, profile, rest[0]);
+				const replaced = replaceInCard(card, rest[1], rest[2]);
+				recordCardChange(io, profile, {
+					op: 'replace',
+					note: replaced.path,
+					line: replaced.after,
+					before: replaced.before
+				});
+				io.log(`Updated ${replaced.path}, ${card.owner}'s card.`);
+				return;
+			}
 			const { path } = replaceInMemory(slug, rest[0], rest[1], rest[2]);
 			io.log(`Updated ${path}.`);
 			return;
@@ -164,12 +237,15 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		case 'forget': {
 			need(rest, 2, 'forget <topic> <text>');
 			const [topic, ...text] = rest;
-			const { path, removed } = forgetMemoryFact(slug, topic, text.join(' '));
+			const { path, removed } = isCardPath(topic)
+				? forgetInCard(writableCard(io, profile, topic), text.join(' '))
+				: forgetMemoryFact(slug, topic, text.join(' '));
 			io.log(`Removed from ${path}: ${removed}`);
 			return;
 		}
 		case 'write': {
 			need(rest, 1, 'write <topic> [text]   (without text, the note is read from stdin)');
+			notOnCards('write', rest.slice(0, 1));
 			const [topic, ...text] = rest;
 			if (!text.length && io.stdinIsTTY) {
 				throw new Error(
@@ -186,17 +262,20 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		}
 		case 'rm': {
 			need(rest, 1, 'rm <topic>');
+			notOnCards('rm', rest.slice(0, 1));
 			io.log(`Deleted ${removeMemoryNote(slug, rest[0]).path}.`);
 			return;
 		}
 		case 'mv': {
 			need(rest, 2, 'mv <topic> <new topic>');
+			notOnCards('mv', rest.slice(0, 2));
 			const moved = moveProfileNote(profile, rest[0], rest[1]);
 			io.log(`Renamed ${moved.from} to ${moved.to}.`);
 			return;
 		}
 		case 'merge': {
 			need(rest, 2, 'merge <topic> <into topic>');
+			notOnCards('merge', rest.slice(0, 2));
 			const merged = mergeProfileNotes(profile, rest[0], rest[1]);
 			io.log(
 				merged.merged
@@ -221,5 +300,32 @@ export async function memoryCommand(io: Io, args: string[]): Promise<void> {
 		}
 		default:
 			throw new Error(`unknown memory command "${action}". See \`nolune memory help\`.`);
+	}
+}
+
+/** A card as `show` prints it: an empty one says so. */
+function cardNote(card: Card): { path: string; text: string } {
+	return (
+		readCard(card) ?? {
+			path: card.path,
+			text: `# ${card.owner}\n\n(${card.owner}'s card is empty so far.)\n`
+		}
+	);
+}
+
+/** The members' cards, after a profile's notes. */
+function listCards(io: Io, cards: Card[]): void {
+	if (!cards.length) return;
+	const files = new Map(cardFiles(cards).map((file) => [file.path, file]));
+	io.log(
+		`Cards, which go with each member into all their profiles (${paths.cards}), at most ${MAX_CARD_CHARS} characters each:`
+	);
+	const width = Math.max(...cards.map((card) => card.path.length));
+	for (const card of cards) {
+		const file = files.get(card.path);
+		const facts = file?.facts.length ?? 0;
+		io.log(
+			`  ${card.path.padEnd(width)}  ${plural(facts, 'fact', 'facts').padEnd(9)}  ${file && facts ? `changed ${formatLocalTime(new Date(file.updatedAt))}  ` : ''}(${card.owner}'s)`
+		);
 	}
 }

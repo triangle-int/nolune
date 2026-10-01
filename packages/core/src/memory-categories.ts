@@ -38,11 +38,11 @@ const NOTES: MemoryCategory[] = MEMORY_CATEGORIES.filter((c) => c !== 'people');
 
 /** What goes in each, for the agent and the note-taker. */
 export const CATEGORY_HINTS: Record<MemoryCategory, string> = {
-	core: 'pinned, in every conversation whole, so only what matters in nearly every one: who is in the family and how to address them, the languages they use, allergies, standing preferences',
+	core: "pinned, in every conversation whole, so only what matters in nearly every one: who is in the family and how to address them, the languages they use, allergies, standing preferences (a member's own go on their card)",
 	people:
 		"one note per person, in the family or not (grandparents, friends, the nanny, doctors, teachers): who they are to the family, what they're called, how to reach them, birthdays, what they like",
 	home: 'the home and household: devices, accounts and services, where things are kept, codes',
-	health: 'conditions, medicines, doctors (allergies also go in core)',
+	health: "conditions, medicines, doctors (allergies also go in core, or on a member's card)",
 	plans: "what's coming up, with full dates: events, trips, appointments, deadlines",
 	routines: 'what repeats: schedules, classes, chores, habits, meals',
 	pets: 'the pets',
@@ -76,6 +76,19 @@ export function categoryOf(path: string): MemoryCategory | null {
 	const top = parts[0].toLowerCase() as MemoryCategory;
 	if (parts.length === 1) return NOTES.includes(top) ? top : null;
 	return parts.length === 2 && parts[1] && FOLDERS.includes(top) ? top : null;
+}
+
+/**
+ * Where the cards (memory-cards.ts) are in a profile's memory: `cards/anna.md` is a member's card,
+ * a note of its own that goes with them into all their profiles. Not a category: nothing of the
+ * profile's own goes there.
+ */
+export const CARDS_FOLDER = 'cards';
+
+/** Whether a note's path (or topic) is a card's, like `cards/anna` or `cards/anna.md`. */
+export function isCardPath(path: string): boolean {
+	const parts = stem(path.trim().replace(/^\/+|\/+$/g, '')).split('/');
+	return parts.length === 2 && parts[0] === CARDS_FOLDER && !!parts[1];
 }
 
 /** Why a note can't be written to, for the agent: the categories, and where things go. */

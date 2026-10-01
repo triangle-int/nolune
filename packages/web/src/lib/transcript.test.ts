@@ -35,7 +35,8 @@ const look = (after: number): DisplayMemoryLook => ({
 			fact: 'The dog is called Rex',
 			before: null,
 			createdAt: after,
-			undone: null
+			undone: null,
+			card: null
 		}
 	]
 });

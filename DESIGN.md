@@ -19,7 +19,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `nolune agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                                                   |
-| Memory             | Short Markdown notes per profile, in fixed categories (a note each, or one per person or project), that the agent searches, reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory).                                                                                                                                                                                                                               |
+| Memory             | Short Markdown notes per profile, in fixed categories (a note each, or one per person or project), that the agent searches, reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory). Each member also has a card, a note about them that goes with them into all their profiles, copied whole into the prompt like core; only what they say about themselves goes on it. See [Cards](#cards).                      |
 | Soul               | Who nolune is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `nolune soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                                                |
@@ -41,10 +41,12 @@ folder, skills and memory. The agent has a single tool, `run_command`.
                               each account's registration and the signed-in one's tokens (mode 600)
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
                               messages, media, uploads, provider files, triggers, trigger runs,
-                              notifications, subagents, running background commands
+                              notifications, subagents, running background commands, cards' names
   media/<sha256>              copies of the pictures and files shown in chats, of attached
                               files not sent yet, and people's profile pictures
   image-templates/<id>/       Images page templates for every profile (TEMPLATE.md, cover.webp)
+  cards/<name>.md             each user's card, in every profile they're a member of (Cards)
+  cards/.facts.json, .embeddings.json   as in a profile's memories/
   bin/nolune                     shim so the agent can run `nolune` from any command
   profiles/<slug>/            default working folder for commands in this profile
     soul.md                   who nolune is for this profile; opens every chat's prompt
@@ -816,7 +818,9 @@ in fixed categories (`plans.md`, `people/anna.md`). There is no memory tool: lik
   matching, the note their facts will start (`people/<first name>.md`, or longer if that's taken)
   is kept for them, and members from before get theirs the same way, or are asked in the
   profile's settings, where anyone can also change it. Recall lifts facts about the sender by any
-  name their note calls them.
+  name their note calls them. What a member says about themselves that they'd tell any of their
+  circles goes on their card instead, which goes with them into all their profiles: see
+  [Cards](#cards).
 - **Merging** (`nolune memory merge <from> <into>`, or Move on the Memory page onto a note that's
   there already): what one note says goes into the other, under the same headings, without what
   it says already, with the dates its facts were learned; into a person's note, the other note's
@@ -962,6 +966,117 @@ in fixed categories (`plans.md`, `people/anna.md`). There is no memory tool: lik
   it exists, so people can start it there; its editor counts characters against the limit. An edit
   is refused if the agent changed the note after it was opened; saving again then replaces the
   agent's version.
+
+## Cards
+
+Memory belongs to a profile, and a person is usually in several: their own, the family's, one
+with a partner, one with a brother, one with friends. Each profile had its own note about them
+(`profile_member.person_note`), so they told each one the same things (the languages they speak,
+what they don't eat, how they like answers) and the notes drifted apart. One memory for everything
+would carry what's said in one profile into the others, and profiles are how people keep their
+circles apart: a birthday surprise is planned in a profile without the person it's for. So one
+rule: **nothing moves from one profile to another by itself.** Only what someone says about
+themselves, and would tell any of their circles, goes with them, on their card
+(`packages/core/src/memory-cards.ts`).
+
+- **The card** is one note per user, `~/.nolune/cards/<name>.md`, kept by memory.ts like a
+  profile's notes: its functions take `CARDS` in place of a slug (`MemoryPlace` in `paths.ts`),
+  and the folder has its own `.facts.json` and `.embeddings.json`. A card's path reads
+  `cards/<name>.md` wherever it's used, so `cards/` in a profile's own folder is reserved: a folder
+  by that name from before is renamed `old-cards` on first use. The name (`card.name`, a row per
+  user) is picked when the card is first needed and fixed after that, like a profile's slug: the
+  first name (`cards/anna`), else the whole name (`cards/anna-smith`), else the first with a
+  number. A card is titled with its owner's name (retitled when they change it in Settings), may
+  have headings, has no categories, can't be
+  moved or merged, and holds at most 2,000 characters (`MAX_CARD_CHARS`), since it goes whole into
+  every prompt: `nolune memory` and the page refuse more, as for core.
+- **Who reads it:** everyone in every profile its owner is a member of (`profileCards`). In each
+  of those profiles it's a note like the others, `cards/anna`, for the agent, the note-taker,
+  search and the Memory page. Someone who leaves a profile takes their card out of its new chats;
+  open ones keep the copy their prompt has. Which profiles a card is in is shown only to its
+  owner, since a profile's name can say more than its owner wants said ("Ben's surprise party").
+  As with the rest of memory, that's about the web app and the prompts: commands can still read
+  the file.
+- **What goes on it:** what its owner says about themselves that they'd tell anyone in any of their
+  profiles: the languages they speak, their birthday, the city they live in, their job or school,
+  what they eat and their allergies, lasting tastes, and how they want nolune to talk to them. And
+  whatever they ask to be remembered everywhere. `cardRules()` says it, and what stays, the same
+  way to the agent and the note-taker.
+- **What stays in the profile:** everything else about them, in their note there (`people/anna`),
+  as before: what others say about them, who they are to the people in it (`- Who:`) and what
+  they're called there (`- Also called:`), relationships, plans, feelings, health beyond
+  allergies, anything that sounds meant for that circle, and what they ask to keep there. When in
+  doubt, the profile: a fact put there by mistake costs a repeat, one put on the card by mistake
+  reaches everyone in all their profiles. Core's and health's hints say a member's own go on their
+  card.
+- **Only its owner's words write it.**
+  - In the web UI only its owner edits it, on `/card`; everyone else sees it read-only.
+  - The agent's `nolune memory add|replace|forget cards/anna` is refused unless Anna wrote one of
+    the messages it's answering: the chat's human rows since its last reply without tool calls
+    (`checkCardWrite`, with `NOLUNE_CONVERSATION_ID`, in a chat of the same profile). So automation
+    runs and subagents, whose chats have nobody's messages, never write a card, and neither does a
+    web page or an email the agent read, nor a terminal. `write`, `rm`, `mv` and `merge` are
+    refused on cards: a card changes a fact at a time, and only its owner rewrites it.
+  - The note-taker changes Anna's card only from a stretch in which Anna wrote something
+    (`learnFrom`: the senders of the rows it read); a card change from a stretch where only others
+    wrote is dropped and logged.
+  - When Anna and Ben both wrote in the same turn or stretch, the checks can't tell whose words a
+    fact came from. The rule in the prompts does that, and Anna sees every change to her card.
+- **In the prompt:** the list of members says where each one's things go
+  (`- Anna Smith: card cards/anna, note people/anna`, `peopleGuide`), and a Cards section after the
+  memory rules has each member's card whole, as it was when the conversation started, in
+  `<card name="cards/anna" of="Anna Smith">…</card>` (an empty one says so), with the rules and
+  the commands. A card that changes reaches new chats, like core, and never rebuilds an open
+  chat's prompt. A prompt still depends only on the profile (its members' cards now part of it),
+  so chats outside folders keep sharing one.
+- **Recall and search** go through the profile's notes and its members' cards together: the
+  runner, automation runs and `nolune memory search` pass the cards' paths (`cards` in
+  `recallFor`, `recallByWords` and `searchMemory`). Each fact's embedding is looked up in the
+  folder its note is in, so a card is embedded once for every profile. A card fact the prompt has
+  already doesn't come again; one that changed since the chat started comes along with a message
+  like any other. The gateway embeds the cards with the profiles when it starts, and after the
+  note-taker changes one.
+- **The note-taker** gets the members' cards in `<cards>`, each with the room left on it, and the
+  same rules as the agent; `add` and `replace` take `cards/<name>` like a note. A full card refuses
+  the add, like a full core.
+- **Seeing what changed.** Every change to a card that its owner didn't make on the page is a
+  `memory_change` row with the profile and chat it came from and its `source`: `learning` for the
+  note-taker, `agent` for the agent's `add` and `replace` (`recordAgentCardChanges`; a `forget`
+  never puts anything on a card, so it isn't kept). A chat's "Saved 3 memories" row and a
+  profile's "Saved from chats" show only `learning` rows, the agent's showing as its commands, and
+  "Saved from chats" only from that profile's chats, so a card never says where it learned
+  something to someone who isn't in that profile. A card change there shows whose card it is
+  (`DisplayMemoryChange.card`), and only its owner gets Undo (`undoMemoryChange` takes who asks;
+  anyone else gets `owner`) and **Keep only here** (`keepOnlyInProfile`,
+  `/api/card/changes/<id>/keep`), which takes the fact off the card, into their note in the
+  profile it came from, and marks the change undone.
+- **On the Memory page** the members' cards with facts are in the dot grid right after core, under
+  Cards, each with its owner's avatar, and have a section each after core's: pinned, "goes with
+  them into all their profiles", read-only. The viewer's own is "Your card", with a link to
+  `/card` and the names of the profiles that read it. While it's empty and their notes say things
+  about them, a banner offers to make it.
+- **`/card`**, in the user menu, is the signed-in person's card: edited in place (with a count of
+  characters against the limit, and the same conflict check as notes on the Memory page) or
+  emptied, the profiles that read it, what nolune changed on it in any of them with where it came
+  from, Undo and Keep only here, and **Bring in from your notes**.
+- **Starting a card** from the notes people already have, never without them (`cardCandidates`,
+  `bringToCard`). Bring in lists the facts in their note in each profile they're in and the lines
+  of each profile's core that start with their name (`Anna: keep answers short`, from an import,
+  offered without the name), grouped by profile, each with a box. Checked at first: what two or
+  more of their notes say (matched as `.facts.json` matches facts: by words, ignoring case and
+  spacing) and those core lines; the rest unchecked. `- Who:` and `- Also called:` lines aren't
+  offered, and neither is what the card has already. Adding puts the checked facts on the card
+  once each, under the heading they had (else About, and Instructions for core's), with the
+  earliest date any copy had, and takes them out of the notes they came from, which read the card
+  now. What doesn't fit stays where it was.
+- **The welcome's import** (`importMemoryExport`) is about the person importing, so their
+  instructions, identity and preferences go on their card while it has room, without their name
+  in front; the rest, and what didn't fit, goes where it went before.
+- **`nolune memory`** takes `cards/<name>` for the members' cards: `list` shows them apart,
+  `show` and `search` read them, and `add`, `replace` and `forget` write them with the checks
+  above. `nolune card [<name|email>]` prints a card from a terminal, or lists everyone's.
+- **Deleting a user** moves their card to `~/.nolune/trash/card-<name>-<time>.md`, like a deleted
+  profile's folder, and their `card` row goes with the user.
 
 ## Soul
 
@@ -1751,7 +1866,7 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
 
 ```
 packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_command, background
-                commands, auto mode (command-safety.ts, read-only-commands.ts), memory notes (search and recall, learning from chats, and
+                commands, auto mode (command-safety.ts, read-only-commands.ts), memory notes (search and recall, learning from chats, cards in memory-cards.ts, and
                 memory-export.ts, memory-import.ts: memories brought over from another
                 assistant), new-chat suggestions, nolune view images, attachments, model
                 calls (models.ts, with anthropic.ts, openai-chat.ts and openrouter.ts, each with
@@ -1768,7 +1883,7 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
 packages/cli    nolune: setup, start, service, relay (relay.ts), config, key, claude-plan, chatgpt-plan (plans.ts), env,
-                user, preset, profile, skill, trigger, wake, view, memory, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
+                user, preset, profile, skill, trigger, wake, view, memory, card, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
                 its exit code; index.ts calls it with this process's io. Commands print, read stdin,
                 the environment (NOLUNE_PROFILE, …) and the working folder only through `io` (io.ts),
                 never `process`, and end in an error rather than `process.exit`, so the agent's
@@ -1883,6 +1998,9 @@ signing.
 
 ## Not done yet
 
+- Cards: notes shared on purpose between profiles, for people who aren't users (a grandmother in
+  the family's profile and in Anna and her mother's), only between profiles the person sharing is
+  in; and a switch for an owner to stop the agent and the note-taker from writing their card.
 - **Compaction.** The context window is already stored on each conversation and shown in the UI.
   The next step is server-side compaction (beta `compact-2026-01-12`), triggered at about 85% of the
   window.

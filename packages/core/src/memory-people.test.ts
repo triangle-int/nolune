@@ -121,14 +121,16 @@ describe("members' notes", () => {
 		expect(maxNote).toMatchObject({ note: null, exists: false });
 		expect(maxNote.candidates.map((c) => c.path)).toEqual(['people/max.md']);
 		expect(peopleGuide(profile)).toBe(
-			'- Anna: people/anna (nothing in it yet)\n- Max: no note linked yet'
+			'- Anna: card cards/anna, note people/anna (nothing in it yet)\n- Max: card cards/max, no note here linked yet'
 		);
 
 		expect(linkPersonNote(profile, max.id, 'people/max')).toBe('people/max.md');
 		addMemoryFact(profile.slug, 'people/anna', 'Likes tea');
-		expect(peopleGuide(profile)).toBe('- Anna: people/anna\n- Max: people/max');
+		expect(peopleGuide(profile)).toBe(
+			'- Anna: card cards/anna, note people/anna\n- Max: card cards/max, note people/max'
+		);
 		expect(buildSystemPrompt(profile)).toContain(
-			'The members of this profile and their notes, when this conversation started. What someone says about themselves ("I", "my") goes in their note:\n- Anna: people/anna\n- Max: people/max\n'
+			'The members of this profile when this conversation started, each with their card and their note here. What someone says about themselves ("I", "my") goes on their card or in their note here, as Cards below says:\n- Anna: card cards/anna, note people/anna\n- Max: card cards/max, note people/max\n'
 		);
 	});
 

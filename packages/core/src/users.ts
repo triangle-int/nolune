@@ -6,6 +6,7 @@ import { getDb, type DB } from './db/index.ts';
 import { account, user } from './db/schema.ts';
 import { inspectImage } from './images.ts';
 import { blobPath, storeBytes } from './media.ts';
+import { retitleCard, trashCard } from './memory-cards.ts';
 import { noticeProfileChanges } from './profiles.ts';
 
 export const MIN_PASSWORD_LENGTH = 14;
@@ -207,6 +208,8 @@ export async function setPassword(nameOrEmail: string, password: string): Promis
 export function renameUser(userId: string, name: string): string {
 	const trimmed = checkName(name, userId);
 	getDb().update(user).set({ name: trimmed }).where(eq(user.id, userId)).run();
+	// Their card is titled with their name.
+	retitleCard(userId, trimmed);
 	// Members' names show on the profiles' pages.
 	noticeProfileChanges();
 	return trimmed;
@@ -273,9 +276,11 @@ export function listUsers() {
 		.all();
 }
 
+/** Deletes the account; their card goes to the trash, like a deleted profile. */
 export function deleteUser(nameOrEmail: string): void {
 	const found = findUser(nameOrEmail);
 	if (!found) throw new Error(`No user "${nameOrEmail}"`);
+	trashCard(found.id);
 	getDb().delete(user).where(eq(user.id, found.id)).run();
 	// They're no longer among their profiles' members.
 	noticeProfileChanges();

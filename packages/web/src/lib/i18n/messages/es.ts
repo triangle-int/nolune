@@ -212,6 +212,7 @@ export const es: Messages = {
 		account: 'Cuenta',
 		settings: 'Ajustes',
 		allProfiles: 'Todos los perfiles',
+		card: 'Tu ficha',
 		modelsAndKeys: 'Modelos y claves',
 		people: 'Personas',
 		logOut: 'Cerrar sesión'
@@ -613,6 +614,24 @@ export const es: Messages = {
 		unsortedHint:
 			'De antes de que la memoria tuviera categorías: nolune la lee, pero no le añade nada. Muévela a una categoría para que siga creciendo.',
 		memberNote: (name: string) => `miembro: ${name}`,
+		/** Members' cards: a note each that goes with them into all their profiles. */
+		cards: {
+			group: 'Fichas',
+			title: (name: string) => `Ficha de ${name}`,
+			yours: 'Tu ficha',
+			intro:
+				'La ficha de cada miembro dice lo que le contó a nolune sobre sí mismo y le contaría a cualquiera. Va con esa persona a todos los perfiles en los que está, y cada chat empieza con ella. Solo esa persona la cambia.',
+			everywhere: 'va con esa persona a todos sus perfiles',
+			yoursEverywhere: 'va contigo a todos tus perfiles',
+			readBy: (profiles: string[]) => `Todos en ${list(profiles)} pueden leerla.`,
+			empty: (name: string) => `La ficha de ${name} está vacía por ahora.`,
+			yoursEmpty:
+				'Tu ficha está vacía por ahora. Cuéntale a nolune algo de ti en cualquier chat, como «Soy vegetariano», e irá a tu ficha, para todos tus perfiles.',
+			edit: 'Editar tu ficha',
+			make: 'Crea tu ficha',
+			makeHint: (n: number) =>
+				`Tus notas en tus perfiles ya dicen ${p(n, { one: `${n} cosa`, other: `${n} cosas` })} sobre ti. Elige lo que debe ir contigo a todas partes.`
+		},
 		move: {
 			button: (topic: string) => `Mover ${topic}`,
 			title: (topic: string) => `Mover «${topic}»`,
@@ -645,6 +664,10 @@ export const es: Messages = {
 			changedSince:
 				'Cambió desde entonces, así que no se puede deshacer aquí. Edita la nota en la página Memoria.',
 			alreadyUndone: 'Ya se deshizo.',
+			keepHere: 'Dejar solo aquí',
+			keepHereHint: (profile: string) =>
+				`Quitarlo de tu ficha y dejarlo solo en tu nota de ${profile}`,
+			ownerOnly: (name: string) => `Solo ${name} puede deshacerlo.`,
 			recent: 'Guardado de los chats',
 			recentHint:
 				'Lo que nolune anotó por su cuenta cuando los chats quedaron en silencio, en las últimas dos semanas.',
@@ -652,6 +675,45 @@ export const es: Messages = {
 			deletedChat: 'de un chat eliminado',
 			showAll: (n: number) => `Mostrar los ${n}`,
 			untitled: 'un chat'
+		}
+	},
+
+	/** The person's own card, on a page of its own. */
+	card: {
+		title: 'Tu ficha',
+		intro:
+			'Lo que nolune sabe de ti estés donde estés: los idiomas que hablas, lo que comes, cómo te gustan las respuestas. Va contigo a todos los perfiles en los que estás, y cada chat nuevo allí empieza con ella. Solo lo que dices tú sobre ti va en ella, y solo tú la cambias aquí.',
+		readBy: (profiles: string[]) => `Todos en ${list(profiles)} pueden leerla.`,
+		inNoProfile: 'Todavía no estás en ningún perfil, así que nadie la lee.',
+		empty:
+			'Nada todavía. Cuéntale a nolune algo de ti en cualquier chat, o trae aquí abajo lo que ya dicen tus notas en tus perfiles.',
+		placeholder:
+			'Por ejemplo:\n- Habla español e inglés\n- Vegetariana\n- Prefiere respuestas cortas, en unidades métricas',
+		edit: 'Editar',
+		emptyText: 'Tu ficha está vacía. Para vaciarla, usa Vaciar.',
+		saved: 'Guardado. Los chats nuevos en todos tus perfiles lo verán.',
+		clear: 'Vaciar',
+		clearTitle: '¿Vaciar tu ficha?',
+		clearBody:
+			'nolune olvida lo que dice tu ficha, en todos tus perfiles. Los chats ya empezados conservan lo que leyeron.',
+		cleared: 'Tu ficha está vacía ahora.',
+		bring: {
+			title: 'Traer de tus notas',
+			intro:
+				'Lo que dicen de ti tus notas en tus perfiles. Está marcado lo que dicen varias de ellas, y tus reglas fijadas en un perfil. Lo que añadas pasa a tu ficha y sale de las notas de donde vino, que ahora leen tu ficha. Quién eres para la gente de un perfil y cómo te llaman allí se queda allí.',
+			rule: 'tu regla',
+			add: (n: number) => `Añadir ${n} a tu ficha`,
+			added: (n: number, left: number) =>
+				n || left
+					? `${p(n, { one: `${n} cosa añadida`, other: `${n} cosas añadidas` })} a tu ficha.${left ? ` ${left} no ${left === 1 ? 'cabía' : 'cabían'}: guarda unas pocas cosas, no todo.` : ''}`
+					: 'No se añadió nada.'
+		},
+		changes: {
+			title: 'Lo que cambió nolune',
+			intro:
+				'Lo que nolune puso en tu ficha en los chats de cualquiera de tus perfiles. Solo tú ves de dónde vino cada cosa.',
+			inProfile: 'en {profile}',
+			fromChat: 'en {profile}, de {chat}'
 		}
 	},
 

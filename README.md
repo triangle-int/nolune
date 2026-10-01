@@ -39,9 +39,11 @@ background. Members can also manage the profile and its membership.
   attach files, manage memory and skills, create images, and review automations. Family members
   use the interface; the terminal is for setup and administration.
 - **Memory you can see and change.** nolune remembers preferences, people, plans, and where things
-  are. Each member can have a linked person note, so “I” means the person writing. Review, edit,
-  merge, or delete notes on the Memory page, undo automatically saved memories, or turn learning
-  from chats off.
+  are. Each member has a card that goes with them into every profile they're in, so you don't
+  explain yourself to each one, while everything else stays in the profile it was said in. Each
+  member can have a linked person note, so “I” means the person writing. Review, edit, merge, or
+  delete notes on the Memory page, undo automatically saved memories, or turn learning from chats
+  off.
 - **An assistant that can do the work.** It can work with files on the host computer, run commands,
   inspect photos and documents, and return files in the chat. Give it a form to fill in or ask it
   to find the photos from your last trip.

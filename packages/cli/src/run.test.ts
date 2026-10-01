@@ -4,16 +4,21 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+	addMember,
+	cardChanges,
+	cardOf,
 	createConversation,
 	createProfile,
 	findInvite,
 	initConfig,
+	readCard,
 	readMemoryNote,
 	readSoulFile,
 	runSubagent,
 	updateConfig
 } from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { commitQueuedRows, insertQueued } from '../../core/src/conversations.ts';
 import { setSubagentStatus } from '../../core/src/subagents.ts';
 import { makeFamily, makePreset, makeUser } from '../../core/src/test/fixtures.ts';
 import { runCli } from './run.ts';
@@ -130,6 +135,68 @@ describe('runCli', () => {
 		expect(readMemoryNote('family', 'people/olga').text).toBe(
 			"# Olga\n\n- Lives in Tver\n- Who: Tester's grandmother\n- Loves roses\n- Also called: Grandma\n"
 		);
+	});
+
+	it("changes a member's card only from their own messages, and prints it", async () => {
+		const anna = makeUser('Anna');
+		const ben = makeUser('Ben');
+		const family = createProfile('Family', anna.id);
+		addMember(family.id, 'ben@example.com');
+		const conv = createConversation({
+			profile: family,
+			presetId: makePreset().id,
+			userId: anna.id
+		});
+		const env = { NOLUNE_PROFILE: 'family', NOLUNE_CONVERSATION_ID: conv.id };
+		const say = (who: { id: string; name: string }, text: string) => {
+			insertQueued({ conversationId: conv.id, senderId: who.id, senderName: who.name, text });
+			commitQueuedRows(conv.id);
+		};
+
+		say(ben, 'Anna is vegetarian');
+		expect(await run(['memory', 'add', 'cards/anna', 'Vegetarian'], { env })).toMatchObject({
+			code: 1,
+			err: expect.stringContaining("cards/anna is Anna's card")
+		});
+		say(anna, "I'm vegetarian");
+		expect(await run(['memory', 'add', 'cards/anna', 'Vegetarian'], { env })).toEqual({
+			code: 0,
+			out: 'Saved to cards/anna.md.\n',
+			err: ''
+		});
+		expect(await run(['memory', 'replace', 'cards/anna', 'Vegetarian', 'Vegan'], { env })).toEqual({
+			code: 0,
+			out: "Updated cards/anna.md, Anna's card.\n",
+			err: ''
+		});
+		expect(cardChanges(cardOf(anna.id)).map((c) => [c.op, c.source, c.fact])).toEqual([
+			['replace', 'agent', 'Vegan'],
+			['add', 'agent', 'Vegetarian']
+		]);
+		expect(await run(['memory', 'write', 'cards/anna'], { env, stdin: '# Anna\n' })).toMatchObject({
+			code: 1,
+			err: expect.stringContaining('change it a fact at a time')
+		});
+		expect(await run(['memory', 'mv', 'cards/anna', 'people/anna'], { env })).toMatchObject({
+			code: 1
+		});
+		expect(await run(['memory', 'show', 'cards/ben'], { env })).toMatchObject({
+			out: "# Ben\n\n(Ben's card is empty so far.)\n"
+		});
+		expect((await run(['memory', 'search', 'vegan'], { env })).out).toBe(
+			'cards/anna.md:3  Vegan\n'
+		);
+		expect((await run(['memory'], { env })).out).toMatch(/cards\/anna\.md +1 fact .*\(Anna's\)/);
+		// From a terminal, without a chat: printed, never written.
+		expect(await run(['card', 'anna@example.com'])).toEqual({
+			code: 0,
+			out: '# Anna\n\n- Vegan\n',
+			err: ''
+		});
+		expect(
+			await run(['memory', 'forget', 'cards/anna', 'Vegan'], { env: { NOLUNE_PROFILE: 'family' } })
+		).toMatchObject({ code: 1 });
+		expect(readCard(cardOf(anna.id))?.text).toContain('Vegan');
 	});
 
 	it('resolves relative paths from its folder', async () => {
