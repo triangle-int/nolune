@@ -2114,7 +2114,10 @@ Triangle Interactive, LLC sells the plan, through Stripe.
   `customer.subscription.deleted`, sent when a cancelled subscription runs out, ends the plan
   unless another subscription holds it. Each event is checked by its signature, and each grant is
   keyed by what paid for it (the invoice, the Checkout Session), so an event Stripe sends twice
-  grants once.
+  grants once. Events come in the endpoint's API version, else the account's default
+  (`2026-01-28.clover` in October 2026); what the API reads of them is the same in both. Checked
+  end to end in test mode: Checkout for the plan and a pack, cancelling in the portal, a
+  subscription's end, and on a test clock a renewal, a failed payment and its recovery.
 - **A failed payment** leaves the plan what's left of its credits but gives it no new ones while
   Stripe retries. The account page says so (the subscription is `past_due`), and Manage changes
   the card; Models & keys doesn't yet.
