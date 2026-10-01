@@ -8,6 +8,7 @@ import { conversation, folder, folderFile, upload } from './db/schema.ts';
 import { describeStored } from './media.ts';
 import { paths, profileFoldersDir } from './paths.ts';
 import type { Profile } from './profiles.ts';
+import { slugBase } from './slugs.ts';
 
 /*
  * Folders group a profile's chats, like projects: every chat in a folder gets the folder's
@@ -42,14 +43,7 @@ function cleanName(name: string): string {
 
 /** Unique in the profile, and not taken by a folder on disk (a deleted folder's, say). */
 function slugify(profile: Pick<Profile, 'id' | 'slug'>, name: string): string {
-	const base =
-		name
-			.normalize('NFKD')
-			.replace(/[̀-ͯ]/g, '')
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, '-')
-			.replace(/^-+|-+$/g, '')
-			.slice(0, 40) || 'folder';
+	const base = slugBase(name) || 'folder';
 	const taken = (slug: string) =>
 		!!getDb()
 			.select({ id: folder.id })

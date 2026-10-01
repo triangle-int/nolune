@@ -67,8 +67,10 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 ~/.agents/skills/<name>/SKILL.md   global skills, visible to every profile
 ```
 
-The folder name is a slug that is fixed when the profile is created. Renaming a profile changes
-only its display name, so the skill paths already in system prompts stay valid.
+The folder name is a slug that is fixed when the profile is created. It is made from the name
+(`slugBase` in `slugs.ts`), with Cyrillic spelled in Latin: `Книжный клуб` is `knizhnyy-klub`.
+Renaming a profile changes only its display name, so the skill paths already in system prompts stay
+valid.
 
 The profile also stores its assistant's avatar (`profile.avatar`, one of eight names). A new profile
 gets the one its slug picks; see [Assistant avatars](#assistant-avatars).
