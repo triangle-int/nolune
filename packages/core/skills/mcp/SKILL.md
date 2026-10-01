@@ -56,10 +56,10 @@ the tool list are what the server says about a tool; other tools may change thin
 ## When it doesn't work
 
 - "isn't connected in this profile" or "there's no MCP server called …": it's not this profile's.
-  Say so; an admin can add it under Models & keys.
+  Say so; an admin can add it on the Connected services page.
 - "couldn't start", "couldn't reach", "turned nolune away": the server is down, missing something,
-  or its key no longer works. Tell the person in plain words; an admin fixes it under Models &
-  keys. Don't edit nolune's config.json yourself.
+  or its key no longer works. Tell the person in plain words; an admin fixes it on the Connected
+  services page. Don't edit nolune's config.json yourself.
 - When someone asks you to connect a new service, `nolune mcp add` can (see `nolune help`), with
   the key they give you. Servers that only sign in through a web page (OAuth) can't be connected
   yet.

@@ -171,7 +171,7 @@ describe('nolune mcp', () => {
 		expect(await run(['mcp', 'call', 'annas', 'echo', '{"text": "x"}'], family)).toEqual({
 			code: 1,
 			out: '',
-			err: "nolune: annas isn't connected in this profile. An admin can add it under Models & keys.\n"
+			err: "nolune: annas isn't connected in this profile. An admin can add it on the Connected services page.\n"
 		});
 		const all = await run(['mcp', 'tools'], family);
 		expect(all.out).toMatch(/^shared: Fake Server, 7 tools\n/);

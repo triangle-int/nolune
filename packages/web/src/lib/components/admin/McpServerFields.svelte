@@ -27,7 +27,7 @@
 	} = $props();
 
 	const { m } = getI18n();
-	const t = $derived(m.admin.mcp);
+	const t = $derived(m.services);
 	const uid = $props.id();
 	const KINDS: McpKind[] = ['stdio', 'remote'];
 	const TRANSPORTS = ['http', 'sse'] as const;

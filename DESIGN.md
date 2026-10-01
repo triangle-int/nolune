@@ -1374,9 +1374,9 @@ not more tools: the agent runs `nolune mcp tools` and `nolune mcp call` through 
   `args`, `env`, `cwd`; or `type` `http` or `sse`, `url`, `headers`), so a server's README snippet
   can be pasted (`nolune mcp add-json`, `"mcpServers"` and all), plus nolune's own: a `description`
   for the agent and the `profiles` (slugs) that have it, every profile when left out. The name is
-  what the agent calls it by: lowercase letters and digits, with `-` or `_` between words. Models &
-  keys and `nolune mcp list` show the names of its keys, never their values; a form that leaves
-  them empty keeps them.
+  what the agent calls it by: lowercase letters and digits, with `-` or `_` between words. The
+  Connected services page and `nolune mcp list` show the names of its keys, never their values; a
+  form that leaves them empty keeps them.
 - **Connecting** (`mcp.ts`, with the MCP TypeScript SDK's client). A server this computer runs is
   started as a program, not through a shell, with the agent's commands' environment (the
   gateway's minus its secrets, plus `nolune env`'s) and its own `env`, and the PATH of a login shell
@@ -1644,6 +1644,13 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   source once
   (`embeddingProblem`) and says if it didn't answer, and a source that works starts embedding every
   profile's facts in the background.
+- **Connected services** (`/admin/services`, admins only, between Models & keys and People in the
+  user menu) lists the MCP servers (see [MCP servers](#mcp-servers)) and does what `nolune mcp add`,
+  `rm` and `list` do: **Connect a server** takes a name, a command or an address (Streamable HTTP
+  or SSE), its environment variables or headers (a line each), what it's for and the profiles that
+  have it, connects to check it, and saves it either way, saying how many tools it has or why it
+  couldn't connect. **Change** starts from what's saved, keys aside: left empty, they stay.
+  **Check** connects again. The form is open from the start while there are no servers.
 - **People** (`/admin/people`, admins only, next to Models & keys in the user menu) lists every
   account and does what `nolune user` does. **Add a person** takes a name, an email and whether
   they're an admin, checks them as `nolune user create` does, and shows the address and a password

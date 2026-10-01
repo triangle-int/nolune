@@ -205,6 +205,7 @@ export const fr: Messages = {
 		allProfiles: 'Tous les profils',
 		card: 'Votre fiche',
 		modelsAndKeys: 'Modèles et clés',
+		services: 'Services connectés',
 		people: 'Personnes',
 		logOut: 'Se déconnecter'
 	},
@@ -1226,67 +1227,6 @@ export const fr: Messages = {
 				'Les discussions et automatisations sur ses modèles cessent de fonctionner jusqu’à ce qu’elles passent à un autre modèle.',
 			usedBy: (names: string) => `Ces préréglages l’utilisent : ${names}.`
 		},
-		/** MCP servers: other apps' and services' tools, which the agent uses with `nolune mcp`. */
-		mcp: {
-			title: 'Services connectés',
-			hint: 'Les serveurs MCP donnent à l’agent les outils d’autres applications et services, comme un agenda, GitHub, Notion ou la maison connectée. Il les utilise par des commandes, que le mode auto vérifie comme les autres. Tous les profils les ont, sauf si vous en choisissez certains.',
-			add: 'Connecter un serveur',
-			addTitle: 'Connecter un serveur MCP',
-			addHint:
-				'Ses instructions disent quoi indiquer : la commande qui le lance sur cet ordinateur, ou son adresse, et la clé dont il a besoin.',
-			name: 'Nom',
-			namePlaceholder: 'github',
-			nameHint:
-				'Le nom que l’agent lui donne : lettres minuscules et chiffres, comme github ou home-assistant.',
-			kind: 'Comment nolune le joint',
-			kinds: { stdio: 'Une commande', remote: 'Une adresse' },
-			command: 'Commande',
-			commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
-			commandHint:
-				'Telle que vous la taperiez dans un terminal. Elle s’exécute sur cet ordinateur avec les accès de ce compte, et trouve les programmes là où les commandes de l’agent les trouvent.',
-			address: 'Adresse',
-			addressHint: 'Son adresse MCP, qui se termine souvent par /mcp.',
-			transport: 'Protocole',
-			transports: { http: 'Streamable HTTP', sse: 'SSE (anciens serveurs)' },
-			env: 'Variables d’environnement',
-			envHint: 'Une par ligne, sous la forme NOM=valeur : les clés et jetons dont il a besoin.',
-			headers: 'En-têtes',
-			headersHint: 'Un par ligne, sous la forme Nom: valeur, comme Authorization: Bearer …',
-			ifNeeded: '(s’il en demande)',
-			secretsKept: (names: string[]) =>
-				`Enregistrées : ${list(names)}. Laissez vide pour les garder.`,
-			description: 'À quoi il sert',
-			optional: '(facultatif)',
-			descriptionPlaceholder: 'Les agendas de la famille',
-			descriptionHint:
-				'Quelques mots pour l’agent, pour qu’il sache quand l’utiliser. Laissé vide, nolune reprend ce que le serveur dit de lui-même.',
-			profiles: 'Profils',
-			profilesHint:
-				'Seuls les profils que vous choisissez l’ont. Si vous n’en choisissez aucun, tous l’ont.',
-			everyProfile: 'Dans tous les profils',
-			onlyIn: (names: string[]) => `Seulement dans ${list(names)}`,
-			keys: (names: string[]) => `avec ${list(names)}`,
-			noKeys: 'sans clés',
-			connecting: 'Connexion…',
-			check: 'Vérifier',
-			checking: 'Vérification…',
-			change: 'Modifier',
-			works: (n: number, names: string) =>
-				`Il fonctionne : ${n} ${p(n, { one: 'outil', other: 'outils' })}${names ? ` (${names})` : ''}.`,
-			unchecked: (problem: string) =>
-				`Enregistré, mais nolune n’a pas pu s’y connecter. ${problem}`,
-			taken: (name: string) => `Il y a déjà un serveur appelé ${name}.`,
-			needCommand: 'Indiquez la commande qui le lance.',
-			needAddress: 'Indiquez son adresse, en commençant par http:// ou https://.',
-			badEnv: (line: string) => `« ${line} » n’est pas de la forme NOM=valeur.`,
-			badHeader: (line: string) => `« ${line} » n’est pas de la forme Nom: valeur.`,
-			broken: (problem: string) => `Ses réglages dans config.json sont endommagés : ${problem}`,
-			disconnect: 'Déconnecter',
-			removeTitle: (name: string) => `Déconnecter ${name} ?`,
-			removeBody:
-				'L’agent ne peut plus utiliser ses outils, et nolune oublie ses réglages et ses clés.',
-			removed: 'Déconnecté.'
-		},
 		/** Memory search by meaning: where its embeddings come from. */
 		embeddings: {
 			title: 'Recherche dans la mémoire',
@@ -1349,6 +1289,70 @@ export const fr: Messages = {
 				'Un modèle rapide et compétent garde les discussions fluides : chaque commande qui fait plus que regarder lui coûte une courte requête.',
 			saved: 'Enregistré. S’applique dès la prochaine commande.'
 		}
+	},
+
+	/**
+	 * Connected services, for admins: MCP servers, other apps' and services' tools, which the agent
+	 * uses with `nolune mcp`.
+	 */
+	services: {
+		title: 'Services connectés',
+		hint: 'Les serveurs MCP donnent à l’agent les outils d’autres applications et services, comme un agenda, GitHub, Notion ou la maison connectée. Il les utilise par des commandes, que le mode auto vérifie comme les autres. Tous les profils les ont, sauf si vous en choisissez certains.',
+		add: 'Connecter un serveur',
+		addTitle: 'Connecter un serveur MCP',
+		addHint:
+			'Ses instructions disent quoi indiquer : la commande qui le lance sur cet ordinateur, ou son adresse, et la clé dont il a besoin.',
+		name: 'Nom',
+		namePlaceholder: 'github',
+		nameHint:
+			'Le nom que l’agent lui donne : lettres minuscules et chiffres, comme github ou home-assistant.',
+		kind: 'Comment nolune le joint',
+		kinds: { stdio: 'Une commande', remote: 'Une adresse' },
+		command: 'Commande',
+		commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
+		commandHint:
+			'Telle que vous la taperiez dans un terminal. Elle s’exécute sur cet ordinateur avec les accès de ce compte, et trouve les programmes là où les commandes de l’agent les trouvent.',
+		address: 'Adresse',
+		addressHint: 'Son adresse MCP, qui se termine souvent par /mcp.',
+		transport: 'Protocole',
+		transports: { http: 'Streamable HTTP', sse: 'SSE (anciens serveurs)' },
+		env: 'Variables d’environnement',
+		envHint: 'Une par ligne, sous la forme NOM=valeur : les clés et jetons dont il a besoin.',
+		headers: 'En-têtes',
+		headersHint: 'Un par ligne, sous la forme Nom: valeur, comme Authorization: Bearer …',
+		ifNeeded: '(s’il en demande)',
+		secretsKept: (names: string[]) =>
+			`Enregistrées : ${list(names)}. Laissez vide pour les garder.`,
+		description: 'À quoi il sert',
+		optional: '(facultatif)',
+		descriptionPlaceholder: 'Les agendas de la famille',
+		descriptionHint:
+			'Quelques mots pour l’agent, pour qu’il sache quand l’utiliser. Laissé vide, nolune reprend ce que le serveur dit de lui-même.',
+		profiles: 'Profils',
+		profilesHint:
+			'Seuls les profils que vous choisissez l’ont. Si vous n’en choisissez aucun, tous l’ont.',
+		everyProfile: 'Dans tous les profils',
+		onlyIn: (names: string[]) => `Seulement dans ${list(names)}`,
+		keys: (names: string[]) => `avec ${list(names)}`,
+		noKeys: 'sans clés',
+		connecting: 'Connexion…',
+		check: 'Vérifier',
+		checking: 'Vérification…',
+		change: 'Modifier',
+		works: (n: number, names: string) =>
+			`Il fonctionne : ${n} ${p(n, { one: 'outil', other: 'outils' })}${names ? ` (${names})` : ''}.`,
+		unchecked: (problem: string) => `Enregistré, mais nolune n’a pas pu s’y connecter. ${problem}`,
+		taken: (name: string) => `Il y a déjà un serveur appelé ${name}.`,
+		needCommand: 'Indiquez la commande qui le lance.',
+		needAddress: 'Indiquez son adresse, en commençant par http:// ou https://.',
+		badEnv: (line: string) => `« ${line} » n’est pas de la forme NOM=valeur.`,
+		badHeader: (line: string) => `« ${line} » n’est pas de la forme Nom: valeur.`,
+		broken: (problem: string) => `Ses réglages dans config.json sont endommagés : ${problem}`,
+		disconnect: 'Déconnecter',
+		removeTitle: (name: string) => `Déconnecter ${name} ?`,
+		removeBody:
+			'L’agent ne peut plus utiliser ses outils, et nolune oublie ses réglages et ses clés.',
+		removed: 'Déconnecté.'
 	},
 
 	people: {

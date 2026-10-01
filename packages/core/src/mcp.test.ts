@@ -178,7 +178,7 @@ describe('saving servers', () => {
 		saveMcpServer('a', fake());
 		removeMcpServer('a');
 		expect(readConfig()).not.toHaveProperty('mcpServers');
-		expect(() => findMcpServer('a')).toThrow(/admin connects them under Models & keys/);
+		expect(() => findMcpServer('a')).toThrow(/admin connects them on the Connected services page/);
 	});
 
 	it('says when its settings in config.json are broken', () => {

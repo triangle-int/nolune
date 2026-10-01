@@ -120,6 +120,7 @@ export const en = {
 		allProfiles: 'All profiles',
 		card: 'Your card',
 		modelsAndKeys: 'Models & keys',
+		services: 'Connected services',
 		people: 'People',
 		logOut: 'Log out'
 	},
@@ -1142,64 +1143,6 @@ export const en = {
 				"Chats and automations on its models stop working until they're moved to another model.",
 			usedBy: (names: string) => `These presets run on it: ${names}.`
 		},
-		/** MCP servers: other apps' and services' tools, which the agent uses with `nolune mcp`. */
-		mcp: {
-			title: 'Connected services',
-			hint: 'MCP servers give the agent the tools of other apps and services, like a calendar, GitHub, Notion or the smart home. It uses them through commands, which auto mode checks like any other. Every profile gets them, unless you choose some.',
-			add: 'Connect a server',
-			addTitle: 'Connect an MCP server',
-			addHint:
-				'Its instructions say what to give: the command that starts it on this computer, or its address, and the key it needs.',
-			name: 'Name',
-			namePlaceholder: 'github',
-			nameHint:
-				'What the agent calls it by: lowercase letters and digits, like github or home-assistant.',
-			kind: 'How nolune reaches it',
-			kinds: { stdio: 'A command', remote: 'An address' },
-			command: 'Command',
-			commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
-			commandHint:
-				"As you'd type it in a terminal. It runs on this computer with this account's access, and finds programs where the agent's commands do.",
-			address: 'Address',
-			addressHint: 'Its MCP address, which often ends in /mcp.',
-			transport: 'Protocol',
-			transports: { http: 'Streamable HTTP', sse: 'SSE (older servers)' },
-			env: 'Environment variables',
-			envHint: 'One per line, as NAME=value: the keys and tokens it needs.',
-			headers: 'Headers',
-			headersHint: 'One per line, as Name: value, like Authorization: Bearer …',
-			ifNeeded: '(if it needs any)',
-			secretsKept: (names: string[]) => `Saved: ${list(names)}. Leave empty to keep them.`,
-			description: 'What it’s for',
-			optional: '(optional)',
-			descriptionPlaceholder: 'The family’s calendars',
-			descriptionHint:
-				'A few words for the agent, so it knows when to use it. Left empty, nolune uses what the server says about itself.',
-			profiles: 'Profiles',
-			profilesHint: 'Only the profiles you choose get it. With none chosen, every profile does.',
-			everyProfile: 'In every profile',
-			onlyIn: (names: string[]) => `Only in ${list(names)}`,
-			keys: (names: string[]) => `with ${list(names)}`,
-			noKeys: 'no keys',
-			connecting: 'Connecting…',
-			check: 'Check',
-			checking: 'Checking…',
-			change: 'Change',
-			works: (n: number, names: string) =>
-				`It works: ${n} ${p(n, { one: 'tool', other: 'tools' })}${names ? ` (${names})` : ''}.`,
-			unchecked: (problem: string) => `Saved, but nolune couldn't connect to it. ${problem}`,
-			taken: (name: string) => `There's already a server called ${name}.`,
-			needCommand: 'Give the command that starts it.',
-			needAddress: 'Give its address, starting with http:// or https://.',
-			badEnv: (line: string) => `“${line}” isn't NAME=value.`,
-			badHeader: (line: string) => `“${line}” isn't Name: value.`,
-			broken: (problem: string) => `Its settings in config.json are broken: ${problem}`,
-			disconnect: 'Disconnect',
-			removeTitle: (name: string) => `Disconnect ${name}?`,
-			removeBody:
-				"The agent can't use its tools any more, and nolune forgets its settings and keys.",
-			removed: 'Disconnected.'
-		},
 		/** Memory search by meaning: where its embeddings come from. */
 		embeddings: {
 			title: 'Memory search',
@@ -1260,6 +1203,67 @@ export const en = {
 				'A fast, capable model keeps chats quick: every command that does more than look costs a short call to it.',
 			saved: 'Saved. It applies from the next command.'
 		}
+	},
+
+	/**
+	 * Connected services, for admins: MCP servers, other apps' and services' tools, which the agent
+	 * uses with `nolune mcp`.
+	 */
+	services: {
+		title: 'Connected services',
+		hint: 'MCP servers give the agent the tools of other apps and services, like a calendar, GitHub, Notion or the smart home. It uses them through commands, which auto mode checks like any other. Every profile gets them, unless you choose some.',
+		add: 'Connect a server',
+		addTitle: 'Connect an MCP server',
+		addHint:
+			'Its instructions say what to give: the command that starts it on this computer, or its address, and the key it needs.',
+		name: 'Name',
+		namePlaceholder: 'github',
+		nameHint:
+			'What the agent calls it by: lowercase letters and digits, like github or home-assistant.',
+		kind: 'How nolune reaches it',
+		kinds: { stdio: 'A command', remote: 'An address' },
+		command: 'Command',
+		commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
+		commandHint:
+			"As you'd type it in a terminal. It runs on this computer with this account's access, and finds programs where the agent's commands do.",
+		address: 'Address',
+		addressHint: 'Its MCP address, which often ends in /mcp.',
+		transport: 'Protocol',
+		transports: { http: 'Streamable HTTP', sse: 'SSE (older servers)' },
+		env: 'Environment variables',
+		envHint: 'One per line, as NAME=value: the keys and tokens it needs.',
+		headers: 'Headers',
+		headersHint: 'One per line, as Name: value, like Authorization: Bearer …',
+		ifNeeded: '(if it needs any)',
+		secretsKept: (names: string[]) => `Saved: ${list(names)}. Leave empty to keep them.`,
+		description: 'What it’s for',
+		optional: '(optional)',
+		descriptionPlaceholder: 'The family’s calendars',
+		descriptionHint:
+			'A few words for the agent, so it knows when to use it. Left empty, nolune uses what the server says about itself.',
+		profiles: 'Profiles',
+		profilesHint: 'Only the profiles you choose get it. With none chosen, every profile does.',
+		everyProfile: 'In every profile',
+		onlyIn: (names: string[]) => `Only in ${list(names)}`,
+		keys: (names: string[]) => `with ${list(names)}`,
+		noKeys: 'no keys',
+		connecting: 'Connecting…',
+		check: 'Check',
+		checking: 'Checking…',
+		change: 'Change',
+		works: (n: number, names: string) =>
+			`It works: ${n} ${p(n, { one: 'tool', other: 'tools' })}${names ? ` (${names})` : ''}.`,
+		unchecked: (problem: string) => `Saved, but nolune couldn't connect to it. ${problem}`,
+		taken: (name: string) => `There's already a server called ${name}.`,
+		needCommand: 'Give the command that starts it.',
+		needAddress: 'Give its address, starting with http:// or https://.',
+		badEnv: (line: string) => `“${line}” isn't NAME=value.`,
+		badHeader: (line: string) => `“${line}” isn't Name: value.`,
+		broken: (problem: string) => `Its settings in config.json are broken: ${problem}`,
+		disconnect: 'Disconnect',
+		removeTitle: (name: string) => `Disconnect ${name}?`,
+		removeBody: "The agent can't use its tools any more, and nolune forgets its settings and keys.",
+		removed: 'Disconnected.'
 	},
 
 	/** Everyone with an account, for admins: adding people, invite links, passwords. */

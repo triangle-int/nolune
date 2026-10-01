@@ -265,6 +265,7 @@ export const ru: Messages = {
 		allProfiles: 'Все профили',
 		card: 'Ваша карточка',
 		modelsAndKeys: 'Модели и ключи',
+		services: 'Подключённые сервисы',
 		people: 'Люди',
 		logOut: 'Выйти'
 	},
@@ -1290,66 +1291,6 @@ export const ru: Messages = {
 				'Чаты и автоматизации на его моделях перестанут работать, пока их не переведут на другую модель.',
 			usedBy: (names: string) => `На нём работают пресеты: ${names}.`
 		},
-		/** MCP servers: other apps' and services' tools, which the agent uses with `nolune mcp`. */
-		mcp: {
-			title: 'Подключённые сервисы',
-			hint: 'MCP-серверы дают агенту инструменты других приложений и сервисов: календаря, GitHub, Notion или умного дома. Он пользуется ими через команды, которые автоматический режим проверяет, как любые другие. Они есть во всех профилях, если не выбрать отдельные.',
-			add: 'Подключить сервер',
-			addTitle: 'Подключить MCP-сервер',
-			addHint:
-				'В его инструкции сказано, что указать: команду, которая запускает его на этом компьютере, или его адрес, и нужный ему ключ.',
-			name: 'Имя',
-			namePlaceholder: 'github',
-			nameHint:
-				'Так его называет агент: строчные латинские буквы и цифры, например github или home-assistant.',
-			kind: 'Как nolune к нему подключается',
-			kinds: { stdio: 'Команда', remote: 'Адрес' },
-			command: 'Команда',
-			commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
-			commandHint:
-				'Так, как вы набрали бы её в терминале. Она работает на этом компьютере с правами этой учётной записи и находит программы там же, где команды агента.',
-			address: 'Адрес',
-			addressHint: 'Его MCP-адрес, часто он заканчивается на /mcp.',
-			transport: 'Протокол',
-			transports: { http: 'Streamable HTTP', sse: 'SSE (старые серверы)' },
-			env: 'Переменные окружения',
-			envHint: 'По одной в строке, в виде ИМЯ=значение: ключи и токены, которые ему нужны.',
-			headers: 'Заголовки',
-			headersHint: 'По одному в строке, в виде Имя: значение, например Authorization: Bearer …',
-			ifNeeded: '(если нужны)',
-			secretsKept: (names: string[]) =>
-				`Сохранены: ${list(names)}. Оставьте пустым, чтобы не менять.`,
-			description: 'Для чего он',
-			optional: '(необязательно)',
-			descriptionPlaceholder: 'Семейные календари',
-			descriptionHint:
-				'Несколько слов для агента, чтобы он знал, когда им пользоваться. Если оставить пустым, nolune возьмёт то, что сервер говорит о себе.',
-			profiles: 'Профили',
-			profilesHint: 'Он будет только в выбранных профилях. Если не выбрать ни одного — во всех.',
-			everyProfile: 'Во всех профилях',
-			onlyIn: (names: string[]) => `Только в профилях: ${list(names)}`,
-			keys: (names: string[]) => `с ${list(names)}`,
-			noKeys: 'без ключей',
-			connecting: 'Подключаемся…',
-			check: 'Проверить',
-			checking: 'Проверяем…',
-			change: 'Изменить',
-			works: (n: number, names: string) =>
-				`Работает: ${n} ${p(n, { one: 'инструмент', few: 'инструмента', many: 'инструментов', other: 'инструмента' })}${names ? ` (${names})` : ''}.`,
-			unchecked: (problem: string) =>
-				`Сохранено, но nolune не смог к нему подключиться. ${problem}`,
-			taken: (name: string) => `Сервер с именем ${name} уже есть.`,
-			needCommand: 'Укажите команду, которая его запускает.',
-			needAddress: 'Укажите его адрес, начиная с http:// или https://.',
-			badEnv: (line: string) => `«${line}» — это не ИМЯ=значение.`,
-			badHeader: (line: string) => `«${line}» — это не Имя: значение.`,
-			broken: (problem: string) => `Его настройки в config.json повреждены: ${problem}`,
-			disconnect: 'Отключить',
-			removeTitle: (name: string) => `Отключить ${name}?`,
-			removeBody:
-				'Агент больше не сможет пользоваться его инструментами, а nolune забудет его настройки и ключи.',
-			removed: 'Отключён.'
-		},
 		/** Memory search by meaning: where its embeddings come from. */
 		embeddings: {
 			title: 'Поиск по памяти',
@@ -1411,6 +1352,69 @@ export const ru: Messages = {
 				'Быстрая и толковая модель не замедляет чаты: каждая команда, которая делает больше, чем просто смотрит, стоит короткого запроса к ней.',
 			saved: 'Сохранено. Действует со следующей команды.'
 		}
+	},
+
+	/**
+	 * Connected services, for admins: MCP servers, other apps' and services' tools, which the agent
+	 * uses with `nolune mcp`.
+	 */
+	services: {
+		title: 'Подключённые сервисы',
+		hint: 'MCP-серверы дают агенту инструменты других приложений и сервисов: календаря, GitHub, Notion или умного дома. Он пользуется ими через команды, которые автоматический режим проверяет, как любые другие. Они есть во всех профилях, если не выбрать отдельные.',
+		add: 'Подключить сервер',
+		addTitle: 'Подключить MCP-сервер',
+		addHint:
+			'В его инструкции сказано, что указать: команду, которая запускает его на этом компьютере, или его адрес, и нужный ему ключ.',
+		name: 'Имя',
+		namePlaceholder: 'github',
+		nameHint:
+			'Так его называет агент: строчные латинские буквы и цифры, например github или home-assistant.',
+		kind: 'Как nolune к нему подключается',
+		kinds: { stdio: 'Команда', remote: 'Адрес' },
+		command: 'Команда',
+		commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
+		commandHint:
+			'Так, как вы набрали бы её в терминале. Она работает на этом компьютере с правами этой учётной записи и находит программы там же, где команды агента.',
+		address: 'Адрес',
+		addressHint: 'Его MCP-адрес, часто он заканчивается на /mcp.',
+		transport: 'Протокол',
+		transports: { http: 'Streamable HTTP', sse: 'SSE (старые серверы)' },
+		env: 'Переменные окружения',
+		envHint: 'По одной в строке, в виде ИМЯ=значение: ключи и токены, которые ему нужны.',
+		headers: 'Заголовки',
+		headersHint: 'По одному в строке, в виде Имя: значение, например Authorization: Bearer …',
+		ifNeeded: '(если нужны)',
+		secretsKept: (names: string[]) =>
+			`Сохранены: ${list(names)}. Оставьте пустым, чтобы не менять.`,
+		description: 'Для чего он',
+		optional: '(необязательно)',
+		descriptionPlaceholder: 'Семейные календари',
+		descriptionHint:
+			'Несколько слов для агента, чтобы он знал, когда им пользоваться. Если оставить пустым, nolune возьмёт то, что сервер говорит о себе.',
+		profiles: 'Профили',
+		profilesHint: 'Он будет только в выбранных профилях. Если не выбрать ни одного — во всех.',
+		everyProfile: 'Во всех профилях',
+		onlyIn: (names: string[]) => `Только в профилях: ${list(names)}`,
+		keys: (names: string[]) => `с ${list(names)}`,
+		noKeys: 'без ключей',
+		connecting: 'Подключаемся…',
+		check: 'Проверить',
+		checking: 'Проверяем…',
+		change: 'Изменить',
+		works: (n: number, names: string) =>
+			`Работает: ${n} ${p(n, { one: 'инструмент', few: 'инструмента', many: 'инструментов', other: 'инструмента' })}${names ? ` (${names})` : ''}.`,
+		unchecked: (problem: string) => `Сохранено, но nolune не смог к нему подключиться. ${problem}`,
+		taken: (name: string) => `Сервер с именем ${name} уже есть.`,
+		needCommand: 'Укажите команду, которая его запускает.',
+		needAddress: 'Укажите его адрес, начиная с http:// или https://.',
+		badEnv: (line: string) => `«${line}» — это не ИМЯ=значение.`,
+		badHeader: (line: string) => `«${line}» — это не Имя: значение.`,
+		broken: (problem: string) => `Его настройки в config.json повреждены: ${problem}`,
+		disconnect: 'Отключить',
+		removeTitle: (name: string) => `Отключить ${name}?`,
+		removeBody:
+			'Агент больше не сможет пользоваться его инструментами, а nolune забудет его настройки и ключи.',
+		removed: 'Отключён.'
 	},
 
 	people: {

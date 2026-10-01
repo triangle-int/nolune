@@ -214,7 +214,7 @@ function list(io: Io): void {
 	const servers = listMcpServers(profile);
 	if (!servers.length) {
 		io.log(
-			`No MCP servers${profile ? ' in this profile' : ''}. An admin connects them under Models & keys, or with \`nolune mcp add\`.`
+			`No MCP servers${profile ? ' in this profile' : ''}. An admin connects them on the Connected services page, or with \`nolune mcp add\`.`
 		);
 		return;
 	}

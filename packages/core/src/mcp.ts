@@ -27,7 +27,7 @@ import { NOLUNE_VERSION } from './updates.ts';
  * plans get them, auto mode checks each call, and a chat's tools and prompt cache stay as they
  * are. A built-in skill (`mcp`) says how, and a chat's prompt names the servers its profile has.
  *
- * Admins connect them under Models & keys or with `nolune mcp add`. config.json keeps them the way
+ * Admins connect them on the Connected services page or with `nolune mcp add`. config.json keeps them the way
  * MCP clients write them (`mcpServers`: a command this computer runs, or an address), so a
  * server's own instructions can be pasted, plus what nolune adds: a description for the agent and
  * the profiles that have it (all, when it names none).
@@ -249,7 +249,7 @@ export function splitCommandLine(line: string): string[] {
 	return words;
 }
 
-/** What Models & keys and `nolune mcp list` show of a server: never its keys and tokens. */
+/** What Connected services and `nolune mcp list` show of a server: never its keys and tokens. */
 export interface McpServerStatus {
 	name: string;
 	type: McpTransport;
@@ -315,7 +315,7 @@ export function findMcpServer(name: string, profile?: string): McpServerConfig {
 	if (!Object.hasOwn(all, name)) {
 		const names = Object.keys(all);
 		throw new McpServerError(
-			`there's no MCP server called ${name}. ${names.length ? `\`nolune mcp list\` shows them.` : 'An admin connects them under Models & keys, or with `nolune mcp add`.'}`
+			`there's no MCP server called ${name}. ${names.length ? `\`nolune mcp list\` shows them.` : 'An admin connects them on the Connected services page, or with `nolune mcp add`.'}`
 		);
 	}
 	let server: McpServerConfig;
@@ -328,7 +328,7 @@ export function findMcpServer(name: string, profile?: string): McpServerConfig {
 	}
 	if (profile && server.profiles && !server.profiles.includes(profile)) {
 		throw new McpServerError(
-			`${name} isn't connected in this profile. An admin can add it under Models & keys.`
+			`${name} isn't connected in this profile. An admin can add it on the Connected services page.`
 		);
 	}
 	return server;

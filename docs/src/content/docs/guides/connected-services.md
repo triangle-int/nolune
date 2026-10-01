@@ -9,8 +9,8 @@ one and nolune's agent can use its tools in chats, automations and subagents, on
 
 ## Connecting a server
 
-Admins connect servers under **Connected services** in Models & keys: **Connect a server**, give it
-a name, and what its instructions say:
+Admins connect servers on the **Connected services** page, in the menu under their name: **Connect
+a server**, give it a name, and what its instructions say:
 
 - **A command** that starts it on this computer, like
   `npx -y @modelcontextprotocol/server-filesystem ~/Documents` or `uvx mcp-server-time`, with the

@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import type { McpServerStatus } from '@nolune/core';
+	import { untrack } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import McpServerFields from './McpServerFields.svelte';
 	import McpServerRow from './McpServerRow.svelte';
@@ -10,9 +11,10 @@
 	import type { McpKind, McpServerResult } from './mcp-servers';
 
 	/**
-	 * Connected services: the MCP servers whose tools the agent uses through `nolune mcp`, each
-	 * a row, and a form to connect another. `profiles`: those a server can be kept to. `result`:
-	 * the last save's, check's or removal's.
+	 * The Connected services page's servers: the MCP servers whose tools the agent uses through
+	 * `nolune mcp`, each a row, and a form to connect another, open from the start while there are
+	 * none. `profiles`: those a server can be kept to. `result`: the last save's, check's or
+	 * removal's.
 	 */
 	let {
 		servers,
@@ -25,10 +27,10 @@
 	} = $props();
 
 	const { m } = getI18n();
-	const t = $derived(m.admin.mcp);
+	const t = $derived(m.services);
 	const uid = $props.id();
 
-	let open = $state(false);
+	let open = $state(untrack(() => servers.length === 0));
 	let saving = $state(false);
 	let kind = $state<McpKind>('stdio');
 	let transport = $state<'http' | 'sse'>('http');
@@ -44,12 +46,7 @@
 	}
 </script>
 
-<section class="space-y-3" aria-labelledby="{uid}-heading">
-	<div class="space-y-1">
-		<h2 id="{uid}-heading" class="text-lg font-medium">{t.title}</h2>
-		<p class="text-muted-foreground">{t.hint}</p>
-	</div>
-
+<div class="space-y-3">
 	{#if servers.length}
 		<ul class="overflow-hidden rounded-2xl border">
 			{#each servers as server (server.name)}
@@ -61,7 +58,7 @@
 	{#if open}
 		<form
 			method="POST"
-			action="?/saveMcpServer"
+			action="?/save"
 			class="space-y-4 rounded-2xl border p-4 text-sm sm:p-5"
 			aria-labelledby="{uid}-add-heading"
 			use:enhance={submitting(
@@ -97,4 +94,4 @@
 			</Button>
 		</div>
 	{/if}
-</section>
+</div>

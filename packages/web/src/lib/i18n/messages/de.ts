@@ -194,6 +194,7 @@ export const de: Messages = {
 		allProfiles: 'Alle Profile',
 		card: 'Deine Karte',
 		modelsAndKeys: 'Modelle & Schlüssel',
+		services: 'Verbundene Dienste',
 		people: 'Personen',
 		logOut: 'Abmelden'
 	},
@@ -1204,67 +1205,6 @@ export const de: Messages = {
 				'Chats und Automationen mit seinen Modellen funktionieren nicht mehr, bis sie auf ein anderes Modell umgestellt sind.',
 			usedBy: (names: string) => `Diese Voreinstellungen laufen darauf: ${names}.`
 		},
-		/** MCP servers: other apps' and services' tools, which the agent uses with `nolune mcp`. */
-		mcp: {
-			title: 'Verbundene Dienste',
-			hint: 'MCP-Server geben dem Agenten die Werkzeuge anderer Apps und Dienste, etwa eines Kalenders, von GitHub, Notion oder dem Smart Home. Er nutzt sie über Befehle, die der Auto-Modus wie alle anderen prüft. Alle Profile bekommen sie, außer du wählst bestimmte aus.',
-			add: 'Server verbinden',
-			addTitle: 'Einen MCP-Server verbinden',
-			addHint:
-				'Seine Anleitung sagt, was du angeben musst: den Befehl, der ihn auf diesem Computer startet, oder seine Adresse, und den Schlüssel, den er braucht.',
-			name: 'Name',
-			namePlaceholder: 'github',
-			nameHint:
-				'So nennt ihn der Agent: Kleinbuchstaben und Ziffern, etwa github oder home-assistant.',
-			kind: 'Wie nolune ihn erreicht',
-			kinds: { stdio: 'Ein Befehl', remote: 'Eine Adresse' },
-			command: 'Befehl',
-			commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
-			commandHint:
-				'So, wie du ihn im Terminal eingeben würdest. Er läuft auf diesem Computer mit den Rechten dieses Kontos und findet Programme dort, wo die Befehle des Agenten sie finden.',
-			address: 'Adresse',
-			addressHint: 'Seine MCP-Adresse, die oft auf /mcp endet.',
-			transport: 'Protokoll',
-			transports: { http: 'Streamable HTTP', sse: 'SSE (ältere Server)' },
-			env: 'Umgebungsvariablen',
-			envHint: 'Eine pro Zeile, als NAME=Wert: die Schlüssel und Tokens, die er braucht.',
-			headers: 'Header',
-			headersHint: 'Einer pro Zeile, als Name: Wert, etwa Authorization: Bearer …',
-			ifNeeded: '(falls er welche braucht)',
-			secretsKept: (names: string[]) =>
-				`Gespeichert: ${list(names)}. Leer lassen, um sie zu behalten.`,
-			description: 'Wofür er da ist',
-			optional: '(optional)',
-			descriptionPlaceholder: 'Die Kalender der Familie',
-			descriptionHint:
-				'Ein paar Worte für den Agenten, damit er weiß, wann er ihn nutzt. Leer gelassen nimmt nolune, was der Server über sich selbst sagt.',
-			profiles: 'Profile',
-			profilesHint:
-				'Nur die Profile, die du auswählst, bekommen ihn. Ist keins ausgewählt, bekommen ihn alle.',
-			everyProfile: 'In allen Profilen',
-			onlyIn: (names: string[]) => `Nur in ${list(names)}`,
-			keys: (names: string[]) => `mit ${list(names)}`,
-			noKeys: 'ohne Schlüssel',
-			connecting: 'Verbinde …',
-			check: 'Prüfen',
-			checking: 'Prüfe …',
-			change: 'Ändern',
-			works: (n: number, names: string) =>
-				`Er funktioniert: ${n} ${p(n, { one: 'Werkzeug', other: 'Werkzeuge' })}${names ? ` (${names})` : ''}.`,
-			unchecked: (problem: string) =>
-				`Gespeichert, aber nolune konnte sich nicht mit ihm verbinden. ${problem}`,
-			taken: (name: string) => `Es gibt schon einen Server namens ${name}.`,
-			needCommand: 'Gib den Befehl an, der ihn startet.',
-			needAddress: 'Gib seine Adresse an, beginnend mit http:// oder https://.',
-			badEnv: (line: string) => `„${line}“ hat nicht die Form NAME=Wert.`,
-			badHeader: (line: string) => `„${line}“ hat nicht die Form Name: Wert.`,
-			broken: (problem: string) => `Seine Einstellungen in config.json sind fehlerhaft: ${problem}`,
-			disconnect: 'Trennen',
-			removeTitle: (name: string) => `${name} trennen?`,
-			removeBody:
-				'Der Agent kann seine Werkzeuge nicht mehr nutzen, und nolune vergisst seine Einstellungen und Schlüssel.',
-			removed: 'Getrennt.'
-		},
 		/** Memory search by meaning: where its embeddings come from. */
 		embeddings: {
 			title: 'Gedächtnissuche',
@@ -1329,6 +1269,71 @@ export const de: Messages = {
 				'Ein schnelles, fähiges Modell hält Chats flott: Jeder Befehl, der mehr tut als nachzusehen, kostet eine kurze Anfrage an das Modell.',
 			saved: 'Gespeichert. Gilt ab dem nächsten Befehl.'
 		}
+	},
+
+	/**
+	 * Connected services, for admins: MCP servers, other apps' and services' tools, which the agent
+	 * uses with `nolune mcp`.
+	 */
+	services: {
+		title: 'Verbundene Dienste',
+		hint: 'MCP-Server geben dem Agenten die Werkzeuge anderer Apps und Dienste, etwa eines Kalenders, von GitHub, Notion oder dem Smart Home. Er nutzt sie über Befehle, die der Auto-Modus wie alle anderen prüft. Alle Profile bekommen sie, außer du wählst bestimmte aus.',
+		add: 'Server verbinden',
+		addTitle: 'Einen MCP-Server verbinden',
+		addHint:
+			'Seine Anleitung sagt, was du angeben musst: den Befehl, der ihn auf diesem Computer startet, oder seine Adresse, und den Schlüssel, den er braucht.',
+		name: 'Name',
+		namePlaceholder: 'github',
+		nameHint:
+			'So nennt ihn der Agent: Kleinbuchstaben und Ziffern, etwa github oder home-assistant.',
+		kind: 'Wie nolune ihn erreicht',
+		kinds: { stdio: 'Ein Befehl', remote: 'Eine Adresse' },
+		command: 'Befehl',
+		commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
+		commandHint:
+			'So, wie du ihn im Terminal eingeben würdest. Er läuft auf diesem Computer mit den Rechten dieses Kontos und findet Programme dort, wo die Befehle des Agenten sie finden.',
+		address: 'Adresse',
+		addressHint: 'Seine MCP-Adresse, die oft auf /mcp endet.',
+		transport: 'Protokoll',
+		transports: { http: 'Streamable HTTP', sse: 'SSE (ältere Server)' },
+		env: 'Umgebungsvariablen',
+		envHint: 'Eine pro Zeile, als NAME=Wert: die Schlüssel und Tokens, die er braucht.',
+		headers: 'Header',
+		headersHint: 'Einer pro Zeile, als Name: Wert, etwa Authorization: Bearer …',
+		ifNeeded: '(falls er welche braucht)',
+		secretsKept: (names: string[]) =>
+			`Gespeichert: ${list(names)}. Leer lassen, um sie zu behalten.`,
+		description: 'Wofür er da ist',
+		optional: '(optional)',
+		descriptionPlaceholder: 'Die Kalender der Familie',
+		descriptionHint:
+			'Ein paar Worte für den Agenten, damit er weiß, wann er ihn nutzt. Leer gelassen nimmt nolune, was der Server über sich selbst sagt.',
+		profiles: 'Profile',
+		profilesHint:
+			'Nur die Profile, die du auswählst, bekommen ihn. Ist keins ausgewählt, bekommen ihn alle.',
+		everyProfile: 'In allen Profilen',
+		onlyIn: (names: string[]) => `Nur in ${list(names)}`,
+		keys: (names: string[]) => `mit ${list(names)}`,
+		noKeys: 'ohne Schlüssel',
+		connecting: 'Verbinde …',
+		check: 'Prüfen',
+		checking: 'Prüfe …',
+		change: 'Ändern',
+		works: (n: number, names: string) =>
+			`Er funktioniert: ${n} ${p(n, { one: 'Werkzeug', other: 'Werkzeuge' })}${names ? ` (${names})` : ''}.`,
+		unchecked: (problem: string) =>
+			`Gespeichert, aber nolune konnte sich nicht mit ihm verbinden. ${problem}`,
+		taken: (name: string) => `Es gibt schon einen Server namens ${name}.`,
+		needCommand: 'Gib den Befehl an, der ihn startet.',
+		needAddress: 'Gib seine Adresse an, beginnend mit http:// oder https://.',
+		badEnv: (line: string) => `„${line}“ hat nicht die Form NAME=Wert.`,
+		badHeader: (line: string) => `„${line}“ hat nicht die Form Name: Wert.`,
+		broken: (problem: string) => `Seine Einstellungen in config.json sind fehlerhaft: ${problem}`,
+		disconnect: 'Trennen',
+		removeTitle: (name: string) => `${name} trennen?`,
+		removeBody:
+			'Der Agent kann seine Werkzeuge nicht mehr nutzen, und nolune vergisst seine Einstellungen und Schlüssel.',
+		removed: 'Getrennt.'
 	},
 
 	people: {

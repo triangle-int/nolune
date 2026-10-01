@@ -26,7 +26,7 @@
 	} = $props();
 
 	const { m } = getI18n();
-	const t = $derived(m.admin.mcp);
+	const t = $derived(m.services);
 
 	let editing = $state(false);
 	let saving = $state(false);
@@ -80,7 +80,7 @@
 			{#if !editing && !server.problem}
 				<form
 					method="POST"
-					action="?/checkMcpServer"
+					action="?/check"
 					use:enhance={() => {
 						checking = true;
 						return async ({ update }) => {
@@ -118,7 +118,7 @@
 	{#if editing}
 		<form
 			method="POST"
-			action="?/saveMcpServer"
+			action="?/save"
 			class="space-y-4 sm:pl-12"
 			use:enhance={submitting(
 				(value) => (saving = value),
@@ -156,7 +156,7 @@
 		</AlertDialog.Header>
 		<form
 			method="POST"
-			action="?/removeMcpServer"
+			action="?/remove"
 			use:enhance={() => {
 				return async ({ update }) => {
 					removing = false;
