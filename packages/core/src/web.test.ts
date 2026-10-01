@@ -57,7 +57,11 @@ function answer(path: string, body: Record<string, unknown>, key: string | null)
 							url: 'https://apotheke.example/',
 							description: 'Open Sundays 10–18.'
 						},
-						{ url: 'https://untitled.example/' },
+						// What the search sends when its highlights are on: Markdown from the page.
+						{
+							url: 'https://untitled.example/',
+							description: `# Untitled\n\n${'Opening hours and addresses. '.repeat(40)}`
+						},
 						{ title: 'No address' }
 					]
 				}
@@ -135,14 +139,23 @@ describe('searchWeb', () => {
 				text: 'Open Sundays 10–18.',
 				date: null
 			},
-			// A result without a title goes by its address; one without an address is left out.
-			{ title: 'https://untitled.example/', url: 'https://untitled.example/', text: '', date: null }
+			// A result without a title goes by its address, and a long snippet is cut to a line;
+			// one without an address is left out.
+			{
+				title: 'https://untitled.example/',
+				url: 'https://untitled.example/',
+				text:
+					`# Untitled ${'Opening hours and addresses. '.repeat(40)}`.slice(0, 399).trimEnd() + '…',
+				date: null
+			}
 		]);
-		// No Authorization header at all: that's what Firecrawl's free tier takes.
+		expect(results[1].text).toHaveLength(400);
+		// No Authorization header at all: that's what Firecrawl's free tier takes. The search's own
+		// snippets, not highlights from each page.
 		expect(seen[0]).toMatchObject({
 			path: '/v2/search',
 			key: null,
-			body: { query: 'pharmacy open sunday', limit: 5, sources: ['web'] }
+			body: { query: 'pharmacy open sunday', limit: 5, sources: ['web'], highlights: false }
 		});
 	});
 

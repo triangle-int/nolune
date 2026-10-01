@@ -122,6 +122,15 @@ export type WebRecent = keyof typeof WEB_RECENT;
 export const DEFAULT_WEB_RESULTS = 5;
 export const MAX_WEB_RESULTS = 20;
 
+/** A snippet longer than this is cut: the page itself is a `nolune web read` away. */
+const MAX_SNIPPET = 400;
+
+/** On one line and within MAX_SNIPPET, whatever the search sent. */
+function snippet(text: string): string {
+	const line = text.replace(/\s+/g, ' ').trim();
+	return line.length > MAX_SNIPPET ? `${line.slice(0, MAX_SNIPPET - 1).trimEnd()}…` : line;
+}
+
 export interface WebSearchOptions extends WebOptions {
 	limit?: number;
 	/** News articles, with their dates, instead of web pages. */
@@ -151,6 +160,9 @@ export async function searchWeb(
 			sources: [options.news ? 'news' : 'web'],
 			...(options.recent ? { tbs: WEB_RECENT[options.recent] } : {}),
 			...(options.country ? { country: options.country.toUpperCase() } : {}),
+			// Without this a result's description is Markdown cut from its page, often a few KB
+			// each; the search's own snippet is a sentence or two.
+			highlights: false,
 			timeout: TIMEOUT_MS
 		})
 	);
@@ -168,7 +180,7 @@ export async function searchWeb(
 			{
 				title: r.title?.trim() || r.url,
 				url: r.url,
-				text: (r.description ?? r.snippet ?? '').trim(),
+				text: snippet(r.description ?? r.snippet ?? ''),
 				date: r.date?.trim() || null
 			}
 		];
