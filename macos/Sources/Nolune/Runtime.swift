@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /**
  * Where nolune lives: the Node binary and the npm package bundled in the app, and the data in
@@ -143,11 +143,13 @@ final class Runtime: @unchecked Sendable {
 		var data = Data()
 	}
 
-	/// The people with accounts, from `nolune user list` (`name<TAB>email[<TAB>admin]`).
+	/// The people with accounts, from `nolune user list` (`name<TAB>email[<TAB>admin][<TAB>picture]`).
 	struct Person: Identifiable {
 		var name: String
 		var email: String
 		var isAdmin: Bool
+		/// Their profile picture; their initial stands in without one.
+		var picture: NSImage?
 		var id: String { email }
 	}
 
@@ -157,7 +159,17 @@ final class Runtime: @unchecked Sendable {
 		return output.stdout.split(separator: "\n").compactMap { line in
 			let fields = line.split(separator: "\t").map(String.init)
 			guard fields.count >= 2 else { return nil }
-			return Person(name: fields[0], email: fields[1], isAdmin: fields.dropFirst(2).contains("admin"))
+			let rest = fields.dropFirst(2)
+			return Person(
+				name: fields[0],
+				email: fields[1],
+				isAdmin: rest.contains("admin"),
+				// The picture's file, read now, off the main thread: a square of at most 512 KB, named
+				// by its SHA-256 without an extension, so it's told apart by what's in it.
+				picture: rest.first { $0 != "admin" }
+					.flatMap { FileManager.default.contents(atPath: $0) }
+					.flatMap(NSImage.init(data:))
+			)
 		}
 	}
 
