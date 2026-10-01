@@ -1872,6 +1872,12 @@ signing.
 - **After.** A menu bar extra: whether the gateway answers, the people with accounts, the address,
   open, restart, the log, and Quit, which stops nolune. Opening the app again opens nolune in the
   browser.
+- **The DMG** (`macos/dmg/`) opens to nolune and Applications side by side, their icons at 128
+  points, over a planet's rim in deep space, its air in three of the avatar colors as the app
+  icon's aurora, with a dotted arrow between them and "Drag nolune to Applications" under. Finder
+  names the icons in black or white with the Mac's appearance, so the names sit on the rim's lit
+  edge, a mid-tone both read on. dmgbuild writes the window's layout into the image's `.DS_Store`
+  rather than scripting Finder, which needs a logged-in session.
 
 ## Not done yet
 

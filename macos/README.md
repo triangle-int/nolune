@@ -7,7 +7,7 @@ after, running nolune while it's there.
 
 ## Build it
 
-On a Mac with Xcode's command line tools, Node 22+ and pnpm:
+On a Mac with Xcode's command line tools, Node 22+, pnpm and Python 3.10+ (for the DMG):
 
 ```sh
 macos/scripts/build-app.sh
@@ -70,6 +70,12 @@ onboarding over.
   is the answer, since none is on every Mac (macOS 27 moved the user's privacy database).
 - **Signing** (`scripts/build-app.sh`): every Mach-O in the package, then Node with the
   entitlements V8 needs (`Resources/node.entitlements`, as Node's own builds have), then the app.
+- **The DMG** (`dmg/`) opens to nolune and Applications side by side at 128 points, over a
+  planet's rim with an arrow from one to the other (`background.svg`, rendered with Figtree to
+  `background.png` and `@2x`). Finder writes the names under the icons in black in Light Mode and
+  white in Dark Mode, so they sit on the rim's lit edge, a mid-tone either reads on. dmgbuild
+  (pinned by hash in `requirements.txt`, in a virtualenv the script makes) lays it out from
+  `settings.py` by writing the window's `.DS_Store`, with no Finder scripting, so it works on CI.
 - **The intro** (`IntroView.swift`, `Sky.swift`) is a big bang of about four seconds: a point of
   light bursts and the stars and the eight colors fly out of it into the web welcome's sky
   (IntroSky.svelte, redrawn with SwiftUI's `Canvas`). The full intro, with the wordmark, is the
@@ -85,4 +91,4 @@ onboarding over.
 The CI workflow `macos.yml` builds the app on every change here, checks the bundle keeps a
 gateway that answers, restarts and stops, and keeps every screen as a PNG (`Nolune --snapshot <folder>`, which draws
 the intro at fixed moments, in the window and out over a stand-in desktop, each step and the menu without doing
-anything).
+anything), with the DMG's window as Finder opens it.

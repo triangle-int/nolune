@@ -3,7 +3,8 @@ name: macOS app
 # Builds nolune.app (macos/) on a Mac, ad-hoc signed, and checks the bundle works: its Node runs
 # the CLI, and the launcher's gateway mode, as the app runs it, keeps a gateway that answers,
 # restarts it for `nolune service restart` and stops it in time.
-# The DMG is kept as an artifact for trying the onboarding.
+# The DMG is kept as an artifact for trying the onboarding, and its window as Finder opens it with
+# the screens.
 
 on:
   push:
@@ -43,6 +44,10 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # For dmgbuild, which makes the DMG.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
       - name: Build the app
         run: macos/scripts/build-app.sh
       - name: Check the app
@@ -89,6 +94,20 @@ jobs:
           echo '::group::The Full Disk Access check runs'
           if "$app/Contents/MacOS/Nolune" --probe-disk-access; then echo granted; else echo 'not granted'; fi
           echo '::endgroup::'
+      - name: Check the DMG
+        # The app and a link to Applications, laid out on the background (macos/dmg).
+        run: |
+          mount="$RUNNER_TEMP/dmg"
+          mkdir -p "$mount"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" macos/dist/*.dmg >/dev/null
+          ls -la "$mount"
+          test -d "$mount/nolune.app"
+          [ "$(readlink "$mount/Applications")" = /Applications ]
+          test -f "$mount/.DS_Store"
+          test -f "$mount/.VolumeIcon.icns"
+          # The background, at 1x and 2x.
+          tiffutil -info "$mount/.background.tiff"
+          hdiutil detach -force "$mount"
       - uses: actions/upload-artifact@v4
         with:
           name: nolune-macos-arm64
@@ -97,6 +116,17 @@ jobs:
       - name: Draw the screens
         # Every screen of the onboarding and the menu, as PNGs (Snapshot.swift).
         run: perl -e 'alarm 180; exec @ARGV' macos/dist/arm64/nolune.app/Contents/MacOS/Nolune --snapshot "$RUNNER_TEMP/snapshots"
+      - name: Show the DMG's window
+        # As Finder opens it, with the screens.
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          hdiutil attach macos/dist/*.dmg >/dev/null
+          open /Volumes/nolune
+          sleep 3
+          mkdir -p "$RUNNER_TEMP/snapshots"
+          screencapture -x "$RUNNER_TEMP/snapshots/dmg.png"
+          hdiutil detach -force /Volumes/nolune
       - uses: actions/upload-artifact@v4
         if: always()
         with:

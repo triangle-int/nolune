@@ -16,7 +16,9 @@
 #                     the issuer ID (as CI notarizes, in .github/workflows/publish.yml)
 #   SKIP_WEB_BUILD=1  use build/ and dist/ from an earlier `pnpm build`
 #
-# Out: macos/dist/<arch>/nolune.app and macos/dist/nolune-<version>-<arch>.dmg
+# Out: macos/dist/<arch>/nolune.app and macos/dist/nolune-<version>-<arch>.dmg, which opens to
+# nolune and Applications side by side (macos/dmg). The DMG is made with dmgbuild, which needs
+# Python 3.10 or later.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -46,6 +48,11 @@ if [ "$IDENTITY" != - ] && ! security find-identity -v -p codesigning | grep -qF
 	security find-identity -v -p codesigning >&2
 	echo "Make a Developer ID Application certificate in Xcode (Settings > Accounts > Manage" >&2
 	echo "Certificates), or leave SIGN_IDENTITY out for an ad-hoc build." >&2
+	exit 1
+fi
+if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+	echo "Making the DMG needs Python 3.10 or later, and python3 is $(python3 --version 2>&1)." >&2
+	echo "Install a newer one (brew install python) and run this again." >&2
 	exit 1
 fi
 
@@ -155,12 +162,14 @@ if [ "$NOTARIZE" = 1 ]; then
 	xcrun stapler staple "$APP"
 fi
 
+# dmgbuild lays out the window (macos/dmg/settings.py) by writing its .DS_Store, rather than
+# scripting Finder, which needs a logged-in session and can time out on CI.
 step "Making $DMG"
-STAGE="$WORK/dmg"
-mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/nolune.app"
-ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname nolune -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+python3 -m venv "$WORK/dmgbuild"
+"$WORK/dmgbuild/bin/pip" install --quiet --disable-pip-version-check --require-hashes --no-deps \
+	--only-binary :all: -r "$MACOS/dmg/requirements.txt"
+"$WORK/dmgbuild/bin/dmgbuild" -s "$MACOS/dmg/settings.py" -D app="$APP" \
+	-D icon="$CONTENTS/Resources/AppIcon.icns" -D background="$MACOS/dmg/background.png" nolune "$DMG"
 if [ "$IDENTITY" != - ]; then codesign --force --timestamp --sign "$IDENTITY" "$DMG"; fi
 if [ "$NOTARIZE" = 1 ]; then
 	step "Notarizing the DMG"
