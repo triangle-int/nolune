@@ -11,7 +11,7 @@ itself safely from your own commands.
 
 Other parts of the CLI have their own instructions: automations (`nolune trigger`, `nolune wake`) in the
 `automations` skill, pictures (`nolune generate image`, `nolune view`) in `generate-images` and
-`view-images`, and memory (`nolune memory`) and your soul (`nolune soul`) in your system prompt.
+`view-images`, the web (`nolune web`) in `web`, and memory (`nolune memory`) and your soul (`nolune soul`) in your system prompt.
 
 ## Before you change anything
 
@@ -108,11 +108,15 @@ preset). When a plan's limit is used up, chats on it stop until the time the err
 
 The `anthropic` key runs chats on Claude; the `openai` one runs chats on OpenAI's models and makes
 pictures; the `openrouter` one runs chats on OpenRouter's models and pays for them with its
-credits; the `xai` one runs chats on Grok and pays from its team's credits. `nolune key set` checks a key with the provider and refuses one it rejects, and nolune uses the
+credits; the `xai` one runs chats on Grok and pays from its team's credits. The `firecrawl` one is
+for `nolune web`: without it, web searches and pages go through Firecrawl's free tier, which allows
+this computer so many a day, and a key (a free Firecrawl account has one) lifts that.
+`nolune key set` checks a key with the provider and refuses one it rejects, and nolune uses the
 new key from the next message.
 
 ```sh
 nolune key set openai 'sk-...'
+nolune key set firecrawl 'fc-...'
 ```
 
 Custom providers are the family's own model servers, listed with the API keys: each has a name,
@@ -135,14 +139,14 @@ preset's provider): chats on those models stop answering.
 
 ## Environment variables for your commands
 
-Skills and scripts that need a key or a setting (a web search API, a smart home token) read it
-from the environment. `nolune env set` adds a variable to every command you and trigger scripts run,
-in every profile, from the next command on:
+Skills and scripts that need a key or a setting (a smart home token, a weather service's key) read
+it from the environment. `nolune env set` adds a variable to every command you and trigger scripts
+run, in every profile, from the next command on:
 
 ```sh
-nolune env set FIRECRAWL_API_KEY 'fc-...'
+nolune env set HASS_TOKEN '...'
 nolune env list                     # names only
-nolune env rm FIRECRAWL_API_KEY
+nolune env rm HASS_TOKEN
 ```
 
 ## Skills

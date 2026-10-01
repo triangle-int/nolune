@@ -1044,7 +1044,9 @@ export const es: Messages = {
 				'Hace funcionar los chats y las automatizaciones con modelos de OpenAI, y crea las imágenes de la página Imágenes y las que dibuja el agente.',
 			openrouter:
 				'Hace funcionar los chats y las automatizaciones con los modelos que ofrece OpenRouter (Claude, GPT, Gemini, DeepSeek y muchos más), con una sola clave y sus créditos.',
-			xai: 'Hace funcionar los chats y las automatizaciones con los modelos Grok de xAI.'
+			xai: 'Hace funcionar los chats y las automatizaciones con los modelos Grok de xAI.',
+			firecrawl:
+				'Permite al agente buscar en la web y leer páginas. Sin clave usa el plan gratuito de Firecrawl, con un límite diario para este ordenador.'
 		},
 		withoutIt: {
 			anthropic:
@@ -1053,13 +1055,16 @@ export const es: Messages = {
 				'Los chats y las automatizaciones con modelos de OpenAI dejan de funcionar, y nolune no puede crear imágenes, hasta que se añada una clave nueva.',
 			openrouter:
 				'Los chats y las automatizaciones con modelos de OpenRouter dejan de funcionar hasta que se añada una clave nueva.',
-			xai: 'Los chats y las automatizaciones con modelos Grok dejan de funcionar hasta que se añada una clave nueva.'
+			xai: 'Los chats y las automatizaciones con modelos Grok dejan de funcionar hasta que se añada una clave nueva.',
+			firecrawl:
+				'Las búsquedas en la web vuelven al plan gratuito de Firecrawl, con su límite diario.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`Guardada en nolune${hint ? `, termina en ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`De la variable de entorno ${variable}${hint ? `, termina en ${hint}` : ''}`,
 		notSet: 'Sin configurar',
+		notSetFree: 'Sin configurar: plan gratuito con límite diario',
 		replace: 'Reemplazar',
 		pasteKey: (provider: string) => `Pega la clave de API de ${provider}`,
 		keyLabel: (provider: string) => `Clave de API de ${provider}`,

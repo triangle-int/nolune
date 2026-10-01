@@ -48,8 +48,9 @@ background. Members can also manage the profile and its membership.
   delete notes on the Memory page, undo automatically saved memories, or turn learning from chats
   off.
 - **An assistant that can do the work.** It can work with files on the host computer, run commands,
-  inspect photos and documents, and return files in the chat. Give it a form to fill in or ask it
-  to find the photos from your last trip.
+  search the web and read pages, inspect photos and documents, and return files in the chat. Give
+  it a form to fill in, ask it to find the photos from your last trip, or which pharmacies are open
+  on Sunday. Searching needs no key, up to a daily limit.
 - **Help between conversations.** Ask for a recurring task in ordinary language. Automations run
   in the background and bring results to the notification bell, where you can continue the work
   as a conversation.

@@ -1,6 +1,7 @@
 import { API_KEYS, configuredApiKey, updateConfig, type ApiKeyProvider } from './config.ts';
 import { openaiBaseUrl } from './openai.ts';
 import { openrouterBaseUrl } from './openrouter.ts';
+import { firecrawlBaseUrl } from './web.ts';
 import { xaiBaseUrl } from './xai.ts';
 
 /*
@@ -18,6 +19,8 @@ export interface ApiKeyStatus {
 	withoutIt: string;
 	/** Where to make one. */
 	consoleUrl: string;
+	/** What it's for works without it too, within the provider's free allowance (Firecrawl's). */
+	optional: boolean;
 	/** Where the key in use comes from, or null without one. */
 	source: 'config' | 'env' | null;
 	/** The last four characters of the key in use, to tell keys apart. */
@@ -27,29 +30,43 @@ export interface ApiKeyStatus {
 	envSet: boolean;
 }
 
-const ABOUT: Record<ApiKeyProvider, Pick<ApiKeyStatus, 'purpose' | 'withoutIt' | 'consoleUrl'>> = {
+const ABOUT: Record<
+	ApiKeyProvider,
+	Pick<ApiKeyStatus, 'purpose' | 'withoutIt' | 'consoleUrl' | 'optional'>
+> = {
 	anthropic: {
 		purpose: 'Runs chats and automations on Claude models.',
 		withoutIt: 'Chats and automations on Claude models stop working until a new key is added.',
-		consoleUrl: 'https://console.anthropic.com/settings/keys'
+		consoleUrl: 'https://console.anthropic.com/settings/keys',
+		optional: false
 	},
 	openai: {
 		purpose:
 			'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.',
 		withoutIt:
 			"Chats and automations on OpenAI models stop working, and nolune can't make pictures, until a new key is added.",
-		consoleUrl: 'https://platform.openai.com/api-keys'
+		consoleUrl: 'https://platform.openai.com/api-keys',
+		optional: false
 	},
 	openrouter: {
 		purpose:
 			'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.',
 		withoutIt: 'Chats and automations on OpenRouter models stop working until a new key is added.',
-		consoleUrl: 'https://openrouter.ai/settings/keys'
+		consoleUrl: 'https://openrouter.ai/settings/keys',
+		optional: false
 	},
 	xai: {
 		purpose: "Runs chats and automations on xAI's Grok models.",
 		withoutIt: 'Chats and automations on Grok models stop working until a new key is added.',
-		consoleUrl: 'https://console.x.ai'
+		consoleUrl: 'https://console.x.ai',
+		optional: false
+	},
+	firecrawl: {
+		purpose:
+			"Searches the web and reads pages for the agent. Without a key it uses Firecrawl's free tier, which allows this computer so many searches a day.",
+		withoutIt: "Web searches go back to Firecrawl's free tier, with its daily limit.",
+		consoleUrl: 'https://www.firecrawl.dev/app/api-keys',
+		optional: true
 	}
 };
 
@@ -94,7 +111,7 @@ const CHECK_TIMEOUT_MS = 20_000;
 /**
  * Listing models is free and needs nothing but a valid key. OpenRouter lists its models for
  * anyone, so it's asked about the key itself, and so is xAI, which also says whether the key or
- * its team is blocked.
+ * its team is blocked. Firecrawl has no models, so it's asked for the key's credits.
  */
 function checkRequest(
 	provider: ApiKeyProvider,
@@ -115,6 +132,12 @@ function checkRequest(
 	}
 	if (provider === 'xai') {
 		return { url: `${xaiBaseUrl()}/api-key`, headers: { authorization: `Bearer ${key}` } };
+	}
+	if (provider === 'firecrawl') {
+		return {
+			url: `${firecrawlBaseUrl()}/v2/team/credit-usage`,
+			headers: { authorization: `Bearer ${key}` }
+		};
 	}
 	return { url: `${openaiBaseUrl()}/models`, headers: { authorization: `Bearer ${key}` } };
 }

@@ -1047,7 +1047,9 @@ export const fr: Messages = {
 				'Fait tourner les discussions et les automatisations sur les modèles OpenAI, et crée les images de la page Images et celles que dessine l’agent.',
 			openrouter:
 				'Fait tourner les discussions et les automatisations sur les modèles que propose OpenRouter (Claude, GPT, Gemini, DeepSeek et bien d’autres), avec une seule clé et ses crédits.',
-			xai: 'Fait tourner les discussions et les automatisations sur les modèles Grok de xAI.'
+			xai: 'Fait tourner les discussions et les automatisations sur les modèles Grok de xAI.',
+			firecrawl:
+				'Permet à l’agent de chercher sur le web et de lire des pages. Sans clé, il utilise l’offre gratuite de Firecrawl, limitée chaque jour pour cet ordinateur.'
 		},
 		withoutIt: {
 			anthropic:
@@ -1056,13 +1058,16 @@ export const fr: Messages = {
 				'Les discussions et les automatisations sur les modèles OpenAI cessent de fonctionner, et nolune ne peut plus créer d’images, jusqu’à l’ajout d’une nouvelle clé.',
 			openrouter:
 				'Les discussions et les automatisations sur les modèles OpenRouter cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.',
-			xai: 'Les discussions et les automatisations sur les modèles Grok cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.'
+			xai: 'Les discussions et les automatisations sur les modèles Grok cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.',
+			firecrawl:
+				'Les recherches sur le web reviennent à l’offre gratuite de Firecrawl, avec sa limite quotidienne.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`Enregistrée dans nolune${hint ? `, se termine par ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`Depuis la variable d’environnement ${variable}${hint ? `, se termine par ${hint}` : ''}`,
 		notSet: 'Non définie',
+		notSetFree: 'Non définie : offre gratuite limitée par jour',
 		replace: 'Remplacer',
 		pasteKey: (provider: string) => `Collez la clé d’API ${provider}`,
 		keyLabel: (provider: string) => `Clé d’API ${provider}`,

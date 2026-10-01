@@ -95,6 +95,7 @@ import {
 	serviceStatus,
 	uninstallService
 } from './service.ts';
+import { WEB_HELP, webCommand } from './web.ts';
 
 /** Built when shown, like generateHelp(): the gateway serves it for as long as it runs. */
 const help = () => `nolune - a family agent that runs on this computer
@@ -133,14 +134,15 @@ Settings (${paths.home})
   nolune config set update-check <on|off>       on (the default): the gateway asks GitHub once a
                                              day for nolune's newest release, and admins see when
                                              there's one
-  nolune key set <anthropic|openai|openrouter|xai> [key]
+  nolune key set <anthropic|openai|openrouter|xai|firecrawl> [key]
                                              store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures, xAI's
-                                             runs Grok. Admins can also do this on the web, under
+                                             runs Grok, Firecrawl's lifts the web search's daily
+                                             limit. Admins can also do this on the web, under
                                              Models & keys
-  nolune key rm <anthropic|openai|openrouter|xai>
+  nolune key rm <anthropic|openai|openrouter|xai|firecrawl>
                                              remove a stored key (the environment's is used, if set)
-  nolune env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
+  nolune env set <NAME> <value>                 extra env var for agent commands (e.g. HASS_TOKEN)
   nolune env rm <NAME> | nolune env list
 
 Custom providers (model servers of your own: Ollama, LM Studio, oMLX, vLLM, llama.cpp...)
@@ -216,6 +218,8 @@ ${CARD_HELP}
 ${SOUL_HELP}
 
 ${generateHelp()}
+
+${WEB_HELP}
 
 Inside agent commands (NOLUNE_PROFILE is set, so --profile can be left out)
   nolune view <image>...                        show images to the agent: they're attached to the
@@ -674,7 +678,9 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						key.source === 'config' ? 'key set' : key.source === 'env' ? `key from ${key.env}` : '';
 					const shown = where
 						? `${where}${key.hint ? ` (…${key.hint})` : ''}`
-						: `no key (nolune key set ${key.provider})`;
+						: key.optional
+							? `no key: the free tier, limited per day (nolune key set ${key.provider})`
+							: `no key (nolune key set ${key.provider})`;
 					row(key.provider, shown);
 				}
 				const customs = listCustomProviders();
@@ -1095,6 +1101,9 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 
 		case 'generate':
 			return generateCommand(io, action, rest);
+
+		case 'web':
+			return webCommand(io, action, rest);
 
 		case 'view': {
 			const dir = io.env.NOLUNE_VIEW_DIR;
