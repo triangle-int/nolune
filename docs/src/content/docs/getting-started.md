@@ -85,6 +85,13 @@ instead.
 
 ## Update
 
+When a new release is out, admins see it in the menu under their name, with how to update this
+install. The gateway asks GitHub once a day; `nolune config set update-check off` stops it. From
+npm:
+
 ```sh
 npm install -g nolune@latest && nolune service restart
 ```
+
+The macOS app's menu has a Download row for the new app instead: quit nolune, drag the new one to
+Applications and open it. Chats, memory and settings stay as they are.

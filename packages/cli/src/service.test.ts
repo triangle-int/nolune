@@ -1,10 +1,10 @@
-import { cliCommand, paths } from '@nolune/core';
+import { appManaged, cliCommand, paths } from '@nolune/core';
 import { describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appKeeperPid, appManaged, logFile, renderUnit } from './service.ts';
+import { appKeeperPid, logFile, renderUnit } from './service.ts';
 
 vi.mock('@nolune/core', async (importOriginal) => {
 	const core = await importOriginal<typeof import('@nolune/core')>();

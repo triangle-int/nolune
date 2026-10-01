@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+	NOLUNE_VERSION,
 	addMember,
 	cardChanges,
 	cardOf,
@@ -14,6 +15,8 @@ import {
 	readCard,
 	readMemoryNote,
 	readSoulFile,
+	paths,
+	readConfig,
 	runSubagent,
 	updateConfig
 } from '@nolune/core';
@@ -415,5 +418,41 @@ describe('command mode', () => {
 		expect((await run(['config'])).out).toContain(
 			"commands      auto mode, checked by each chat's own model"
 		);
+	});
+});
+
+describe('update check', () => {
+	it('is on until turned off, which forgets the release it heard of', async () => {
+		const latest = {
+			version: '99.0.0',
+			url: 'https://github.com/triangle-int/nolune/releases/tag/v99.0.0'
+		};
+		writeFileSync(
+			paths.latestRelease,
+			JSON.stringify({
+				checkedAt: '2026-10-01T09:00:00.000Z',
+				latest: { ...latest, publishedAt: null, downloads: {} }
+			})
+		);
+		expect((await run(['config'])).out).toContain(
+			`\nversion       ${NOLUNE_VERSION}; 99.0.0 is out (${latest.url}). Update: git pull && pnpm install && pnpm build\n`
+		);
+
+		expect(await run(['config', 'set', 'update-check', 'off'])).toEqual({
+			code: 0,
+			out: 'nolune won’t look for new releases.\n',
+			err: ''
+		});
+		expect(readConfig().updateCheck).toBe(false);
+		expect(existsSync(paths.latestRelease)).toBe(false);
+		expect((await run(['config'])).out).toContain(
+			`\nversion       ${NOLUNE_VERSION} (not checking for new releases)\n`
+		);
+		expect((await run(['config', 'set', 'update-check', 'maybe'])).err).toContain(
+			'update-check is on or off'
+		);
+
+		await run(['config', 'set', 'update-check', 'on']);
+		expect(readConfig().updateCheck).toBeUndefined();
 	});
 });

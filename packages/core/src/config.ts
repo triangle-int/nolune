@@ -49,6 +49,11 @@ export interface Config {
 	commandMode?: 'auto' | 'unrestricted';
 	/** The preset whose model does auto mode's checks. Unset, or removed: each chat's own model. */
 	safetyPresetId?: string;
+	/**
+	 * Whether the gateway asks GitHub once a day for nolune's newest release, so admins hear when
+	 * there's a new one (updates.ts). Unset: it does.
+	 */
+	updateCheck?: boolean;
 	/** Where `nolune start` listens. Defaults: 127.0.0.1:5780 (put a tunnel or proxy in front). */
 	host?: string;
 	port?: number;

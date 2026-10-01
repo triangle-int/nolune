@@ -198,6 +198,19 @@ export const de: Messages = {
 		logOut: 'Abmelden'
 	},
 
+	update: {
+		available: (version: string) => `nolune ${version} ist da`,
+		running: (version: string) => `Du hast ${version}.`,
+		npm: 'Zum Aktualisieren führe das in einem Terminal auf dem Computer aus, auf dem nolune läuft:',
+		source:
+			'Zum Aktualisieren führe das in nolunes Ordner auf dem Computer aus, auf dem es läuft, und starte nolune dann neu:',
+		app: 'Lade auf dem Mac, auf dem nolune läuft, die neue App herunter, beende nolune über sein Symbol in der Menüleiste, zieh die neue in „Programme“ und öffne sie. Das Symbol in der Menüleiste hat den Download auch.',
+		kept: 'Chats, Gedächtnis und Einstellungen bleiben, wie sie sind. Unter „Was ist neu“ steht, ob sonst noch etwas zu tun ist.',
+		whatsNew: 'Was ist neu',
+		download: 'Herunterladen',
+		copy: 'Befehl kopieren'
+	},
+
 	header: {
 		openMenu: 'Menü öffnen'
 	},

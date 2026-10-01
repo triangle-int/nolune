@@ -1,4 +1,5 @@
 export {
+	appManaged,
 	cliCommand,
 	packageRoot,
 	paths,
@@ -495,3 +496,20 @@ export {
 	runTriggerNow,
 	startScheduler
 } from './scheduler.ts';
+export {
+	NOLUNE_VERSION,
+	availableUpdate,
+	checkForUpdate,
+	describeUpdates,
+	forgetRelease,
+	installKind,
+	isNewer,
+	onReleaseFound,
+	savedRelease,
+	startUpdateChecks,
+	updateChecksOn,
+	type InstallKind,
+	type Release,
+	type SavedRelease,
+	type Update
+} from './updates.ts';

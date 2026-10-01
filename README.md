@@ -133,7 +133,8 @@ a profile doesn't send an email invitation.
 
 Conversations are stored in a local SQLite database; profile files, memory, and configuration live
 under `~/.nolune` (or `NOLUNE_HOME`). When you use a hosted model or embeddings provider, relevant
-content is sent to that provider.
+content is sent to that provider. Once a day the gateway asks GitHub whether there's a newer
+release, so admins see when there is; `nolune config set update-check off` stops it.
 
 The installed gateway listens on `127.0.0.1:5780`. Other devices reach it in one of two ways:
 

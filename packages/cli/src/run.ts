@@ -12,6 +12,7 @@ import {
 	INVITE_DAYS,
 	MAX_MEDIA_BYTES,
 	addPreset,
+	appManaged,
 	editPreset,
 	apiKeyStatuses,
 	checkApiKey,
@@ -25,8 +26,10 @@ import {
 	createUser,
 	deleteUser,
 	describeCommandSafety,
+	describeUpdates,
 	effectiveContextWindow,
 	findPreset,
+	forgetRelease,
 	generatePassword,
 	getDb,
 	getDefaultPreset,
@@ -84,7 +87,6 @@ import { RELAY_HELP, RelayUnreachable, connectRelay, enableRelay, relayCommand }
 import { SOUL_HELP, soulCommand } from './soul.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
-	appManaged,
 	installService,
 	logFile,
 	renderServiceFile,
@@ -127,6 +129,9 @@ Settings (${paths.home})
                                              recommended). Not from the agent's own commands
   nolune config set safety-model <preset|chat>  the preset whose model does auto mode's checks, or
                                              chat for each chat's own model (the default)
+  nolune config set update-check <on|off>       on (the default): the gateway asks GitHub once a
+                                             day for nolune's newest release, and admins see when
+                                             there's one
   nolune key set <anthropic|openai|openrouter|xai> [key]
                                              store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures, xAI's
@@ -698,17 +703,18 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				row('embeddings', embeddingStatus());
 				row('commands', describeCommandSafety());
 				row('env', Object.keys(config.commandEnv ?? {}).join(', ') || '-');
+				row('version', describeUpdates());
 				return;
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model> <value>]'
+					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model|update-check> <value>]'
 				);
 			}
 			const key = positional(
 				rest,
 				0,
-				'host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model'
+				'host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model|update-check'
 			);
 			if (key === 'command-mode' || key === 'safety-model') {
 				// Auto mode guards against the agent itself, so it can't be the one to turn it off.
@@ -734,6 +740,22 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					saveSafetyPreset(id);
 				}
 				io.log(`Commands: ${describeCommandSafety()}.`);
+				return;
+			}
+			if (key === 'update-check') {
+				const on = positional(rest, 1, 'on|off');
+				if (on !== 'on' && on !== 'off') fail('update-check is on or off');
+				updateConfig((c) => {
+					if (on === 'on') delete c.updateCheck;
+					else c.updateCheck = false;
+				});
+				// What GitHub said last would go stale: the app's menu reads it too.
+				if (on === 'off') forgetRelease();
+				io.log(
+					on === 'on'
+						? 'nolune will look for a new release within the hour, then once a day.'
+						: 'nolune won’t look for new releases.'
+				);
 				return;
 			}
 			if (key === 'embeddings') {
@@ -765,7 +787,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				} else if (key === 'claude-path') c.claudePath = value;
 				else
 					fail(
-						'you can set host, port, origin, image-model, embeddings, claude-path, command-mode or safety-model'
+						'you can set host, port, origin, image-model, embeddings, claude-path, command-mode, safety-model or update-check'
 					);
 			});
 			if (key === 'claude-path') {
