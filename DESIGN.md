@@ -1265,9 +1265,12 @@ pages as information rather than instructions, hand research across many pages t
 
 - **Firecrawl** (`packages/core/src/web.ts`), through its SDK (`firecrawl`), loaded on first use
   like the model SDKs. `search` is its `/v2/search` with the web or news as the source, `--recent`
-  as Google's `tbs` and `--country` as its `country`; `read` is `/v2/scrape` for Markdown of the
-  main content, which renders pages that need JavaScript and reads PDFs. Firecrawl gets a minute
-  for either, and a scrape doesn't wait on a big PDF Firecrawl goes on working on.
+  as Google's `tbs` and `--country` as its `country`, and `highlights` off: with them on, each
+  result's description is Markdown cut from its page, often a few KB, where the search's own
+  snippet is a sentence or two (cut to 400 characters on one line all the same). `read` is
+  `/v2/scrape` for Markdown of the main content, which renders pages that need JavaScript and
+  reads PDFs. Firecrawl gets a minute for either, and a scrape doesn't wait on a big PDF
+  Firecrawl goes on working on.
 - **No key needed.** Without one, the SDK sends no `Authorization` header and Firecrawl answers on
   its free tier, which allows each IP address so many requests and credits a day and answers with
   a 429 after that. A key in `config.json` (`nolune key set firecrawl`, or Models & keys, checked
