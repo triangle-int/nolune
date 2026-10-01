@@ -1879,8 +1879,8 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   service of nolune's own like the relay, which checks the plan's token, counts what each request
   costs and passes it on. Upstream is OpenRouter for chats and embeddings and FAL for pictures, on
   nolune's accounts there, rather than nolune reselling its own accounts with each model's maker.
-  The service is a package of its own (`packages/api`), deployed like the relay and not part of the npm
-  package.
+  The service is a package of its own (`packages/api`), deployed like the relay and not part of
+  the npm package.
 - **Signing in** is a device code (OAuth's device authorization grant): `nolune nolune-plan setup`,
   or Models & keys, shows a short code and `nolune.dev/link`. The person opens it on any device,
   signs in to their nolune account (where the subscription is paid for) and confirms, while the
@@ -1997,6 +1997,37 @@ spread out.
   page saying so. The plan isn't a way around a provider's regions, and one family's misuse would
   cost every family its access.
 
+### Payments
+
+Triangle Interactive, LLC sells the plan, through Stripe.
+
+- **Buying.** The account page on nolune.dev opens Stripe Checkout for a tier (a monthly Price for
+  each) and Stripe's customer portal for changing the tier or the card, or cancelling. Extra
+  credits are a one-time Checkout payment. Nothing is billed for use afterwards: the month's credits
+  come with the subscription and extra credits are paid before they're spent, so there's never an
+  invoice for tokens already used, or one that fails after they were.
+- **Credits follow Stripe's events**, at the API's webhook endpoint. `invoice.paid` grants the
+  period's credits; `customer.subscription.updated` moves the tier (an upgrade at once, Stripe
+  invoicing the prorated difference, whose `invoice.paid` grants the same share of the new tier's
+  credits; a downgrade at the period's end); `customer.subscription.deleted`, sent when a
+  cancelled subscription runs out, ends the plan; `checkout.session.completed` adds extra credits.
+  Each event is checked by its signature and applied once, by its id, since Stripe may send one
+  more than once.
+- **A failed payment** (`invoice.payment_failed`) leaves the plan what's left of its credits but
+  gives it no new ones while Stripe retries. Models & keys says so, with the portal's link.
+- **The API keeps its own ledger.** Stripe knows money, not windows: the 5-hour and weekly limits
+  are checked before every request, so the API keeps the credits, the windows and each request's
+  cost itself, and Stripe never sees tokens. Stripe's LLM token billing (a private preview in 2026,
+  which meters tokens through OpenRouter with a markup) bills use afterwards, which a prepaid plan
+  doesn't need.
+- **Sales tax and VAT.** The EU and the UK tax digital services sold to people there from the
+  first sale, for a seller outside them. Stripe Managed Payments makes Stripe the merchant of
+  record, which collects and pays those (`managed_payments` on the Checkout Session), when it takes
+  the product; otherwise Stripe Tax works them out and collects them, and the LLC registers where
+  it must.
+- **Stripe and OpenRouter.** Stripe agreed to buy OpenRouter in August 2026. Gateways only know
+  nolune's API, so whatever changes at OpenRouter is the API's to follow.
+
 ### Open questions
 
 - The tiers, and their prices and limits.
@@ -2005,7 +2036,8 @@ spread out.
 - Shares for each member of a family. The API knows only the gateway, so the gateway would count
   them (it knows who started each turn), from what each response says it cost (`x-nolune-cost`).
 - Whether background work's share should be an admin's setting.
-- Who takes the payments: a merchant of record (Paddle, Lemon Squeezy) would handle sales tax.
+- Whether Stripe Managed Payments takes credits for AI models, or the LLC handles sales tax with
+  Stripe Tax.
 
 ## Code layout
 
