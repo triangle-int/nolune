@@ -9,6 +9,8 @@ import {
 	cancelNolunePlanSignIn,
 	nolunePlanSignInState,
 	nolunePlanStatus,
+	nolunePlanUsage,
+	onNolunePlanUsage,
 	signOutNolunePlan,
 	startNolunePlanSignIn
 } from './nolune-plan.ts';
@@ -311,6 +313,33 @@ describe('chats on the nolune plan', () => {
 		// The reply went back to the model that wrote it as it came, the plan's own.
 		const replies = committedRows(chat.id).filter((row) => row.kind === 'assistant');
 		expect(replies.map((row) => row.provider)).toEqual(['nolune-plan', 'nolune-plan']);
+	});
+
+	it('asks where the limits stand once a request has ended, and tells who listens', async () => {
+		await link();
+		const { user, chat } = planChat();
+		chats = [
+			{
+				events: [
+					{ id: 'gen-3', choices: [{ delta: { content: 'Hi!' } }] },
+					{ id: 'gen-3', choices: [{ delta: {}, finish_reason: 'stop' }] }
+				]
+			}
+		];
+		const heard = vi.fn();
+		const off = onNolunePlanUsage(heard);
+		const ended = loopEnd(chat.id);
+		await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'Hi');
+		await ended;
+
+		await vi.waitFor(() => expect(nolunePlanUsage()?.usage).toEqual(USAGE), { timeout: 5000 });
+		expect(heard).toHaveBeenCalled();
+		// Once, for the reply and the title that ended together.
+		expect(seen.filter((r) => r.path === '/v1/usage').length).toBe(2);
+		off();
+
+		await signOutNolunePlan();
+		expect(nolunePlanUsage()).toBeNull();
 	});
 
 	it('says when a limit starts again, in words', async () => {

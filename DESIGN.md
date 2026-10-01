@@ -1868,7 +1868,7 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
 _Built, not open yet._ nolune's API (`packages/api`) signs people in, links gateways, keeps the
 limits and passes chats and embeddings on to OpenRouter; nolune's side links to it and runs chats,
 memory search and their errors on it. Still to come: Stripe's checkout and webhooks, pictures,
-deploying the API, the usage by the composer, and automations that wait out a limit. Until the API
+deploying the API, and automations that wait out a limit. Until the API
 is open to everyone, the web UI offers the plan only when `NOLUNE_PLAN_API_URL` points nolune at
 one (`nolunePlanOffered`); the CLI always has it.
 
@@ -2043,9 +2043,16 @@ locks the person's row first, so requests that end together each add what they s
   (`model_not_offered`); neither asks OpenRouter anything.
 - **Usage, live.** Every response carries how much of each limit is used and when it starts again
   (`x-nolune-usage`): after the request, or for a stream, whose headers go first, before it.
-  `GET /v1/usage` says the same. The gateway keeps the latest and sends it
-  to open pages: Models & keys shows all three, and from 80% the composer says "5 hours: 85% ·
-  again at 18:40".
+  `GET /v1/usage` says the same, and is what the gateway reads: 1.5 s after a request of the
+  plan's ends (the API charges a stream once it's done, and requests that end together are asked
+  about once), and when it's read and unknown or ten minutes old (`nolunePlanUsage` in
+  `nolune-plan.ts`). When it moves, `/api/events` tells every open page (the whole family draws on
+  the plan), which asks `/api/nolune-plan/usage` again (`plan-usage.svelte.ts`). It shows as bars,
+  the 5-hour window and the week with how much is used and when each starts again, in this
+  browser's time, and the credits left (`PlanUsageBars`): in the model menu of a chat on the plan,
+  and in the plan's row in Models & keys. From 80% of either limit, the line under the composer
+  (nolune's disclaimer otherwise) says the fuller one with a short bar, amber, then red once it's
+  reached: "nolune plan ▬ 5 hours: 85% used · resets 17:44" (`PlanUsageNote`).
 - **Automations** refused by a limit don't fail: the run waits and starts again when the limit
   does, and the bell says so once. A subagent refused by one ends with the error, which its parent
   hears from `nolune agent watch`.
@@ -2293,6 +2300,5 @@ signing.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).
 - The nolune plan (see [The nolune plan](#the-nolune-plan)): Stripe's checkout and webhooks,
-  pictures through FAL, deploying the API next to the relay, its usage by the composer from
-  `x-nolune-usage`, and automations that wait out a limit rather than fail; then opening it
-  (`OPEN` in `nolune-plan.ts`).
+  pictures through FAL, deploying the API next to the relay, and automations that wait out a limit
+  rather than fail; then opening it (`OPEN` in `nolune-plan.ts`).

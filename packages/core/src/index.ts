@@ -265,6 +265,8 @@ export {
 	nolunePlanOffered,
 	nolunePlanSignInState,
 	nolunePlanStatus,
+	nolunePlanUsage,
+	onNolunePlanUsage,
 	signOutNolunePlan,
 	startNolunePlanSignIn,
 	type NolunePlanSignIn,

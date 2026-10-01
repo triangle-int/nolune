@@ -55,6 +55,9 @@
 	import MessageAttachments from './chat/MessageAttachments.svelte';
 	import CommandModeMenu from './chat/CommandModeMenu.svelte';
 	import ModelMenu, { shortModelName } from './chat/ModelMenu.svelte';
+	import PlanUsageNote from './chat/PlanUsageNote.svelte';
+	import { planUsage } from '$lib/plan-usage.svelte';
+	import { usedPercent } from '$lib/usage-format';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
 	import TypingIndicator from './chat/TypingIndicator.svelte';
 	import PageHeader from './PageHeader.svelte';
@@ -167,6 +170,20 @@
 
 	/** A removed preset isn't in the list, but the chat still runs on its model: it shows as `current`. */
 	const listed = $derived(presets.some((p) => p.id === model.presetId));
+	/** A chat on the nolune plan says under the composer when a limit is nearly used up. */
+	const planNear = $derived.by(() => {
+		const usage = planUsage.current?.usage;
+		if (!usage) return false;
+		return (
+			Math.max(
+				usedPercent(usage.window.spent, usage.window.limit),
+				usedPercent(usage.week.spent, usage.week.limit)
+			) >= 80
+		);
+	});
+	$effect(() => {
+		if (model.provider === 'nolune-plan' && !planUsage.current) void planUsage.refresh();
+	});
 	const menuPresets = $derived(
 		listed
 			? presets
@@ -937,9 +954,13 @@
 		{:else if !chat.connected && chat.loaded}
 			<p class="mt-2 text-center text-xs text-warning">{m.chat.reconnecting}</p>
 		{:else}
-			<p class="mt-2 hidden text-center text-xs text-muted-foreground sm:block">
-				{m.chat.disclaimer}
-			</p>
+			{#if model.provider === 'nolune-plan' && planUsage.current && planNear}
+				<PlanUsageNote usage={planUsage.current.usage} />
+			{:else}
+				<p class="mt-2 hidden text-center text-xs text-muted-foreground sm:block">
+					{m.chat.disclaimer}
+				</p>
+			{/if}
 		{/if}
 	</ComposerDock>
 </div>

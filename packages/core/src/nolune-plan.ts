@@ -76,6 +76,7 @@ function writeStored(stored: Stored): void {
 
 function forget(): void {
 	rmSync(paths.nolunePlan, { force: true });
+	if (latest) setUsage(null);
 }
 
 function notLinked(): PlanError {
@@ -211,7 +212,73 @@ async function asPlan<T>(call: () => Promise<T>): Promise<T> {
 		return await call();
 	} catch (err) {
 		throw planErrorOf(err);
+	} finally {
+		// What it cost is charged once it's done: ask where the limits stand now.
+		usageSoon();
 	}
+}
+
+// --- where the limits stand ---
+
+/** The usage the API last said, and when. */
+let latest: { usage: NolunePlanUsage; at: number } | null = null;
+const usageListeners = new Set<() => void>();
+let asking: Promise<void> | null = null;
+let soon: ReturnType<typeof setTimeout> | null = null;
+/** After this long, a usage that's read is asked for again. */
+const USAGE_STALE_MS = 10 * 60 * 1000;
+/**
+ * How long after a request ends the usage is asked for: the API charges a stream once it has
+ * ended, and requests that end together are asked about once.
+ */
+const USAGE_AFTER_MS = 1500;
+
+function setUsage(usage: NolunePlanUsage | null): void {
+	latest = usage ? { usage, at: Date.now() } : null;
+	for (const listener of usageListeners) listener();
+}
+
+/** Asks the API where the limits stand (`/v1/usage`), once at a time; nothing is charged. */
+function askUsage(): Promise<void> {
+	asking ??= nolunePlanStatus({ check: true })
+		.then(
+			() => {},
+			() => {}
+		)
+		.finally(() => (asking = null));
+	return asking;
+}
+
+function usageSoon(): void {
+	if (soon) clearTimeout(soon);
+	soon = setTimeout(() => {
+		soon = null;
+		void askUsage();
+	}, USAGE_AFTER_MS);
+	// A command run in a terminal doesn't wait for it.
+	soon.unref?.();
+}
+
+/** Calls `listener` whenever where the limits stand changes. Returns the way to stop. */
+export function onNolunePlanUsage(listener: () => void): () => void {
+	usageListeners.add(listener);
+	return () => {
+		usageListeners.delete(listener);
+	};
+}
+
+/**
+ * Where the plan's limits stand, as the API last said, and when: null when nolune isn't linked
+ * or it isn't known yet. When it isn't known, or is old, it's asked for, and listeners hear when
+ * it comes.
+ */
+export function nolunePlanUsage(): { usage: NolunePlanUsage; at: number } | null {
+	if (!readStored()) {
+		if (latest) setUsage(null);
+		return null;
+	}
+	if (!latest || Date.now() - latest.at > USAGE_STALE_MS) void askUsage();
+	return latest;
 }
 
 /** The plan's chats: openrouter.ts's code, on nolune's API with the plan's token. */
@@ -484,6 +551,7 @@ export async function nolunePlanStatus(opts: { check?: boolean } = {}): Promise<
 		return { ...status, problem: refused?.message ?? `nolune's API answered ${answer.status}.` };
 	}
 	const usage = (answer.body?.usage ?? null) as NolunePlanUsage | null;
+	setUsage(usage);
 	if (!usage) {
 		return { ...status, problem: planRefusal(402, { code: 'no_plan' })!.message };
 	}

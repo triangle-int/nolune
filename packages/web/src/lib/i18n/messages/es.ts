@@ -106,6 +106,16 @@ function describe(schedule: Schedule): string {
 const memories = (n: number) => p(n, { one: `${n} recuerdo`, other: `${n} recuerdos` });
 
 export const es: Messages = {
+	planUsage: {
+		title: 'Plan de nolune',
+		window: '5 horas',
+		week: 'Esta semana',
+		credits: 'Créditos restantes',
+		extra: (amount: string) => `+ ${amount} extra`,
+		used: (percent: number) => `${percent} % usado`,
+		resets: (when: string) => `reinicio: ${when}`,
+		reached: (limit: string) => `${limit}: límite alcanzado`
+	},
 	common: {
 		add: 'Añadir',
 		cancel: 'Cancelar',
@@ -1094,8 +1104,6 @@ export const es: Messages = {
 		nolunePlanWaiting: 'Esta página seguirá sola en cuanto nolune quede vinculado.',
 		nolunePlanLinked:
 			'Vinculado. Los chats con preajustes del plan de nolune ahora usan este plan.',
-		nolunePlanUsage: (window: string, week: string, credits: string) =>
-			`5 horas: ${window} usado · esta semana: ${week} · créditos restantes: ${credits}`,
 		nolunePlanNotLinked: 'nolune no está vinculado a un plan de nolune.',
 		nolunePlanUnlinked: 'Desvinculado.',
 		nolunePlanUnlinkedLocally:

@@ -13,6 +13,17 @@ const to = (name: string) => (name ? `, ${name}` : '');
  * by the Rich component; see src/lib/i18n/index.ts.
  */
 export const en = {
+	/** The nolune plan's limits, as bars: in the model menu, under the composer, in Models & keys. */
+	planUsage: {
+		title: 'nolune plan',
+		window: '5 hours',
+		week: 'This week',
+		credits: 'Credits left',
+		extra: (amount: string) => `+ ${amount} extra`,
+		used: (percent: number) => `${percent}% used`,
+		resets: (when: string) => `resets ${when}`,
+		reached: (limit: string) => `${limit}: limit reached`
+	},
 	common: {
 		add: 'Add',
 		cancel: 'Cancel',
@@ -1013,8 +1024,6 @@ export const en = {
 		nolunePlanLinkPage: "nolune's link page",
 		nolunePlanWaiting: 'This page goes on by itself once nolune is linked.',
 		nolunePlanLinked: 'Linked. Chats on nolune plan presets now use this plan.',
-		nolunePlanUsage: (window: string, week: string, credits: string) =>
-			`5 hours: ${window} used · this week: ${week} · credits left: ${credits}`,
 		nolunePlanNotLinked: "nolune isn't linked to a nolune plan.",
 		nolunePlanUnlinked: 'Unlinked.',
 		nolunePlanUnlinkedLocally:

@@ -84,6 +84,16 @@ function describe(schedule: Schedule): string {
 const memories = (n: number) => p(n, { one: `${n} Erinnerung`, other: `${n} Erinnerungen` });
 
 export const de: Messages = {
+	planUsage: {
+		title: 'nolune-Abo',
+		window: '5 Stunden',
+		week: 'Diese Woche',
+		credits: 'Guthaben übrig',
+		extra: (amount: string) => `+ ${amount} zusätzlich`,
+		used: (percent: number) => `${percent} % genutzt`,
+		resets: (when: string) => `wieder ab ${when}`,
+		reached: (limit: string) => `${limit}: Limit erreicht`
+	},
 	common: {
 		add: 'Hinzufügen',
 		cancel: 'Abbrechen',
@@ -1079,8 +1089,6 @@ export const de: Messages = {
 		nolunePlanLinkPage: 'die Verknüpfungsseite von nolune',
 		nolunePlanWaiting: 'Diese Seite geht von selbst weiter, sobald nolune verknüpft ist.',
 		nolunePlanLinked: 'Verknüpft. Chats mit nolune-Abo-Voreinstellungen nutzen jetzt dieses Abo.',
-		nolunePlanUsage: (window: string, week: string, credits: string) =>
-			`5 Stunden: ${window} genutzt · diese Woche: ${week} · Guthaben übrig: ${credits}`,
 		nolunePlanNotLinked: 'nolune ist mit keinem nolune-Abo verknüpft.',
 		nolunePlanUnlinked: 'Getrennt.',
 		nolunePlanUnlinkedLocally:

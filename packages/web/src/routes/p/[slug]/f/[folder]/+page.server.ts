@@ -52,7 +52,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		})),
 		maxFiles: MAX_FOLDER_FILES,
 		maxInstructions: MAX_FOLDER_INSTRUCTIONS,
-		presets: listPresets().map((p) => ({ id: p.id, name: p.name })),
+		presets: listPresets().map((p) => ({ id: p.id, name: p.name, provider: p.provider })),
 		defaultPresetId: getDefaultPreset()?.id ?? '',
 		efforts: [...EFFORTS],
 		commandMode: commandMode()

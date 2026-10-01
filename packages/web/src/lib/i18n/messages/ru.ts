@@ -154,6 +154,16 @@ const facts = (n: number) =>
 	p(n, { one: `${n} факт`, few: `${n} факта`, many: `${n} фактов`, other: `${n} факта` });
 
 export const ru: Messages = {
+	planUsage: {
+		title: 'Подписка nolune',
+		window: '5 часов',
+		week: 'Эта неделя',
+		credits: 'Осталось кредитов',
+		extra: (amount: string) => `+ ${amount} докупленных`,
+		used: (percent: number) => `использовано ${percent}%`,
+		resets: (when: string) => `сброс: ${when}`,
+		reached: (limit: string) => `${limit}: лимит исчерпан`
+	},
 	common: {
 		add: 'Добавить',
 		cancel: 'Отмена',
@@ -1163,8 +1173,6 @@ export const ru: Messages = {
 		nolunePlanLinkPage: 'страницу привязки nolune',
 		nolunePlanWaiting: 'Эта страница продолжит сама, как только nolune будет привязан.',
 		nolunePlanLinked: 'Привязано. Чаты на пресетах с подпиской nolune теперь работают по ней.',
-		nolunePlanUsage: (window: string, week: string, credits: string) =>
-			`5 часов: использовано ${window} · эта неделя: ${week} · осталось кредитов: ${credits}`,
 		nolunePlanNotLinked: 'nolune не привязан к подписке nolune.',
 		nolunePlanUnlinked: 'Отвязано.',
 		nolunePlanUnlinkedLocally:

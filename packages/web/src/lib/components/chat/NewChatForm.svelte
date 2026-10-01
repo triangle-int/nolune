@@ -15,7 +15,7 @@
 	interface Props {
 		/** The profile the chat is started in. */
 		slug: string;
-		presets: { id: string; name: string }[];
+		presets: { id: string; name: string; provider?: string }[];
 		defaultPresetId: string;
 		efforts: string[];
 		folders: FolderItem[];

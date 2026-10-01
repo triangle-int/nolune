@@ -9,6 +9,7 @@
 	import { avatarFavicon } from '$lib/avatars';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { setI18n } from '$lib/i18n';
+	import { planUsage } from '$lib/plan-usage.svelte';
 	import { Preferences, setPreferences } from '$lib/preferences.svelte';
 	import { avatarTint, tintStyle } from '$lib/tint';
 
@@ -19,13 +20,17 @@
 	// Picking another language reloads the page, so this holds for the page's life.
 	setI18n(untrack(() => data.locale));
 
-	// What others change while the page is open: notifications, and profile names and avatars.
+	// What others change while the page is open: notifications, profile names and avatars, and the
+	// nolune plan's limits.
 	const signedIn = $derived(!!data.user);
 	$effect(() => {
 		if (!signedIn) return;
 		const source = new EventSource('/api/events');
 		source.onmessage = (event) => {
-			const { type } = JSON.parse(event.data) as { type: 'notifications' | 'profiles' };
+			const { type } = JSON.parse(event.data) as {
+				type: 'notifications' | 'profiles' | 'nolune-plan';
+			};
+			if (type === 'nolune-plan') void planUsage.refresh();
 			invalidate(`nolune:${type}`);
 		};
 		return () => source.close();

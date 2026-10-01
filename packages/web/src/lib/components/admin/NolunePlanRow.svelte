@@ -6,6 +6,8 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import Rich from '$lib/components/Rich.svelte';
+	import PlanUsageBars from '$lib/components/chat/PlanUsageBars.svelte';
+	import { planUsage } from '$lib/plan-usage.svelte';
 	import { getI18n } from '$lib/i18n';
 	import { cn } from '$lib/utils';
 
@@ -35,6 +37,12 @@
 
 	const linked = $derived(plan.status.signedIn);
 	const problem = $derived(result?.planError ?? plan.signInError);
+	/** Where the limits stand: the last Check's, else as the gateway last heard. */
+	const usage = $derived(result?.usage ?? planUsage.current?.usage ?? null);
+
+	$effect(() => {
+		if (linked) void planUsage.refresh();
+	});
 
 	// The code is approved on another page, maybe on another device: ask until it has been.
 	$effect(() => {
@@ -42,14 +50,6 @@
 		const timer = setInterval(() => invalidate('nolune:nolune-plan'), 3000);
 		return () => clearInterval(timer);
 	});
-
-	function share(spent: number, limit: number): string {
-		return limit > 0 ? `${Math.min(100, Math.round((spent / limit) * 100))}%` : '—';
-	}
-
-	function dollars(micros: number): string {
-		return `$${(micros / 1_000_000).toFixed(2)}`;
-	}
 
 	/** "linked as …" at the start of a line. */
 	function sentence(text: string): string {
@@ -160,15 +160,8 @@
 	{/if}
 	{#if problem}
 		<p class="text-destructive sm:pl-12" role="alert">{problem}</p>
-	{:else if result?.usage}
-		{@const { window, week, credits } = result.usage}
-		<p class="text-muted-foreground sm:pl-12" role="status">
-			{m.admin.nolunePlanUsage(
-				share(window.spent, window.limit),
-				share(week.spent, week.limit),
-				`${dollars(credits.plan)}${credits.extra > 0 ? ` + ${dollars(credits.extra)}` : ''}`
-			)}
-		</p>
+	{:else if linked && usage}
+		<PlanUsageBars {usage} class="max-w-md sm:pl-12" />
 	{:else if result?.planMessage}
 		<p class="text-muted-foreground sm:pl-12" role="status">{result.planMessage}</p>
 	{:else if linked}
