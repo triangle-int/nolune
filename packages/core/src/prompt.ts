@@ -1,4 +1,5 @@
 import { homedir, type, userInfo } from 'node:os';
+import type Anthropic from '@anthropic-ai/sdk';
 import { MAX_MEDIA_BYTES } from './media.ts';
 import {
 	CORE_NOTE,
@@ -7,7 +8,7 @@ import {
 	listMemoryNotes,
 	readPinnedNote
 } from './memory.ts';
-import { mcpServersSection } from './mcp.ts';
+import { mcpToolsSection } from './mcp.ts';
 import { cardRules, cardsSection } from './memory-cards.ts';
 import { PERSON_NOTE_GUIDE, categoryGuide } from './memory-categories.ts';
 import { peopleGuide } from './memory-people.ts';
@@ -15,7 +16,12 @@ import { profileDir, profileMemoryDir, profileSkillsDir } from './paths.ts';
 import type { Profile } from './profiles.ts';
 import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
 import { MAX_SOUL_CHARS, readSoul } from './soul.ts';
-import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './run-command.ts';
+import {
+	MAX_TIMEOUT_SECONDS,
+	DEFAULT_TIMEOUT_SECONDS,
+	TOOLS,
+	commandShell
+} from './run-command.ts';
 
 /**
  * Built once per conversation and stored with it. Everything here must be stable for the life of
@@ -24,8 +30,9 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
  * note name, and the agent searches and reads what it needs (facts that match a message go along
  * with the message: recallFor); only the small pinned core note is copied whole. So the prompt
  * changes when a note is added or removed or core changes, not with every fact. The members'
- * cards (memory-cards.ts) are copied whole too, like core. The profile's MCP servers (mcp.ts)
- * follow the skills, by name and description. `folderSection`:
+ * cards (memory-cards.ts) are copied whole too, like core. `tools`: the chat's, as it saved them;
+ * the MCP servers whose tools are among them follow the skills, by name, description and what
+ * they say about using their tools (mcp.ts). `folderSection`:
  * the chat's folder (renderFolderSection), last, so chats outside folders share everything
  * before it. `soul`: the profile's (readSoul), first, since it says who nolune is; the chat keeps
  * its text to tell when the prompt is out of date.
@@ -33,7 +40,8 @@ import { MAX_TIMEOUT_SECONDS, DEFAULT_TIMEOUT_SECONDS, commandShell } from './ru
 export function buildSystemPrompt(
 	profile: Pick<Profile, 'id' | 'slug' | 'disabledSkills'>,
 	folderSection = '',
-	soul = readSoul(profile.slug)
+	soul = readSoul(profile.slug),
+	tools: readonly Anthropic.Tool[] = TOOLS
 ): string {
 	const dir = profileDir(profile.slug);
 	const soulSection = soul.text
@@ -54,20 +62,16 @@ ${core.text}
 		: 'It is empty so far.';
 	const people = peopleGuide(profile);
 	const cards = cardsSection(profile.id);
-	const servers = mcpServersSection(profile.slug);
-	const skills = listProfileSkills(profileSkillsDir(profile.slug), profile.disabledSkills)
-		.skills.filter((s) => s.enabled)
-		// The built-in mcp skill is about the profile's MCP servers: without any, it's no use.
-		.filter((s) => servers || s.name !== 'mcp' || s.scope !== 'builtin');
-	const mcpSection =
-		servers && skills.some((s) => s.name === 'mcp')
-			? `\n\nThis profile's MCP servers, the apps and services connected to nolune, as they were when this conversation started (the mcp skill says how to use them):\n${servers}`
-			: '';
+	const skills = listProfileSkills(
+		profileSkillsDir(profile.slug),
+		profile.disabledSkills
+	).skills.filter((s) => s.enabled);
 	const skillsSection = skills.length
 		? `When a task matches a skill's description, read its SKILL.md with \`cat\` before doing anything else, and follow it. Relative paths in a skill are relative to that skill's folder.
 
-${renderSkillsCatalog(skills)}${mcpSection}`
+${renderSkillsCatalog(skills)}`
 		: 'There are no skills yet.';
+	const services = mcpToolsSection(tools, profile.slug);
 
 	return `You are nolune, an assistant that lives on a family's computer and helps them get things done on it. You act by running shell commands with the run_command tool.
 
@@ -128,5 +132,5 @@ ${cardRules()}
 # Skills
 Skills are folders with instructions for specific tasks. ${skillsSection}
 
-When something took several attempts to get right, or someone asks for the same kind of thing more than once, save the working approach as a skill so it's easy next time: run \`nolune skill new <name> --description "<what it does and when to use it>"\` and then fill in the SKILL.md it creates under \`${dir}/skills/<name>/\`. Names use lowercase letters, digits and hyphens. Improve an existing skill rather than creating a near-duplicate.${folderSection ? `\n\n${folderSection}` : ''}`;
+When something took several attempts to get right, or someone asks for the same kind of thing more than once, save the working approach as a skill so it's easy next time: run \`nolune skill new <name> --description "<what it does and when to use it>"\` and then fill in the SKILL.md it creates under \`${dir}/skills/<name>/\`. Names use lowercase letters, digits and hyphens. Improve an existing skill rather than creating a near-duplicate.${services ? `\n\n# Connected services\n${services}` : ''}${folderSection ? `\n\n${folderSection}` : ''}`;
 }

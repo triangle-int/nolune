@@ -1,5 +1,8 @@
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -15,16 +18,16 @@ import {
 	joinCommandLine,
 	listMcpServers,
 	listMcpTools,
-	mcpServersSection,
+	mcpResultText,
+	mcpToolName,
+	mcpToolServer,
 	parseMcpServer,
+	refreshMcpTools,
 	removeMcpServer,
 	saveMcpServer,
 	splitCommandLine,
 	type McpServerConfig
 } from './mcp.ts';
-import { setSkillsEnabled } from './profiles.ts';
-import { buildSystemPrompt } from './prompt.ts';
-import { makeFamily } from './test/fixtures.ts';
 import { fakeServer } from './test/mcp-server.ts';
 
 const FAKE = fileURLToPath(new URL('./test/mcp-server.ts', import.meta.url));
@@ -157,8 +160,6 @@ describe('saving servers', () => {
 		expect(listMcpServers('anna').map((s) => s.name)).toEqual(['everyone', 'annas']);
 		expect(() => findMcpServer('annas', 'family')).toThrow(/isn't connected in this profile/);
 		expect(findMcpServer('annas', 'anna').type).toBe('stdio');
-		expect(mcpServersSection('family')).toBe('- everyone: For all');
-		expect(mcpServersSection('nobody')).toBe('- everyone: For all');
 	});
 
 	it('keeps saved keys only when asked, and only for the same kind of server', () => {
@@ -187,7 +188,6 @@ describe('saving servers', () => {
 		});
 		expect(listMcpServers()[0].problem).toMatch(/needs a command/);
 		expect(() => findMcpServer('broken')).toThrow(/settings in config.json are broken/);
-		expect(mcpServersSection('family')).toBe('');
 	});
 });
 
@@ -335,28 +335,41 @@ describe('a server at an address', () => {
 	});
 });
 
-describe("a chat's prompt", () => {
-	it('names the profile’s servers after the skills, and leaves the mcp skill out without any', () => {
-		const { profile } = makeFamily();
-		expect(buildSystemPrompt(profile)).not.toContain('<name>mcp</name>');
-		saveMcpServer('github', fake({ description: 'Issues and pull requests' }));
-		saveMcpServer('elsewhere', fake({ profiles: ['someone-else'] }));
-		const prompt = buildSystemPrompt(profile);
-		expect(prompt).toContain('<name>mcp</name>');
-		expect(prompt).toContain(
-			"</available_skills>\n\nThis profile's MCP servers, the apps and services connected to nolune, as they were when this conversation started (the mcp skill says how to use them):\n- github: Issues and pull requests"
-		);
-		expect(prompt).not.toContain('elsewhere');
+describe("a chat's tools", () => {
+	it("names a server's tools mcp__<server>__<tool>, within what providers take", () => {
+		expect(mcpToolName('github', 'search_issues')).toBe('mcp__github__search_issues');
+		const dotted = mcpToolName('home', 'lights.turn_on');
+		expect(dotted).toMatch(/^mcp__home__lights_turn_on_[0-9a-f]{6}$/);
+		expect(dotted).not.toBe(mcpToolName('home', 'lights_turn.on'));
+		const long = mcpToolName('a-rather-long-server-name-here', 'and_an_even_longer_tool_name_too');
+		expect(long.length).toBeLessThanOrEqual(51);
+		expect(long).toMatch(/^mcp__a-rather-long-server-name-here__and_an_[0-9a-f]{6}$/);
+		expect(mcpToolServer('mcp__home-assistant__turn_on')).toBe('home-assistant');
+		expect(mcpToolServer('mcp__my_server__get__thing')).toBe('my_server');
+		expect(mcpToolServer('run_command')).toBeNull();
 	});
 
-	it('says nothing of them in a profile that turned the skill off', () => {
-		const { profile } = makeFamily();
-		saveMcpServer('github', fake());
-		setSkillsEnabled(profile.id, ['mcp'], false);
-		const prompt = buildSystemPrompt({ ...profile, disabledSkills: ['mcp'] });
-		expect(prompt).not.toContain('<name>mcp</name>');
-		expect(prompt).not.toContain("This profile's MCP servers");
-		expect(prompt).not.toContain('- github');
+	it('remembers what servers said their tools are, and forgets a removed one', async () => {
+		saveMcpServer('fake', fake());
+		await refreshMcpTools();
+		const known = JSON.parse(
+			readFileSync(join(process.env.NOLUNE_HOME!, 'mcp-tools.json'), 'utf8')
+		);
+		expect(known.fake.tools.map((t: { name: string }) => t.name)).toContain('echo');
+		expect(known.fake.instructions).toBe('Tools for nolune tests. Echo says things back.');
+		removeMcpServer('fake');
+		expect(readFileSync(join(process.env.NOLUNE_HOME!, 'mcp-tools.json'), 'utf8')).toBe('{}\n');
+	});
+
+	it('turns what a tool returned into text, showing its pictures to the agent', async () => {
+		saveMcpServer('fake', fake());
+		const view = mkdtempSync(join(tmpdir(), 'nolune-view-'));
+		writeFileSync(join(view, 'limits.json'), JSON.stringify({ count: 5 }));
+		const text = await mcpResultText(await callMcpTool('fake', 'picture', {}), view);
+		expect(text).toMatch(/^Here it is\.\nAttached \/.*\/image-1\.png \(1×1 PNG\)\.$/);
+		expect(await mcpResultText(await callMcpTool('fake', 'structured', {}))).toBe(
+			'{\n  "answer": 42\n}'
+		);
 	});
 });
 

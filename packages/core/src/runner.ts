@@ -72,6 +72,7 @@ import {
 	checkCommand,
 	commandMode,
 	refusedText,
+	type CheckAction,
 	type CommandMode
 } from './command-safety.ts';
 import { folderContextFor } from './folders.ts';
@@ -84,6 +85,7 @@ import {
 	mediaByMessage,
 	type PreparedMedia
 } from './media.ts';
+import { McpServerError, callMcpTool, findMcpTool, mcpResultText, mcpToolServer } from './mcp.ts';
 import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
 import { profileCards } from './memory-cards.ts';
 import { memberWords } from './memory-people.ts';
@@ -93,11 +95,11 @@ import { hasFileStore, resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
 import {
 	RUN_COMMAND_TOOL,
+	capOutput,
 	commandEnv,
 	parseRunCommandInput,
 	resolveCwd,
 	runCommand,
-	type RunCommandInput,
 	type RunCommandResult
 } from './run-command.ts';
 import { SubagentError, activeSubagents, listSubagents } from './subagents.ts';
@@ -703,9 +705,11 @@ async function runToolCall(
 			true
 		);
 	}
-	if (call.name !== RUN_COMMAND_TOOL.name)
+	const mcp = mcpToolServer(call.name) !== null;
+	if (call.name !== RUN_COMMAND_TOOL.name && !mcp)
 		return toolResult(call.id, `Unknown tool "${call.name}".`, true);
 	if (signal.aborted) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
+	if (mcp) return runMcpCall(conv, call, signal, st, images);
 	const input = parseRunCommandInput(call.input);
 	if (typeof input === 'string') return toolResult(call.id, `Invalid input: ${input}`, true);
 
@@ -719,7 +723,14 @@ async function runToolCall(
 		NOLUNE_CONVERSATION_ID: conv.id
 	};
 
-	const blocked = await safetyCheck(conv, call, input, dir, signal, st);
+	const blocked = await safetyCheck(
+		conv,
+		call,
+		{ input, cwd: resolveCwd(input.cwd, dir) },
+		dir,
+		signal,
+		st
+	);
 	if (blocked) return blocked;
 
 	if (input.background) {
@@ -775,6 +786,86 @@ async function runToolCall(
 	}
 }
 
+/**
+ * A call to a tool of an MCP server (`mcp__<server>__<tool>`, mcp.ts), which the chat got when it
+ * was created: checked by auto mode like a command, then called on the server. What it returns is
+ * kept like a command's output, and its pictures are attached as `nolune view`'s are.
+ */
+async function runMcpCall(
+	conv: Conversation,
+	call: ToolCall,
+	signal: AbortSignal,
+	st: State,
+	images: ImageUse
+): Promise<ToolResultBlock> {
+	const slug = profileSlug(conv.profileId);
+	if (!slug) return toolResult(call.id, 'Not run: the profile no longer exists.', true);
+	const args = call.input;
+	if (!args || typeof args !== 'object' || Array.isArray(args)) {
+		return toolResult(call.id, 'Invalid input: the arguments must be an object.', true);
+	}
+	let found: Awaited<ReturnType<typeof findMcpTool>> | null;
+	try {
+		found = await untilAborted(findMcpTool(call.name, { profile: slug, signal }), signal);
+	} catch (err) {
+		return toolResult(call.id, `Not run: ${errorText(err)}`, true);
+	}
+	if (!found) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
+	const { server, tool } = found;
+	const hints = tool.annotations ?? {};
+	const blocked = await safetyCheck(
+		conv,
+		call,
+		{
+			tool: {
+				server,
+				tool: tool.name,
+				hints: {
+					readOnly: hints.readOnlyHint,
+					destructive: hints.destructiveHint,
+					openWorld: hints.openWorldHint
+				},
+				arguments: args
+			}
+		},
+		profileDir(slug),
+		signal,
+		st
+	);
+	if (blocked) return blocked;
+
+	const viewDir = createViewDir(images, pictureTypes(conv.provider));
+	try {
+		const result = await callMcpTool(server, tool.name, args as Record<string, unknown>, {
+			profile: slug,
+			signal
+		});
+		const text = capOutput(await mcpResultText(result, viewDir)).trim() || '(no output)';
+		const viewed = await viewedImageBlocks(conv, readViewedImages(viewDir), images);
+		const block = toolResult(call.id, text, result.isError === true, viewed.blocks);
+		if (viewed.attached.length) {
+			viewedMedia.set(block, await copyViewedImages(call.id, viewed.attached));
+		}
+		return block;
+	} catch (err) {
+		if (signal.aborted) return toolResult(call.id, `Not finished. ${stoppedText(st)}`, true);
+		// The server turned the call down (an unknown tool, arguments it doesn't take) or went away.
+		return toolResult(call.id, errorText(err, `${server} ${tool.name}`), true);
+	} finally {
+		rmSync(viewDir, { recursive: true, force: true });
+		commandEnded();
+	}
+}
+
+/** Why a call to a server failed, for the model: nolune's own words, or the server's with whose. */
+function errorText(err: unknown, whose?: string): string {
+	const message = err instanceof Error ? err.message : String(err);
+	if (err instanceof McpServerError || !whose) {
+		return `${message[0]?.toUpperCase() ?? ''}${message.slice(1)}`;
+	}
+	return `${whose}: ${message}`;
+}
+
 /** The promise's value, or null as soon as the signal aborts. */
 function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | null> {
 	if (signal.aborted) return Promise.resolve(null);
@@ -802,7 +893,7 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 
 async function safetyCheck(
 	conv: Conversation,
 	call: ToolCall,
-	input: RunCommandInput,
+	action: CheckAction,
 	dir: string,
 	signal: AbortSignal,
 	st: State
@@ -820,8 +911,7 @@ async function safetyCheck(
 			conv,
 			rows: committedRows(conv.id),
 			callId: call.id,
-			input,
-			cwd: resolveCwd(input.cwd, dir),
+			...action,
 			profile: { name: getProfile(conv.profileId)?.name ?? '', dir }
 		}),
 		signal

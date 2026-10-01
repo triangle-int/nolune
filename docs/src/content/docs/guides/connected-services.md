@@ -44,22 +44,26 @@ the server says about itself.
 
 ## How the agent uses it
 
-nolune gives the agent one tool, `run_command`, and connected services don't change that. Each new
-chat's instructions name the profile's servers, and the agent lists their tools, looks at what one
-takes and calls it with `nolune mcp` commands:
+Each new chat gets the tools of its profile's servers next to nolune's own, named
+`mcp__<server>__<tool>`, and its instructions say what each server is for. The agent calls them
+like any tool, on every model, the plans included, and pictures a tool returns are shown to it.
+
+A chat keeps the tools it started with, so its prompt cache stays warm: a server you connect or
+change reaches the chats started after. Older chats can still reach it from a command:
 
 ```sh
 nolune mcp tools github
 nolune mcp call github search_issues '{"query": "repo:anna/garden is:open"}'
 ```
 
-So every model gets them the same way, including the plans, and adding a server doesn't change the
-tools or the prompt cache of the chats already running. They see it from their next new chat. Pictures
-a tool returns are shown to the agent, as with `nolune view`.
+Every server's tool definitions go with every request of the chats that have them, so a server with
+many tools makes each reply cost more. Connect the ones the family uses, and keep personal ones to
+their own profile. A chat gets at most 120 tools from servers.
 
-[Auto mode](/docs/guides/auto-mode/) checks each call like any other command: looking things up goes
+[Auto mode](/docs/guides/auto-mode/) checks every call to a server's tool: looking things up goes
 ahead, while creating, changing, deleting or sending something in someone's account needs someone in
-the chat to have asked for it.
+the chat to have asked for it. In the chat, a call shows as what it does, like "Search issues
+(github)".
 
 ## Good to know
 

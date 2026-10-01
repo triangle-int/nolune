@@ -1277,7 +1277,7 @@ export const de: Messages = {
 	 */
 	services: {
 		title: 'Verbundene Dienste',
-		hint: 'MCP-Server geben dem Agenten die Werkzeuge anderer Apps und Dienste, etwa eines Kalenders, von GitHub, Notion oder dem Smart Home. Er nutzt sie über Befehle, die der Auto-Modus wie alle anderen prüft. Alle Profile bekommen sie, außer du wählst bestimmte aus.',
+		hint: 'MCP-Server geben dem Agenten die Werkzeuge anderer Apps und Dienste, etwa eines Kalenders, von GitHub, Notion oder dem Smart Home. Neue Chats bekommen ihre Werkzeuge neben seinen eigenen, und der Auto-Modus prüft jeden Aufruf wie einen Befehl. Alle Profile bekommen sie, außer du wählst bestimmte aus.',
 		add: 'Server verbinden',
 		addTitle: 'Einen MCP-Server verbinden',
 		addHint:

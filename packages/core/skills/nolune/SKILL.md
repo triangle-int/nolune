@@ -11,8 +11,8 @@ itself safely from your own commands.
 
 Other parts of the CLI have their own instructions: automations (`nolune trigger`, `nolune wake`) in the
 `automations` skill, pictures (`nolune generate image`, `nolune view`) in `generate-images` and
-`view-images`, the tools of connected services (`nolune mcp`) in `mcp`, and memory (`nolune memory`)
-and your soul (`nolune soul`) in your system prompt.
+`view-images`, and memory (`nolune memory`), your soul (`nolune soul`) and connected services
+(`nolune mcp`) in your system prompt.
 
 ## Before you change anything
 
@@ -148,8 +148,8 @@ nolune env rm FIRECRAWL_API_KEY
 
 ## Connected services (MCP servers)
 
-An admin can connect apps and services as MCP servers, whose tools you then use with `nolune mcp`
-(the `mcp` skill). When one asks you to connect one, take what its instructions say: the command
+An admin can connect apps and services as MCP servers, whose tools new chats then get as tools
+of their own. When one asks you to connect one, take what its instructions say: the command
 that starts it, or its address, and the key it needs. `nolune mcp add` connects to it to check it
 and prints its tools, or why it couldn't:
 

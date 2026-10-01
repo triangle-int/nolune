@@ -5,8 +5,8 @@ import { z } from 'zod';
 
 /*
  * A small MCP server for tests, over stdio: `node mcp-server.ts`. Its tools cover what
- * `nolune mcp` has to handle: text, a picture, an error, structured output, its environment and a
- * slow call. FAKE_MCP_FAIL makes it stop before it answers, saying why on stderr.
+ * `nolune mcp` has to handle: text, a picture, an error, structured output, lists and choices in
+ * its arguments, its environment and a slow call. FAKE_MCP_FAIL makes it stop before it answers, saying why on stderr.
  */
 
 if (process.env.FAKE_MCP_FAIL) {
@@ -51,6 +51,18 @@ export function fakeServer(): McpServer {
 		'env',
 		{ description: 'An environment variable.', inputSchema: { name: z.string() } },
 		({ name }) => ({ content: [{ type: 'text', text: process.env[name] ?? '(unset)' }] })
+	);
+	server.registerTool(
+		'tag',
+		{
+			description: 'Tags things.',
+			inputSchema: {
+				tags: z.array(z.string()),
+				color: z.enum(['red', 'blue']),
+				where: z.object({ x: z.number() }).optional()
+			}
+		},
+		({ tags, color }) => ({ content: [{ type: 'text', text: `${color}: ${tags.join(', ')}` }] })
 	);
 	server.registerTool('pid', { description: 'Its process id.' }, () => ({
 		content: [{ type: 'text', text: String(process.pid) }]

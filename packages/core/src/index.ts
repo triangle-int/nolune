@@ -267,6 +267,7 @@ export {
 	type Skill
 } from './skills.ts';
 export {
+	MAX_CHAT_MCP_TOOLS,
 	MCP_TRANSPORTS,
 	McpServerError,
 	callMcpTool,
@@ -274,13 +275,19 @@ export {
 	closeMcpConnections,
 	describeFromServer,
 	findMcpServer,
+	findMcpTool,
 	holdMcpConnections,
 	isMcpAddress,
 	joinCommandLine,
 	listMcpServers,
 	listMcpTools,
+	mcpChatTools,
+	mcpResultText,
 	mcpServerNameProblem,
+	mcpToolName,
+	mcpToolServer,
 	parseMcpServer,
+	refreshMcpTools,
 	removeMcpServer,
 	saveMcpServer,
 	splitCommandLine,

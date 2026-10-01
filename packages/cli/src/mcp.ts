@@ -1,6 +1,3 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
 	McpServerError,
@@ -11,11 +8,11 @@ import {
 	isMcpAddress,
 	listMcpServers,
 	listMcpTools,
+	mcpResultText,
 	mcpServerNameProblem,
 	parseMcpServer,
 	removeMcpServer,
 	saveMcpServer,
-	viewImage,
 	type McpServerConfig,
 	type McpServerTools
 } from '@nolune/core';
@@ -24,7 +21,7 @@ import { fail, type Io } from './io.ts';
 type Tool = McpServerTools['tools'][number];
 type ToolResult = Awaited<ReturnType<typeof callMcpTool>>;
 
-export const MCP_HELP = `MCP servers (other apps' and services' tools, which the agent uses through \`nolune mcp\`)
+export const MCP_HELP = `MCP servers (other apps' and services' tools, which new chats get next to run_command)
   nolune mcp add <name> <url> [--transport http|sse] [--header "Name: value"]...
                  [--description D] [--profile SLUG]...
   nolune mcp add <name> [--env NAME=value]... [--cwd DIR] [--description D] [--profile SLUG]...
@@ -49,14 +46,6 @@ const USAGE = 'usage: nolune mcp add|add-json|rm|list|tools|call. See `nolune he
 /** How much of a tool's description the list shows, and of a server's instructions. */
 const SHORT_DESCRIPTION = 200;
 const MAX_INSTRUCTIONS = 4000;
-
-const EXTENSIONS: Record<string, string> = {
-	'image/jpeg': 'jpg',
-	'image/svg+xml': 'svg',
-	'audio/mpeg': 'mp3',
-	'audio/x-wav': 'wav',
-	'text/plain': 'txt'
-};
 
 /** The profiles a server is for, by slug, each of which must exist. */
 function profiles(given: string[] | undefined): string[] | undefined {
@@ -309,65 +298,6 @@ async function tools(io: Io, args: string[]): Promise<number> {
 	return failed ? 1 : 0;
 }
 
-function extension(type: string | undefined): string {
-	if (!type) return 'bin';
-	const known = EXTENSIONS[type];
-	if (known) return known;
-	const sub = type.split('/')[1]?.split(/[;+]/)[0] ?? '';
-	return /^[a-z0-9]{1,8}$/.test(sub) ? sub : 'bin';
-}
-
-/**
- * Prints what a tool returned: its text as it is, the rest saved as files in a folder of their
- * own, each named on a line. Pictures are shown to the agent, as `nolune view` would.
- */
-async function printResult(io: Io, result: ToolResult): Promise<void> {
-	let folder: string | null = null;
-	let count = 0;
-	const save = (base64: string, type: string | undefined, kind: string) => {
-		folder ??= mkdtempSync(join(tmpdir(), 'nolune-mcp-'));
-		const file = join(folder, `${kind}-${++count}.${extension(type)}`);
-		writeFileSync(file, Buffer.from(base64, 'base64'));
-		return file;
-	};
-	for (const block of result.content) {
-		if (block.type === 'text') {
-			io.stdout(block.text.endsWith('\n') ? block.text : `${block.text}\n`);
-		} else if (block.type === 'image') {
-			const file = save(block.data, block.mimeType, 'image');
-			const viewDir = io.env.NOLUNE_VIEW_DIR;
-			if (!viewDir) {
-				io.log(`Image: ${file}`);
-				continue;
-			}
-			try {
-				io.log(await viewImage(file, viewDir, io.cwd));
-			} catch (err) {
-				io.log(`Image: ${file}`);
-				io.error(`nolune: can't show it: ${(err as Error).message.replace(/\.+$/, '')}.`);
-			}
-		} else if (block.type === 'audio') {
-			io.log(`Audio: ${save(block.data, block.mimeType, 'audio')}`);
-		} else if (block.type === 'resource') {
-			const resource = block.resource;
-			if ('text' in resource) {
-				io.log(`Resource ${resource.uri}:`);
-				io.stdout(resource.text.endsWith('\n') ? resource.text : `${resource.text}\n`);
-			} else {
-				io.log(`Resource ${resource.uri}: ${save(resource.blob, resource.mimeType, 'file')}`);
-			}
-		} else if (block.type === 'resource_link') {
-			io.log(
-				`Link: ${block.name} ${block.uri}${block.description ? ` (${block.description})` : ''}`
-			);
-		}
-	}
-	// A tool with only structured output; one with text too says the same in it.
-	if (result.structuredContent && !result.content.some((b) => b.type === 'text')) {
-		io.log(JSON.stringify(result.structuredContent, null, 2));
-	}
-}
-
 async function call(io: Io, args: string[]): Promise<number> {
 	const [server, tool, json, ...extra] = args;
 	if (!server || !tool || extra.length) {
@@ -400,7 +330,8 @@ async function call(io: Io, args: string[]): Promise<number> {
 			`${server} ${tool}: ${(err as Error).message}. \`nolune mcp tools ${server} ${tool}\` shows what it takes.`
 		);
 	}
-	await printResult(io, result);
+	const output = await mcpResultText(result, io.env.NOLUNE_VIEW_DIR);
+	if (output) io.log(output);
 	if (result.isError) {
 		io.error(`nolune: ${server} ${tool} reported an error.`);
 		return 1;

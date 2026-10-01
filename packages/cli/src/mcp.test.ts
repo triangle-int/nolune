@@ -39,7 +39,7 @@ describe('nolune mcp', () => {
 		]);
 		expect(added).toEqual({
 			code: 0,
-			out: 'Added fake: 7 tools (echo, picture, fail, structured, env, pid, wait).\n',
+			out: 'Added fake: 8 tools (echo, picture, fail, structured, env, tag, pid, wait).\n',
 			err: ''
 		});
 		expect(readConfig().mcpServers?.fake).toEqual({
@@ -86,7 +86,7 @@ describe('nolune mcp', () => {
 		const json = JSON.stringify({
 			mcpServers: { anything: { command: process.execPath, args: [FAKE] } }
 		});
-		expect((await run(['mcp', 'add-json', 'fake', json])).out).toMatch(/^Added fake: 7 tools/);
+		expect((await run(['mcp', 'add-json', 'fake', json])).out).toMatch(/^Added fake: 8 tools/);
 		expect(readConfig().mcpServers?.fake).toMatchObject({ type: 'stdio', args: [FAKE] });
 		expect((await run(['mcp', 'add-json', 'x', '{"url": 5}'])).err).toBe(
 			'nolune: Its url is an address starting with http:// or https://.\n'
@@ -109,7 +109,7 @@ describe('nolune mcp', () => {
 		await run(['mcp', 'add', 'fake', '--', process.execPath, FAKE]);
 		const tools = await run(['mcp', 'tools', 'fake']);
 		expect(tools.out).toContain(
-			'fake: Fake Server, 7 tools\nTools for nolune tests. Echo says things back.\n'
+			'fake: Fake Server, 8 tools\nTools for nolune tests. Echo says things back.\n'
 		);
 		expect(tools.out).toContain('\necho(text, shout?) [reads only]\n  Says the text back.\n');
 		const echo = await run(['mcp', 'tools', 'fake', 'echo']);
@@ -174,7 +174,7 @@ describe('nolune mcp', () => {
 			err: "nolune: annas isn't connected in this profile. An admin can add it on the Connected services page.\n"
 		});
 		const all = await run(['mcp', 'tools'], family);
-		expect(all.out).toMatch(/^shared: Fake Server, 7 tools\n/);
+		expect(all.out).toMatch(/^shared: Fake Server, 8 tools\n/);
 		expect(all.out).not.toContain('annas');
 	});
 

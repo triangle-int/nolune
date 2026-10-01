@@ -38,6 +38,7 @@ import type { CacheTtl, Effort, Provider } from './models.ts';
 import { buildSystemPrompt } from './prompt.ts';
 import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
+import { mcpChatTools, mcpToolServer } from './mcp.ts';
 import { LEGACY_TOOLS, TOOLS } from './run-command.ts';
 import { readSoul } from './soul.ts';
 import { promptTokens } from './usage.ts';
@@ -180,6 +181,9 @@ export function createConversation(
 	if (folderId && !getFolder(input.profile.id, folderId)) throw new Error('Unknown folder');
 	const folderContext = folderContextFor(input.profile, folderId);
 	const soul = readSoul(input.profile.slug);
+	// run_command, and the tools of the profile's MCP servers as they are now: saved with the chat.
+	const mcp = mcpChatTools(input.profile.slug);
+	const tools = mcp.length ? [...TOOLS, ...mcp] : TOOLS;
 	const now = new Date();
 	const created: Conversation = {
 		id: randomUUID(),
@@ -187,12 +191,12 @@ export function createConversation(
 		title: input.title ?? '',
 		...modelColumns(input),
 		effort: input.effort ?? 'medium',
-		systemPrompt: buildSystemPrompt(input.profile, folderContext, soul),
+		systemPrompt: buildSystemPrompt(input.profile, folderContext, soul, tools),
 		folderId,
 		folderContext,
 		soul: soul.text,
 		promptChangedAtSeq: null,
-		tools: TOOLS,
+		tools,
 		providerSession: null,
 		cacheTtl: input.cacheTtl ?? '1h',
 		commandMode: input.commandMode ?? null,
@@ -228,6 +232,28 @@ export function getConversation(id: string): Conversation | undefined {
 /** The tool definitions the conversation's requests send, as they were when it was created. */
 export function toolsFor(conv: Pick<Conversation, 'tools'>): Anthropic.Tool[] {
 	return conv.tools ?? LEGACY_TOOLS;
+}
+
+/**
+ * A call to a server's tool as the chat shows it: what it does, from the tool's name ("Search
+ * issues (github)") with a plug, and the call itself for technical details. The model writes no
+ * summary for these: their arguments are the server's.
+ */
+function mcpCallDisplay(block: ToolCallBlock): Extract<DisplayBlock, { type: 'tool' }> {
+	const server = mcpToolServer(block.name) ?? '';
+	const tool = block.name.slice(`mcp__${server}__`.length);
+	const words = tool
+		.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+		.replace(/[_-]+/g, ' ')
+		.trim()
+		.toLowerCase();
+	return {
+		type: 'tool',
+		id: block.id,
+		command: `${server} ${tool} ${JSON.stringify(block.input ?? {})}`,
+		summary: `${words.charAt(0).toUpperCase()}${words.slice(1)} (${server})`,
+		icon: 'plug'
+	};
 }
 
 /** True for a subagent's own conversation, which only the agent that started it writes to. */
@@ -341,7 +367,7 @@ export function rebuildSystemPrompt(
 	lastSeq: number | null
 ): Conversation {
 	const changed = {
-		systemPrompt: buildSystemPrompt(profile, folderContext, soul),
+		systemPrompt: buildSystemPrompt(profile, folderContext, soul, toolsFor(conv)),
 		folderContext,
 		soul: soul.text,
 		promptChangedAtSeq: lastSeq ?? conv.promptChangedAtSeq
@@ -870,6 +896,8 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			if (block.text.trim()) {
 				blocks.push({ type: block.type === 'text' ? 'text' : 'thinking', text: block.text });
 			}
+		} else if (block.type === 'tool_call' && mcpToolServer(block.name)) {
+			blocks.push(mcpCallDisplay(block));
 		} else if (block.type === 'tool_call') {
 			const input = (block.input ?? {}) as Record<string, unknown>;
 			const text = (key: string) =>

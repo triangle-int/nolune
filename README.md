@@ -51,8 +51,8 @@ background. Members can also manage the profile and its membership.
   inspect photos and documents, and return files in the chat. Give it a form to fill in or ask it
   to find the photos from your last trip.
 - **Your other apps, connected.** Admins connect MCP servers, like a calendar, GitHub, Notion or
-  the smart home, and the agent uses their tools in every chat, on every model. Keep one to the
-  profiles it belongs to, like someone's own email in their profile.
+  the smart home, and new chats get their tools next to nolune's own, on every model. Keep one to
+  the profiles it belongs to, like someone's own email in their profile.
 - **Help between conversations.** Ask for a recurring task in ordinary language. Automations run
   in the background and bring results to the notification bell, where you can continue the work
   as a conversation.
@@ -73,10 +73,10 @@ background. Members can also manage the profile and its membership.
 
 ## One tool. Less overhead. More cache reuse.
 
-nolune gives the agent a single tool: **`run_command`**. It uses the command line for files,
-memory, skills, automations, background work, and the tools of connected MCP servers
-(`nolune mcp`). That keeps the tool definitions small while
-letting the assistant use the programs already on your computer.
+At its core, nolune gives the agent a single tool: **`run_command`**. It uses the command line for
+files, memory, skills, automations, and background work. That keeps the tool definitions small while
+letting the assistant use the programs already on your computer. MCP servers you connect add their
+tools next to it.
 
 The conversation is designed to keep its prompt cache stable: tool definitions and the system
 prompt are saved with the chat, new messages are appended, and recalled memories arrive with

@@ -1288,7 +1288,7 @@ export const es: Messages = {
 	 */
 	services: {
 		title: 'Servicios conectados',
-		hint: 'Los servidores MCP le dan al agente las herramientas de otras apps y servicios, como un calendario, GitHub, Notion o la casa inteligente. Las usa mediante comandos, que el modo automático revisa como cualquier otro. Todos los perfiles los tienen, salvo que elijas algunos.',
+		hint: 'Los servidores MCP le dan al agente las herramientas de otras apps y servicios, como un calendario, GitHub, Notion o la casa inteligente. Los chats nuevos reciben sus herramientas junto a las suyas, y el modo automático revisa cada llamada como un comando. Todos los perfiles los tienen, salvo que elijas algunos.',
 		add: 'Conectar un servidor',
 		addTitle: 'Conectar un servidor MCP',
 		addHint:

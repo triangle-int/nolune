@@ -27,7 +27,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| MCP servers        | Other apps' and services' tools, from the MCP servers an admin connects: a command this computer runs or an address, kept in config.json the way MCP clients write them. The agent uses them with `nolune mcp` and a built-in skill (`mcp`), so `run_command` stays its only tool. A server can be kept to some profiles. See [MCP servers](#mcp-servers).                                                                                                                                                                                                                                                                                                                                                                             |
+| MCP servers        | Other apps' and services' tools, from the MCP servers an admin connects: a command this computer runs or an address, kept in config.json the way MCP clients write them. A new chat gets its profile's servers' tools next to `run_command` (`mcp__<server>__<tool>`), saved with it like `run_command`; auto mode checks every call. A server can be kept to some profiles. See [MCP servers](#mcp-servers).                                                                                                                                                                                                                                                                                                                          |
 | Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ## Files on disk
@@ -40,6 +40,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
                               command mode and the preset that checks commands (mode 600)
   chatgpt.json                the ChatGPT sign-in for the ChatGPT plan: this computer's host id,
                               each account's registration and the signed-in one's tokens (mode 600)
+  mcp-tools.json              what each MCP server last said its tools are, for new chats' tools
   latest-release.json         nolune's newest release, as the gateway last heard from GitHub, and
                               when (Distribution); the macOS app's menu reads it too
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
@@ -93,7 +94,9 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   cost it a cache miss and, on Opus 5.5 and Fable 5.1, invalidate the thinking in its history (a
   400 on accounts created since 2026-08-31). So a new version of nolune that changes a tool only
   reaches new chats. Chats from before tools were saved send the first `run_command`
-  (`RUN_COMMAND_TOOL_V1`, which must never change); new ones get the one with `run_in_background`.
+  (`RUN_COMMAND_TOOL_V1`, which must never change); new ones get the one with `run_in_background`,
+  and the tools of their profile's MCP servers as they were when the chat started (see
+  [MCP servers](#mcp-servers)).
 - Each assistant response is stored as the exact `content` JSON the API returned, thinking blocks and
   their signatures included, and is sent back unchanged to the model that wrote it. nolune's own rows
   are stored in its own format and turned into the provider's the same way on every call (see
@@ -398,10 +401,13 @@ automations and subagents on an API key preset.
   is dropped.
 - **Who runs the loop.** Claude Code. Each turn is a `query()` that resumes the chat's Claude Code
   session, whose id nolune picks: at first the chat's own.
-- **What the model gets.** nolune's system prompt and the chat's saved `run_command` definition, as an
-  in-process MCP tool (`mcp__nolune__run_command` to the model). Claude Code's built-in tools, settings
-  files, CLAUDE.md, skills and MCP servers are left out (`tools: []`, `settingSources: []`,
-  `strictMcpConfig`, `dontAsk` permissions with only that tool allowed). Claude Code adds a short
+- **What the model gets.** nolune's system prompt and the chat's saved tools (`run_command`, and
+  its MCP servers' tools), as an in-process MCP server's (`mcp__nolune__run_command`,
+  `mcp__nolune__mcp__github__search_issues` to the model; a tool's properties that are only a type
+  and a description become the same zod types as always, and the rest go through
+  `z.fromJSONSchema`, so a server's lists and choices arrive as they are). Claude Code's built-in
+  tools, settings files, CLAUDE.md, skills and MCP servers of its own are left out (`tools: []`,
+  `settingSources: []`, `strictMcpConfig`, `dontAsk` permissions with only nolune's tools allowed). Claude Code adds a short
   line of its own to the system prompt and an environment note (working folder, date). The
   working folder is the profile's, like commands'.
 - **The same rows.** nolune turns the stream into its own rows and live events: each model call's
@@ -577,7 +583,7 @@ kick(conversation):                     one loop per conversation at a time
     if the last committed row isn't a user row: stop
     stream a model call → append an assistant row
     if it contains tool_use blocks:
-      run them one after another (run_command, or a memory operation) → append one user row with
+      run them one after another (run_command, or a tool of an MCP server) → append one user row with
       every tool_result
       (if stop_reason isn't tool_use, the calls are answered with "not run" instead)
 ```
@@ -1359,22 +1365,53 @@ automations, it's a CLI command and a built-in skill (`subagents`), not a tool.
 ## MCP servers
 
 Other apps' and services' tools (a calendar, GitHub, Notion, the smart home), from the MCP servers
-an admin connects. Like subagents and automations, it's a CLI command and a built-in skill (`mcp`),
-not more tools: the agent runs `nolune mcp tools` and `nolune mcp call` through `run_command`.
+an admin connects. A new chat gets its profile's servers' tools as tools of its own, next to
+`run_command`, and the runner calls them on the servers.
 
-- **Why not tools of their own.** As tool definitions, a chat's tools would have to change with the
-  servers, and they're saved with each chat because thinking is bound to them (see
-  [Prompt caching](#prompt-caching)): a new server would reach only new chats anyway, and changing
-  them would cost a cache miss and, on Opus 5.5 and Fable 5.1, the thinking in the history. Every
-  provider's encoder and the Claude plan's in-process server would need them, and a big server's
-  definitions (dozens of tools) would go in every request. Through a command, every provider and
-  both plans get them alike, the request stays as it was, and auto mode checks each call as it
-  checks commands.
+- **Saved with the chat, like `run_command`.** A chat's tools are fixed when it's created (see
+  [Prompt caching](#prompt-caching)): a server connected or changed later reaches new chats, and a
+  chat's cache and thinking stay as they are. The cost is in every request: a server's tool
+  definitions (a big one has dozens) go with each call of each chat that has them. A chat gets at
+  most 120 tools of servers (`MAX_CHAT_MCP_TOOLS`; OpenAI takes 128 in a request), each server's
+  whole or not at all.
+- **Names.** `mcp__<server>__<tool>`, at most 51 characters, so that Claude Code's
+  `mcp__nolune__` in front stays within the 64 providers take. A tool whose name has other
+  characters, or would be longer, is cut and ends in a short hash of its own name
+  (`mcp__home__lights_turn_on_3f2a1c`); `findMcpTool` finds it again among the server's tools.
+  Servers' names have no `__` in them, so the first one ends the server's. Each definition is the
+  tool's description (at most 2,048 characters) and its input schema without `$schema`.
+- **Known before a chat starts.** A chat is created at once, without waiting for servers, from what
+  each server last said its tools are (`~/.nolune/mcp-tools.json`, with the instructions it gave
+  and the settings it was asked with). That's written whenever nolune lists a server's tools:
+  adding or checking it, `nolune mcp tools`, each connection the gateway opens, and at the
+  gateway's start for servers it doesn't know yet or knew with other settings. A new chat in a
+  profile with a server it doesn't know yet starts without that server's tools, and the gateway
+  asks the server for the next one.
+- **In the prompt**, built from the chat's saved tools (also when it's built again for a new
+  folder or soul, so it never names tools the chat doesn't have): a `# Connected services`
+  section after the skills, saying the `mcp__` tools act outside the computer, often in someone's
+  account, and listing their servers with the description an admin gave (or the first sentence
+  of the server's instructions) and the server's own instructions (at most 1,500 characters).
+  Servers of the profile whose tools the chat lacks are named, with how to reach them with
+  `nolune mcp`.
+- **A call** (`runMcpCall` in the runner): the arguments must be an object; the server must still
+  be there and the profile's; auto mode checks it; then `callMcpTool` on the gateway's open
+  connection. Its text is capped like a command's output; pictures go through `nolune view`'s
+  folder and limits and are attached the same way, other files are saved and named. A result the
+  tool marks as an error is an error result; a server that's down or turned the call down says so.
+  Stop cancels it at the server. The Claude plan's calls come through the same `runToolCall`.
+- **In the chat** a call shows as what it does, from the tool's name ("Search issues (github)"),
+  with a plug, and the call itself in technical details: the model writes no summary for these.
+- **Auto mode** checks every call to a server's tool, whatever the server says of it: its read-only
+  and destructive hints are the server's own claim, and a read-only tool's arguments can still
+  carry private things out (a search sent to a service on the web). The check reads the server,
+  the tool, those hints and the arguments, and earlier calls appear in its transcript like
+  commands.
 - **Settings** are config.json's `mcpServers`, by name, the way MCP clients write them (`command`,
   `args`, `env`, `cwd`; or `type` `http` or `sse`, `url`, `headers`), so a server's README snippet
   can be pasted (`nolune mcp add-json`, `"mcpServers"` and all), plus nolune's own: a `description`
   for the agent and the `profiles` (slugs) that have it, every profile when left out. The name is
-  what the agent calls it by: lowercase letters and digits, with `-` or `_` between words. The
+  what tools are called by: lowercase letters and digits, with `-` or `_` between words. The
   Connected services page and `nolune mcp list` show the names of its keys, never their values; a
   form that leaves them empty keeps them.
 - **Connecting** (`mcp.ts`, with the MCP TypeScript SDK's client). A server this computer runs is
@@ -1384,32 +1421,21 @@ not more tools: the agent runs `nolune mcp tools` and `nolune mcp call` through 
   LaunchAgent too. Its stderr is kept (the last 2,000 characters) to say why it stopped. One at an
   address speaks Streamable HTTP or the older SSE, with its headers. Adding a server, on the page or
   with the CLI, connects to it to check it and lists its tools; one that can't be reached is saved
-  with why, since what it needs may come later. Without a description, it gets the first sentence
-  of the server's own instructions.
-- **In the gateway**, which runs the agent's `nolune` commands, a server's connection stays open
-  between commands (a command's server keeps running) and is shared by the ones that run at once.
-  It closes after 10 minutes unused, and is replaced when the settings it depends on change (its
-  description and profiles don't count). The servers the gateway ran stop when it does. A `nolune`
-  that runs a command itself connects for it and closes after it.
-- **In a chat's prompt**, built once like the rest: the `mcp` skill in the catalog and, after it,
-  the profile's servers by name and description. A profile without servers doesn't get the skill
-  in the catalog, and one that turns the skill off gets neither. Servers added later reach new
-  chats; an older chat can still run `nolune mcp list`.
-- **`nolune mcp tools [<server> [<tool>]]`** lists tools as `name(arg, optional?)` with the first
-  line of their description, and the server's instructions when one server is asked for; with a
-  tool, its whole description and its input schema. A server that's down doesn't hide the others'
-  tools.
-- **`nolune mcp call <server> <tool> '<json>'`** (`-` reads stdin) prints text as it is, a result
-  with only structured content as JSON, and saves pictures, audio and other files in a temporary
-  folder, a line naming each; pictures are also attached for the agent through `NOLUNE_VIEW_DIR`,
-  as `nolune view` does. A result the tool marks as an error exits 1. The call has no time limit of
-  its own: the command's applies, and Stop (`nolune` hanging up) cancels it at the server.
-- **Auto mode.** `nolune mcp`, `list` and `tools` only look, so they run unchecked; `call`, `add` and
-  `rm` go to the check, whose prompt says to judge a call by what the tool does with those
-  arguments, and counts MCP servers among nolune's settings.
-- **Profiles.** The agent's commands carry `NOLUNE_PROFILE`, so `list`, `tools` and `call` reach
-  only the profile's servers. As everywhere on the computer, that organizes rather than isolates:
-  the agent runs as the same account.
+  with why, since what it needs may come later.
+- **In the gateway** a server's connection stays open between calls (a command's server keeps
+  running) and is shared by the ones that run at once. It closes after 10 minutes unused, and is
+  replaced when the settings it depends on change (its description and profiles don't count).
+  The servers the gateway ran stop when it does. A `nolune` that runs a command itself connects
+  for it and closes after it.
+- **`nolune mcp`** lists and calls the same tools from a command, for scripts and automations'
+  scripts, and for servers connected after a chat started: `tools [<server> [<tool>]]` lists them
+  as `name(arg, optional?)` with the first line of their description and the server's
+  instructions, or one tool's whole description and schema; `call <server> <tool> '<json>'` (`-`
+  reads stdin) prints the result as a chat's call gets it. `nolune mcp`, `list` and `tools` only
+  look and run unchecked; `call`, `add` and `rm` go to the check like any command.
+- **Profiles.** A chat gets only its profile's servers' tools, and `nolune mcp` in the agent's
+  commands (`NOLUNE_PROFILE`) reaches only those. As everywhere on the computer, that organizes
+  rather than isolates: the agent runs as the same account.
 
 ## Pictures and files
 
@@ -2110,8 +2136,10 @@ signing.
 - Auto mode: house rules an admin writes for the check (Claude Code's environment, block and allow
   slots), a probe that warns the agent about prompt injection in what its commands print, and a
   look at everything a subagent did when it hands back its result.
-- MCP servers: signing in through a browser (OAuth), which many hosted servers need; their
-  resources and prompts, not only tools; and a server asking things back (sampling, elicitation).
+- MCP servers: signing in through a browser (OAuth), which many hosted servers need; choosing
+  which of a server's tools chats get, and for big servers, sending a chat only the ones it looks
+  up (a tool search) rather than every definition in every request; their resources and prompts,
+  not only tools; and a server asking things back (sampling, elicitation).
 - Refusal fallbacks (`fallbacks: "default"`) for models that support them. Refusals are shown in the UI today.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.

@@ -4,6 +4,7 @@ import { parseAttachments } from './attachments.ts';
 import { readConfig, updateConfig } from './config.ts';
 import { readRow, rowCalls, type Conversation, type MessageRow } from './conversations.ts';
 import { resultText } from './format.ts';
+import { mcpToolServer } from './mcp.ts';
 import { quickReply, shortApiError, type Provider } from './models.ts';
 import { paths } from './paths.ts';
 import { getPreset, type Preset } from './presets.ts';
@@ -185,7 +186,7 @@ What the assistant decides to do on its own, beyond the request, isn't asked for
 2. Check it against the block list below. If nothing on it applies, allow the command: most commands are ordinary work, like looking at files, reading, searching, looking things up on the web, making and editing the files a task needs, and running nolune's own commands.
 3. If something on the block list applies, allow the command only when the people in the chat clearly asked for that specific thing, or an exception below covers it. Otherwise block it.
 
-\`nolune mcp call <server> <tool> '<arguments>'\` uses a tool of an app or service the family connected to nolune (an MCP server), like their calendar, GitHub or smart home. Judge it by what that tool does with those arguments, as if the assistant did it by hand: looking things up is ordinary work, and creating, changing, deleting or sending things in someone's account is on the block list like any other way of doing it.
+Some actions aren't commands but calls to a tool of an app or service the family connected to nolune (an MCP server), like their calendar, GitHub or smart home; \`nolune mcp call <server> <tool> '<arguments>'\` is the same as a command. Judge one by what that tool does with those arguments, as if the assistant did it by hand: looking things up is ordinary work, and creating, changing, deleting or sending things in someone's account is on the block list like any other way of doing it. What the server says a tool does is its own claim, not a fact; and arguments can carry private things out, like a search sent to a service on the web.
 
 Don't block a command because it's unusual, slow, clumsy, likely to fail, or not how you'd do it. Failing is harmless; you're only here to stop harm.
 
@@ -237,7 +238,11 @@ function clip(text: string, max: number): string {
 	return text.length > max ? `${text.slice(0, max)} […${text.length - max} more characters]` : text;
 }
 
-function describeCall(call: { input: unknown }, blocked: boolean): string | null {
+function describeCall(call: { name: string; input: unknown }, blocked: boolean): string | null {
+	if (mcpToolServer(call.name)) {
+		const what = blocked ? 'Tool call you blocked' : 'Tool used';
+		return `${what}: ${call.name} ${clip(JSON.stringify(call.input ?? {}), PAST_COMMAND_CHARS)}`;
+	}
 	const { command, cwd, run_in_background } = (call.input ?? {}) as Record<string, unknown>;
 	if (typeof command !== 'string' || !command.trim()) return null;
 	const where = [
@@ -322,20 +327,47 @@ function conversationKind(rows: MessageRow[]): string {
 	return 'a chat; the people in it read what the assistant says and can answer';
 }
 
-export interface CheckRequest {
+/** A call to a tool of an MCP server, as the check sees it. */
+export interface ToolAction {
+	server: string;
+	tool: string;
+	/** What the server says the tool does: that it only reads, may destroy, or reaches out. */
+	hints: { readOnly?: boolean; destructive?: boolean; openWorld?: boolean };
+	arguments: unknown;
+}
+
+/** A command (its input, and where it runs, resolved), or a call to a server's tool. */
+export type CheckAction = { input: RunCommandInput; cwd: string } | { tool: ToolAction };
+
+export type CheckRequest = {
 	conv: Pick<Conversation, 'id' | 'provider' | 'model' | 'folderContext'>;
 	/** The conversation's committed rows, which end with the reply that made the call. */
 	rows: MessageRow[];
 	callId: string;
-	input: RunCommandInput;
-	/** Where the command runs, resolved. */
-	cwd: string;
 	profile: { name: string; dir: string };
+} & CheckAction;
+
+/** A tool call as the check reads it: the server, the tool, what the server says of it, the arguments. */
+function toolActionText({ server, tool, hints, arguments: args }: ToolAction): string {
+	const said = [
+		hints.readOnly === true && 'it only reads',
+		hints.destructive === true && 'it may delete or overwrite things',
+		hints.readOnly !== true && hints.destructive === false && "it doesn't delete or overwrite",
+		hints.openWorld === true && 'it reaches services outside',
+		hints.openWorld === false && 'it stays within its own service'
+	].filter(Boolean);
+	return [
+		`A tool of the MCP server "${server}", which the family connected (not a command)`,
+		`Tool: ${tool}`,
+		...(said.length ? [`What the server says of it: ${said.join('; ')}`] : []),
+		'Arguments:',
+		JSON.stringify(args ?? {}, null, 2)
+	].join('\n');
 }
 
 /** What the check's model reads, with `code` in its tags so nothing inside can close one. */
 export function checkInput(request: CheckRequest, code: string): string {
-	const { conv, rows, callId, input, cwd, profile } = request;
+	const { conv, rows, callId, profile } = request;
 	const part = (name: string, body: string) => `<${name}-${code}>\n${body}\n</${name}-${code}>`;
 	const environment = [
 		`Computer: ${platformName()}, the account "${account()}", home folder ${homedir()}`,
@@ -344,12 +376,15 @@ export function checkInput(request: CheckRequest, code: string): string {
 		`This conversation: ${conversationKind(rows)}`,
 		`Today: ${new Date().toISOString().slice(0, 10)}`
 	].join('\n');
-	const action = [
-		`Working folder: ${cwd}`,
-		`Runs in the background: ${input.background ? 'yes' : 'no'}`,
-		'Command:',
-		input.command
-	].join('\n');
+	const action =
+		'tool' in request
+			? toolActionText(request.tool)
+			: [
+					`Working folder: ${request.cwd}`,
+					`Runs in the background: ${request.input.background ? 'yes' : 'no'}`,
+					'Command:',
+					request.input.command
+				].join('\n');
 	return [
 		`The code in this input's tags: ${code}`,
 		part('environment', environment),
@@ -393,17 +428,25 @@ function checker(conv: CheckRequest['conv']): { provider: Provider; model: strin
 }
 
 /**
- * Whether a command may run in auto mode. Commands that only look run as they are; the rest go to
- * the model, quickly and then, if it would block, carefully. Never throws: a check that fails
- * blocks the command.
+ * Whether a command, or a call to a server's tool, may run in auto mode. Commands that only look
+ * run as they are; the rest go to the model, quickly and then, if it would block, carefully.
+ * Never throws: a check that fails blocks the command.
  */
 export async function checkCommand(request: CheckRequest): Promise<SafetyVerdict> {
-	const { command } = request.input;
-	if (isReadOnlyCommand(command)) return { allowed: true, by: 'read-only' };
-	if (command.length > MAX_COMMAND_CHARS) {
+	// A tool of a server is always checked: what it says of itself is the server's claim.
+	const command = 'tool' in request ? null : request.input.command;
+	if (command !== null && isReadOnlyCommand(command)) return { allowed: true, by: 'read-only' };
+	const length =
+		'tool' in request
+			? JSON.stringify(request.tool.arguments ?? {}).length
+			: request.input.command.length;
+	if (length > MAX_COMMAND_CHARS) {
 		return {
 			allowed: false,
-			reason: `The command is too long to check (over ${MAX_COMMAND_CHARS.toLocaleString('en')} characters). Write big files in smaller pieces.`
+			reason:
+				command === null
+					? `The tool's arguments are too long to check (over ${MAX_COMMAND_CHARS.toLocaleString('en')} characters). Send less at once.`
+					: `The command is too long to check (over ${MAX_COMMAND_CHARS.toLocaleString('en')} characters). Write big files in smaller pieces.`
 		};
 	}
 	const { provider, model } = checker(request.conv);

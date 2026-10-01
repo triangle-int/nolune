@@ -1,5 +1,9 @@
 import { execFile } from 'node:child_process';
-import { homedir } from 'node:os';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type Anthropic from '@anthropic-ai/sdk';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport, SseError } from '@modelcontextprotocol/sdk/client/sse.js';
@@ -16,26 +20,29 @@ import {
 	type Tool
 } from '@modelcontextprotocol/sdk/types.js';
 import { readConfig, updateConfig } from './config.ts';
+import { viewImage } from './images.ts';
 import { paths } from './paths.ts';
 import { commandEnv, commandShell, resolveCwd } from './run-command.ts';
 import { NOLUNE_VERSION } from './updates.ts';
 
 /*
  * MCP servers: the tools of other apps and services (GitHub, Notion, Home Assistant, a browser...)
- * that the family connects to nolune. The agent keeps its one tool: it lists and calls theirs with
- * `nolune mcp` (packages/cli/src/mcp.ts), a command like any other, so every provider and both
- * plans get them, auto mode checks each call, and a chat's tools and prompt cache stay as they
- * are. A built-in skill (`mcp`) says how, and a chat's prompt names the servers its profile has.
+ * that the family connects to nolune. A new chat gets its profile's servers' tools next to
+ * run_command, as tools of its own (`mcp__<server>__<tool>`, mcpChatTools), saved with it like
+ * run_command, and the runner calls them here (callMcpTool). `nolune mcp`
+ * (packages/cli/src/mcp.ts) lists and calls them too, for scripts and for servers connected after
+ * a chat started.
  *
- * Admins connect them on the Connected services page or with `nolune mcp add`. config.json keeps them the way
- * MCP clients write them (`mcpServers`: a command this computer runs, or an address), so a
- * server's own instructions can be pasted, plus what nolune adds: a description for the agent and
- * the profiles that have it (all, when it names none).
+ * Admins connect them on the Connected services page or with `nolune mcp add`. config.json keeps
+ * them the way MCP clients write them (`mcpServers`: a command this computer runs, or an address),
+ * so a server's own instructions can be pasted, plus what nolune adds: a description for the
+ * agent and the profiles that have it (all, when it names none).
  *
- * The gateway, which runs the agent's `nolune` commands, keeps each server's connection open
- * between calls (a command's server keeps running), and closes it after IDLE_MS unused or when
- * the server's settings change. A `nolune` that runs a command itself connects for it and closes
- * after it.
+ * The gateway keeps each server's connection open between calls (a command's server keeps
+ * running), and closes it after IDLE_MS unused or when the server's settings change. A `nolune`
+ * that runs a command itself connects for it and closes after it. What each server last said its
+ * tools are is kept in mcp-tools.json, so a chat gets them when it's created without waiting for
+ * the servers.
  */
 
 /** How nolune reaches a server: a command it runs, or an address in either of MCP's HTTP ways. */
@@ -376,6 +383,11 @@ export function removeMcpServer(name: string): void {
 		if (Object.keys(all).length) config.mcpServers = all;
 		else delete config.mcpServers;
 	});
+	const known = remembered();
+	if (Object.hasOwn(known, name)) {
+		delete known[name];
+		writeRemembered(known);
+	}
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -586,6 +598,12 @@ async function acquire(name: string, server: McpServerConfig): Promise<Connectio
 			if (pid) pool.pids.delete(pid);
 			forget(name, connection);
 		};
+		// For new chats' tools: what it has now.
+		if (pool.hold)
+			describe(client).then(
+				(found) => remember(name, server, found),
+				() => {}
+			);
 		return connection;
 	});
 	pool.open.set(name, opening);
@@ -625,7 +643,7 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Pro
 async function withMcpServer<T>(
 	name: string,
 	options: { profile?: string; signal?: AbortSignal },
-	use: (client: Client) => Promise<T>
+	use: (client: Client, server: McpServerConfig) => Promise<T>
 ): Promise<T> {
 	const server = findMcpServer(name, options.profile);
 	const acquiring = acquire(name, server);
@@ -647,7 +665,7 @@ async function withMcpServer<T>(
 	if (connection.idle) clearTimeout(connection.idle);
 	connection.idle = null;
 	try {
-		return await use(connection.client);
+		return await use(connection.client, server);
 	} finally {
 		release(name, connection);
 	}
@@ -672,6 +690,8 @@ export function holdMcpConnections(): void {
 		}
 	});
 	process.once('sveltekit:shutdown', () => void closeMcpConnections());
+	// Servers whose tools new chats don't know yet, or that changed since: once it has started.
+	setTimeout(() => void refreshMcpTools().catch(() => {}), 5000).unref();
 }
 
 /** Closes every connection, stopping the servers this computer runs. */
@@ -718,7 +738,11 @@ export function listMcpTools(
 	name: string,
 	options: { profile?: string; signal?: AbortSignal } = {}
 ): Promise<McpServerTools> {
-	return withMcpServer(name, options, (client) => describe(client, options.signal));
+	return withMcpServer(name, options, async (client, server) => {
+		const found = await describe(client, options.signal);
+		remember(name, server, found);
+		return found;
+	});
 }
 
 /**
@@ -755,9 +779,13 @@ export async function checkMcpServer(
 	server: McpServerConfig,
 	signal?: AbortSignal
 ): Promise<McpServerTools> {
-	const { client } = await connect(name, parseMcpServer(server), signal);
+	const parsed = parseMcpServer(server);
+	const { client } = await connect(name, parsed, signal);
 	try {
-		return await describe(client, signal);
+		const found = await describe(client, signal);
+		// Most likely saved next, and its tools go to new chats.
+		remember(name, parsed, found);
+		return found;
 	} catch (err) {
 		throw new McpServerError(
 			`${name} connected, but couldn't list its tools: ${(err as Error).message}`
@@ -773,11 +801,248 @@ export function describeFromServer(found: McpServerTools): string | undefined {
 	return first && first.length <= MAX_DESCRIPTION ? first : undefined;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Tools for chats
+
+/** What a server said its tools are when nolune last asked (mcp-tools.json), by server name. */
+interface Remembered {
+	/** The settings it was asked with (connectionKey). */
+	key: string;
+	instructions: string | null;
+	tools: Pick<Tool, 'name' | 'title' | 'description' | 'inputSchema' | 'annotations'>[];
+}
+
+function remembered(): Record<string, Remembered> {
+	try {
+		return JSON.parse(readFileSync(paths.mcpTools, 'utf8')) as Record<string, Remembered>;
+	} catch {
+		return {};
+	}
+}
+
+function writeRemembered(all: Record<string, Remembered>): void {
+	// Whole, then renamed into place: the gateway and a `nolune` may both write it.
+	const temporary = `${paths.mcpTools}.${process.pid}.tmp`;
+	writeFileSync(temporary, `${JSON.stringify(all)}\n`);
+	renameSync(temporary, paths.mcpTools);
+}
+
+function remember(name: string, server: McpServerConfig, found: McpServerTools): void {
+	const all = remembered();
+	all[name] = {
+		key: connectionKey(server),
+		instructions: found.instructions,
+		tools: found.tools.map(({ name, title, description, inputSchema, annotations }) => ({
+			name,
+			title,
+			description,
+			inputSchema,
+			annotations
+		}))
+	};
+	writeRemembered(all);
+}
+
 /**
- * For a chat's prompt: the servers its profile has, each with what it's for. Empty when there
- * are none.
+ * Asks servers for their tools again: those named, or every server whose tools aren't known yet
+ * or were listed with other settings. One that can't be reached is left as it was.
  */
-export function mcpServersSection(profile: string): string {
+export async function refreshMcpTools(names?: string[]): Promise<void> {
+	const known = remembered();
+	const stale = listMcpServers().filter((s) => {
+		if (s.problem || (names && !names.includes(s.name))) return false;
+		return names || known[s.name]?.key !== connectionKey(findMcpServer(s.name));
+	});
+	await Promise.allSettled(stale.map((s) => listMcpTools(s.name)));
+}
+
+const TOOL_PREFIX = 'mcp__';
+/**
+ * The longest name a chat's tool gets: providers take 64 characters, and on the Claude plan
+ * Claude Code puts nolune's tools under `mcp__nolune__`.
+ */
+const MAX_TOOL_NAME = 51;
+const MAX_TOOL_DESCRIPTION = 2048;
+/** How many tools of servers a chat gets at most: OpenAI takes 128 in a request. */
+export const MAX_CHAT_MCP_TOOLS = 120;
+/** How much of what a server says about using it goes in a chat's prompt. */
+const MAX_PROMPT_INSTRUCTIONS = 1500;
+
+/**
+ * A server's tool as a chat's tool: `mcp__<server>__<tool>`. A tool whose name has characters
+ * providers don't take, or that would be too long, ends in a short hash of its own name instead,
+ * so no two of a server's tools share one.
+ */
+export function mcpToolName(server: string, tool: string): string {
+	const plain = `${TOOL_PREFIX}${server}__${tool}`;
+	if (/^[A-Za-z0-9_-]+$/.test(tool) && plain.length <= MAX_TOOL_NAME) return plain;
+	const hash = createHash('sha256').update(tool).digest('hex').slice(0, 6);
+	const room = Math.max(1, MAX_TOOL_NAME - TOOL_PREFIX.length - server.length - 2 - 7);
+	const cut = tool
+		.replace(/[^A-Za-z0-9_-]/g, '_')
+		.slice(0, room)
+		.replace(/[_-]+$/, '');
+	return `${TOOL_PREFIX}${server}__${cut}_${hash}`;
+}
+
+/** The server a chat's tool belongs to, or null for nolune's own (run_command). */
+export function mcpToolServer(name: string): string | null {
+	if (!name.startsWith(TOOL_PREFIX)) return null;
+	const rest = name.slice(TOOL_PREFIX.length);
+	// Servers' names never have `__` in them.
+	const end = rest.indexOf('__');
+	return end > 0 ? rest.slice(0, end) : null;
+}
+
+function clip(text: string, max: number): string {
+	return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+}
+
+function toolDefinition(server: string, tool: Remembered['tools'][number]): Anthropic.Tool {
+	const { $schema, ...schema } = (tool.inputSchema ?? {}) as Record<string, unknown>;
+	void $schema;
+	const description =
+		tool.description?.trim() || tool.title || tool.annotations?.title || tool.name;
+	return {
+		name: mcpToolName(server, tool.name),
+		description: clip(description, MAX_TOOL_DESCRIPTION),
+		input_schema: { ...schema, type: 'object' } as Anthropic.Tool['input_schema']
+	};
+}
+
+/**
+ * The tools a new chat in `profile` (a slug) gets from its servers, as nolune saves tools: each
+ * server's whole, as it last said they are, while they fit in MAX_CHAT_MCP_TOOLS. In the gateway,
+ * servers whose tools aren't known yet are asked, for the chats after.
+ */
+export function mcpChatTools(profile: string): Anthropic.Tool[] {
+	const known = remembered();
+	const tools: Anthropic.Tool[] = [];
+	const unknown: string[] = [];
+	for (const server of listMcpServers(profile)) {
+		if (server.problem) continue;
+		const found = known[server.name];
+		if (!found) unknown.push(server.name);
+		else if (tools.length + found.tools.length <= MAX_CHAT_MCP_TOOLS) {
+			tools.push(...found.tools.map((tool) => toolDefinition(server.name, tool)));
+		}
+	}
+	if (unknown.length && pool.hold) void refreshMcpTools(unknown).catch(() => {});
+	return tools;
+}
+
+/**
+ * For a chat's prompt: the servers whose tools are among the chat's (`tools`, as it saved them),
+ * with what each is for and says about using its tools, and the profile's others, which it reaches
+ * with `nolune mcp`. Empty when the profile has none and the chat has no such tools.
+ */
+export function mcpToolsSection(tools: readonly Anthropic.Tool[], profile: string): string {
+	const inChat = [...new Set(tools.flatMap((t) => mcpToolServer(t.name) ?? []))];
 	const servers = listMcpServers(profile).filter((s) => !s.problem);
-	return servers.map((s) => `- ${s.name}${s.description ? `: ${s.description}` : ''}`).join('\n');
+	const others = servers.filter((s) => !inChat.includes(s.name)).map((s) => s.name);
+	if (!inChat.length && !others.length) return '';
+	const known = remembered();
+	const listed = inChat.map((name) => {
+		const description = servers.find((s) => s.name === name)?.description;
+		const instructions = known[name]?.instructions;
+		return `- ${name}${description ? `: ${description}` : ''}${instructions ? `\n  <instructions>\n${clip(instructions, MAX_PROMPT_INSTRUCTIONS)}\n  </instructions>` : ''}`;
+	});
+	const elsewhere = others.length
+		? `\n\nThe tools of ${others.join(', ')} aren't among yours in this conversation (it was connected later, or there are too many): \`nolune mcp tools <server>\` lists them, \`nolune mcp tools <server> <tool>\` shows what one takes, and \`nolune mcp call <server> <tool> '<json>'\` calls it.`
+		: '';
+	return `${
+		inChat.length
+			? `Some of your tools belong to apps and services the family connected to nolune as MCP servers: their names start with mcp__<server>__. They act outside this computer, often in someone's account, so before one sends, posts, books, buys, deletes or changes something, be sure that's what was asked, as you would doing it by hand. Pictures they return are shown to you. The servers, with what each is for and says about using its tools:\n${listed.join('\n')}`
+			: 'The family connected apps and services to nolune as MCP servers.'
+	}${elsewhere}`;
+}
+
+/**
+ * A chat's tool call to a server (`mcp__<server>__<tool>`): the server's name and the tool, as it
+ * last said it is, or as it says now when that's changed. Throws an McpServerError for a server
+ * that's gone or isn't the profile's (a slug), or a tool it no longer has.
+ */
+export async function findMcpTool(
+	name: string,
+	options: { profile?: string; signal?: AbortSignal } = {}
+): Promise<{ server: string; tool: Remembered['tools'][number] }> {
+	const server = mcpToolServer(name);
+	if (!server) throw new McpServerError(`${name} isn't a tool of an MCP server.`);
+	findMcpServer(server, options.profile);
+	const matches = (tool: { name: string }) => mcpToolName(server, tool.name) === name;
+	const tool =
+		remembered()[server]?.tools.find(matches) ??
+		(await listMcpTools(server, options)).tools.find(matches);
+	if (!tool) {
+		throw new McpServerError(
+			`${server} has no such tool any more. \`nolune mcp tools ${server}\` lists the tools it has now.`
+		);
+	}
+	return { server, tool };
+}
+
+const EXTENSIONS: Record<string, string> = {
+	'image/jpeg': 'jpg',
+	'image/svg+xml': 'svg',
+	'audio/mpeg': 'mp3',
+	'audio/x-wav': 'wav',
+	'text/plain': 'txt'
+};
+
+function extension(type: string | undefined): string {
+	if (!type) return 'bin';
+	const known = EXTENSIONS[type];
+	if (known) return known;
+	const sub = type.split('/')[1]?.split(/[;+]/)[0] ?? '';
+	return /^[a-z0-9]{1,8}$/.test(sub) ? sub : 'bin';
+}
+
+/**
+ * What a tool returned, as text: its text as it is, the rest saved as files in a folder of their
+ * own, a line naming each. Pictures are also shown to the agent through `viewDir`, as
+ * `nolune view` does, when it's given (a chat's call, or a command of the agent's).
+ */
+export async function mcpResultText(result: CallToolResult, viewDir?: string): Promise<string> {
+	const lines: string[] = [];
+	let folder: string | null = null;
+	let count = 0;
+	const save = (base64: string, type: string | undefined, kind: string) => {
+		folder ??= mkdtempSync(join(tmpdir(), 'nolune-mcp-'));
+		const file = join(folder, `${kind}-${++count}.${extension(type)}`);
+		writeFileSync(file, Buffer.from(base64, 'base64'));
+		return file;
+	};
+	for (const block of result.content) {
+		if (block.type === 'text') {
+			lines.push(block.text.replace(/\n$/, ''));
+		} else if (block.type === 'image') {
+			const file = save(block.data, block.mimeType, 'image');
+			if (!viewDir) {
+				lines.push(`Image: ${file}`);
+				continue;
+			}
+			try {
+				lines.push(await viewImage(file, viewDir));
+			} catch (err) {
+				lines.push(`Image: ${file} (not shown: ${(err as Error).message.replace(/\.+$/, '')})`);
+			}
+		} else if (block.type === 'audio') {
+			lines.push(`Audio: ${save(block.data, block.mimeType, 'audio')}`);
+		} else if (block.type === 'resource') {
+			const resource = block.resource;
+			if ('text' in resource)
+				lines.push(`Resource ${resource.uri}:`, resource.text.replace(/\n$/, ''));
+			else
+				lines.push(`Resource ${resource.uri}: ${save(resource.blob, resource.mimeType, 'file')}`);
+		} else if (block.type === 'resource_link') {
+			lines.push(
+				`Link: ${block.name} ${block.uri}${block.description ? ` (${block.description})` : ''}`
+			);
+		}
+	}
+	// A tool with only structured output; one with text too says the same in it.
+	if (result.structuredContent && !result.content.some((b) => b.type === 'text')) {
+		lines.push(JSON.stringify(result.structuredContent, null, 2));
+	}
+	return lines.join('\n');
 }

@@ -1211,7 +1211,7 @@ export const en = {
 	 */
 	services: {
 		title: 'Connected services',
-		hint: 'MCP servers give the agent the tools of other apps and services, like a calendar, GitHub, Notion or the smart home. It uses them through commands, which auto mode checks like any other. Every profile gets them, unless you choose some.',
+		hint: 'MCP servers give the agent the tools of other apps and services, like a calendar, GitHub, Notion or the smart home. New chats get their tools next to its own, and auto mode checks each call like a command. Every profile gets them, unless you choose some.',
 		add: 'Connect a server',
 		addTitle: 'Connect an MCP server',
 		addHint:

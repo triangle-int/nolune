@@ -1297,7 +1297,7 @@ export const fr: Messages = {
 	 */
 	services: {
 		title: 'Services connectés',
-		hint: 'Les serveurs MCP donnent à l’agent les outils d’autres applications et services, comme un agenda, GitHub, Notion ou la maison connectée. Il les utilise par des commandes, que le mode auto vérifie comme les autres. Tous les profils les ont, sauf si vous en choisissez certains.',
+		hint: 'Les serveurs MCP donnent à l’agent les outils d’autres applications et services, comme un agenda, GitHub, Notion ou la maison connectée. Les nouvelles discussions reçoivent leurs outils à côté des siens, et le mode auto vérifie chaque appel comme une commande. Tous les profils les ont, sauf si vous en choisissez certains.',
 		add: 'Connecter un serveur',
 		addTitle: 'Connecter un serveur MCP',
 		addHint:
