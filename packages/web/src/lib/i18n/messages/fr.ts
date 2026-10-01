@@ -341,6 +341,10 @@ export const fr: Messages = {
 	steps: {
 		thinking: 'Réflexion',
 		thinkingDots: 'Réflexion…',
+		summarizing: 'Résumé de la conversation jusqu’ici',
+		summarized: 'A résumé la conversation jusqu’ici',
+		summaryHint:
+			'La conversation était devenue trop longue pour le modèle : il continue à partir de ce résumé.',
 		running: (command: string) => `Exécution de ${command}`,
 		runningACommand: 'Exécution d’une commande',
 		ranACommand: 'A exécuté une commande',

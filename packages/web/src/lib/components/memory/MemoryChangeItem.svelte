@@ -82,8 +82,9 @@
 </script>
 
 <li class="flex items-start gap-2">
+	<!-- Relative, so the label in it stays here instead of stretching the page that scrolls it. -->
 	<span
-		class="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
+		class="relative mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground"
 		title={change.op === 'add' ? t.added : t.changed}
 	>
 		{#if change.op === 'add'}<PlusIcon class="size-3" />{:else}<PencilIcon class="size-3" />{/if}

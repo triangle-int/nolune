@@ -328,6 +328,10 @@ export const de: Messages = {
 	steps: {
 		thinking: 'Denkt nach',
 		thinkingDots: 'Denkt nach…',
+		summarizing: 'Fasst das Gespräch bisher zusammen',
+		summarized: 'Hat das Gespräch bisher zusammengefasst',
+		summaryHint:
+			'Der Chat war zu lang für das Modell geworden, deshalb macht es mit dieser Zusammenfassung weiter.',
 		running: (command: string) => `Führt ${command} aus`,
 		runningACommand: 'Führt einen Befehl aus',
 		ranACommand: 'Hat einen Befehl ausgeführt',

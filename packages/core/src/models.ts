@@ -79,7 +79,8 @@ export type StreamEvent =
 	| {
 			type: 'block_start';
 			index: number;
-			block: { type: 'text' | 'thinking' | 'tool'; id?: string };
+			/** `compaction`: Claude summarizing the conversation on the server (compaction.ts). */
+			block: { type: 'text' | 'thinking' | 'tool' | 'compaction'; id?: string };
 	  }
 	| { type: 'delta'; index: number; text: string };
 
@@ -110,6 +111,8 @@ function fromContent(content: unknown[], stopReason: string | null, usage: Usage
  * `messages` grows), otherwise the prompt cache is lost: `tools`, `system` and `cacheTtl` are the
  * conversation's own, fixed when it was created. `cacheKey` (the conversation's id) keeps a
  * conversation's calls together in OpenAI's cache, and on one provider behind OpenRouter.
+ * `compactAt`: on Anthropic, the request size at which Claude summarizes the conversation on the
+ * server first (compaction.ts); other providers' chats are summarized by the runner.
  */
 export async function streamTurn(opts: {
 	provider: Provider;
@@ -121,10 +124,11 @@ export async function streamTurn(opts: {
 	cacheKey: string;
 	/** The conversation in nolune's format; each provider's module turns it into its request. */
 	messages: Message[];
+	compactAt?: number | null;
 	signal: AbortSignal;
 	onEvent: (event: StreamEvent) => void;
 }): Promise<ModelReply> {
-	const { provider, cacheKey, ...request } = opts;
+	const { provider, cacheKey, compactAt, ...request } = opts;
 	if (isAgentPlan(provider)) {
 		throw new Error('Chats on the Claude plan run whole turns through runPlanTurn');
 	}
@@ -158,16 +162,31 @@ export async function streamTurn(opts: {
 	const message =
 		provider === 'custom-anthropic'
 			? await custom.streamMessage(request)
-			: await anthropic.streamTurn(request);
+			: await anthropic.streamTurn({ ...request, compactAt });
 	return fromContent(message.content, message.stop_reason, summarizeAnthropicUsage(message.usage));
 }
 
-export function summarizeAnthropicUsage(usage: Anthropic.Usage): Usage {
+/**
+ * The usage of a call to Claude. One that summarized the conversation first reports that apart
+ * (`iterations`), and its own numbers from the summary on.
+ */
+export function summarizeAnthropicUsage(usage: Anthropic.Usage | Anthropic.Beta.BetaUsage): Usage {
+	const summarized: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+	let compacted = false;
+	for (const step of ('iterations' in usage && usage.iterations) || []) {
+		if (step.type !== 'compaction') continue;
+		compacted = true;
+		summarized.input += step.input_tokens;
+		summarized.cacheRead += step.cache_read_input_tokens;
+		summarized.cacheWrite += step.cache_creation_input_tokens;
+		summarized.output += step.output_tokens;
+	}
 	return {
 		input: usage.input_tokens,
 		cacheRead: usage.cache_read_input_tokens ?? 0,
 		cacheWrite: usage.cache_creation_input_tokens ?? 0,
-		output: usage.output_tokens
+		output: usage.output_tokens,
+		...(compacted ? { compaction: summarized } : {})
 	};
 }
 
