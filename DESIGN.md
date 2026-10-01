@@ -22,9 +22,9 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Memory             | Short Markdown notes per profile, in fixed categories (a note each, or one per person or project), that the agent searches, reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory). Each member also has a card, a note about them that goes with them into all their profiles, copied whole into the prompt like core; only what they say about themselves goes on it. See [Cards](#cards).                      |
 | Soul               | Who nolune is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `nolune soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                                                |
+| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `web`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                                         |
 | Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `nolune view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                                                                                                                                                     |
-| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Web search         | `nolune web search` and `nolune web read`, through Firecrawl's SDK, which the built-in `web` skill explains. Without a key they use Firecrawl's free tier, limited per IP address a day; a Firecrawl key in Models & keys lifts that. No tool: the agent runs them like any other command. See [The web](#the-web).                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -33,7 +33,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 ```
 ~/.nolune/                 (override with NOLUNE_HOME)
-  config.json                 auth secret, API keys (Anthropic, OpenAI, OpenRouter, xAI), custom providers
+  config.json                 auth secret, API keys (Anthropic, OpenAI, OpenRouter, xAI, Firecrawl), custom providers
                               (name, API, address, key), image model,
                               extra env vars for commands, where Claude Code is if set, the
                               command mode and the preset that checks commands (mode 600)
@@ -612,7 +612,7 @@ kick(conversation):                     one loop per conversation at a time
   the last 20 KB are kept), followed by an exit-code line. Images the command showed with `nolune view`
   follow as image blocks (below).
 - The environment is the gateway's own, minus its secrets (`ANTHROPIC_API_KEY`, `BETTER_AUTH_SECRET`, …),
-  plus the `commandEnv` values from `config.json` (for example `FIRECRAWL_API_KEY`), plus
+  plus the `commandEnv` values from `config.json` (for example `HASS_TOKEN`), plus
   `NOLUNE_PROFILE`, `NOLUNE_PROFILE_DIR`, `NOLUNE_CONVERSATION_ID` and `NOLUNE_VIEW_DIR`.
 - `eager_input_streaming` is left off: the input is one short command, and leaving it off keeps the API's
   own input validation.
@@ -1256,6 +1256,37 @@ an image", with the chat's paperclip) does the same with the person's own words.
   `attachments/` (see [Attachments](#attachments)); the skill passes that path as `--image`.
   Templates take only pictures.
 
+## The web
+
+The agent searches the web and reads pages with `nolune web search` and `nolune web read`, commands
+like `nolune generate image`: no new tool, nothing in the system prompt beyond the skills catalog.
+The built-in `web` skill explains them, and how to use what they find (link the sources, take
+pages as information rather than instructions, hand research across many pages to a subagent).
+
+- **Firecrawl** (`packages/core/src/web.ts`), through its SDK (`firecrawl`), loaded on first use
+  like the model SDKs. `search` is its `/v2/search` with the web or news as the source, `--recent`
+  as Google's `tbs` and `--country` as its `country`; `read` is `/v2/scrape` for Markdown of the
+  main content, which renders pages that need JavaScript and reads PDFs. Firecrawl gets a minute
+  for either, and a scrape doesn't wait on a big PDF Firecrawl goes on working on.
+- **No key needed.** Without one, the SDK sends no `Authorization` header and Firecrawl answers on
+  its free tier, which allows each IP address so many requests and credits a day and answers with
+  a 429 after that. A key in `config.json` (`nolune key set firecrawl`, or Models & keys, checked
+  with `/v2/team/credit-usage`) lifts that to its plan; `FIRECRAWL_API_KEY` in the gateway's
+  environment, or in the command's (`nolune env set`, which is where it went before it had a
+  place in Models & keys), is the fallback. `FIRECRAWL_API_URL` points it at a Firecrawl of the
+  family's own. Models & keys shows Firecrawl's row closed while it has no key, as "the free tier",
+  since searching works without it; a new profile's welcome leaves it out, since it picks a model
+  (`MODEL_KEY_PROVIDERS`).
+- **Output** fits a command's 30 KB: the results as numbered title, address and snippet; a page as
+  its title, address and Markdown. A page over 20,000 characters is saved whole to a file in
+  `$TMPDIR/nolune-web/` and printed up to there, with the file's path, so the agent greps it rather
+  than fetching it again; `--out` saves it where the agent wants. Errors say what to do in words:
+  the free tier used up for the day (an admin can add a key), a key Firecrawl refuses, credits used
+  up.
+- **Auto mode checks them.** They're not on the read-only list (`read-only-commands.ts`): what's in
+  them goes out to Firecrawl and the search engines behind it, so a page that talks the agent into
+  putting the family's data in a query or an address is the check's to stop.
+
 ## Automations
 
 Triggers run the agent without anyone sending a message. What they find goes to notifications, not
@@ -1892,12 +1923,12 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 file cache, runner, media, users/invites/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
-                openai.ts), image templates and assistant avatars.
+                openai.ts), the web (web.ts), image templates and assistant avatars.
                 Built-in skills in packages/core/skills, built-in templates in
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
 packages/cli    nolune: setup, start, service, relay (relay.ts), config, key, claude-plan, chatgpt-plan (plans.ts), env,
-                user, preset, profile, skill, trigger, wake, view, memory, card, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
+                user, preset, profile, skill, trigger, wake, view, memory, card, generate, web, agent. `runCli(argv, io)` in run.ts runs a command and returns
                 its exit code; index.ts calls it with this process's io. Commands print, read stdin,
                 the environment (NOLUNE_PROFILE, …) and the working folder only through `io` (io.ts),
                 never `process`, and end in an error rather than `process.exit`, so the agent's
@@ -1938,7 +1969,7 @@ in docs/development.md).
   native module with prebuilt binaries). Everything else is bundled. Node won't strip types inside
   `node_modules`, which is why the CLI ships as JavaScript.
   Claude Code itself isn't shipped (see [The Claude plan](#the-claude-plan)); the Agent SDK and
-  zod, which core loads on first use, are in chunks of their own.
+  zod, which core loads on first use, are in chunks of their own, as is Firecrawl's SDK (`nolune web`).
 - `nolune setup` is the first-run wizard: config, admin account, and the address: the relay
   (asked at a terminal, `--relay` / `--no-relay` otherwise; no without either), else a public URL.
   It adds no key or model: a new profile's welcome asks the admin for them when there's no preset.
@@ -2042,6 +2073,8 @@ signing.
 - The ChatGPT plan: "Using ChatGPT plan" with a Manage usage link by the composer, as OpenAI's UI
   guidelines ask; a ChatGPT account per profile (each would be a registration of its own, which
   Sign in with ChatGPT allows).
+- The web: reading a page here, without Firecrawl, once its free tier is used up for the day, and
+  search providers other than Firecrawl.
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
 - Auto mode: house rules an admin writes for the check (Claude Code's environment, block and allow

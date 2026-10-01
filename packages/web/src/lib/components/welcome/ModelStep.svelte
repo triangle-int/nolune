@@ -6,7 +6,7 @@
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
-	import type { ApiKeyProvider, ModelChoice } from '@nolune/core';
+	import type { ModelChoice, ModelKeyProvider } from '@nolune/core';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
@@ -17,7 +17,7 @@
 
 	interface Props {
 		isAdmin: boolean;
-		keys: { provider: ApiKeyProvider; label: string; consoleUrl: string; set: boolean }[];
+		keys: { provider: ModelKeyProvider; label: string; consoleUrl: string; set: boolean }[];
 		/** The model is saved, or someone who can't add one carries on without. */
 		ondone: () => void;
 	}
@@ -25,7 +25,7 @@
 	let { isAdmin, keys, ondone }: Props = $props();
 	const { m } = getI18n();
 
-	type Choice = 'claude-plan' | 'chatgpt-plan' | ApiKeyProvider;
+	type Choice = 'claude-plan' | 'chatgpt-plan' | ModelKeyProvider;
 	const CHOICES: { id: Choice; icon: typeof KeyRoundIcon }[] = [
 		{ id: 'claude-plan', icon: SparklesIcon },
 		{ id: 'chatgpt-plan', icon: MessageCircleIcon },

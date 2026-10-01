@@ -11,6 +11,8 @@ export interface Config {
 	openrouterApiKey?: string;
 	/** For chats on xAI's Grok models (xai.ts). */
 	xaiApiKey?: string;
+	/** For `nolune web` (web.ts), past Firecrawl's free daily allowance. */
+	firecrawlApiKey?: string;
 	/**
 	 * Custom providers (custom-providers.ts): the family's own model servers, like Ollama or LM
 	 * Studio, each with an id from its name, the API it speaks, an address, and a key when it
@@ -89,13 +91,28 @@ export const API_KEYS = {
 	anthropic: { label: 'Anthropic', field: 'anthropicApiKey', env: 'ANTHROPIC_API_KEY' },
 	openai: { label: 'OpenAI', field: 'openaiApiKey', env: 'OPENAI_API_KEY' },
 	openrouter: { label: 'OpenRouter', field: 'openrouterApiKey', env: 'OPENROUTER_API_KEY' },
-	xai: { label: 'xAI', field: 'xaiApiKey', env: 'XAI_API_KEY' }
+	xai: { label: 'xAI', field: 'xaiApiKey', env: 'XAI_API_KEY' },
+	firecrawl: { label: 'Firecrawl', field: 'firecrawlApiKey', env: 'FIRECRAWL_API_KEY' }
 } as const satisfies Record<string, { label: string; field: keyof Config; env: string }>;
 
 export type ApiKeyProvider = keyof typeof API_KEYS;
 
 export function isApiKeyProvider(value: string): value is ApiKeyProvider {
 	return Object.hasOwn(API_KEYS, value);
+}
+
+/** The keys that run chats. Firecrawl's is for the agent's web searches (web.ts). */
+export const MODEL_KEY_PROVIDERS = [
+	'anthropic',
+	'openai',
+	'openrouter',
+	'xai'
+] as const satisfies readonly ApiKeyProvider[];
+
+export type ModelKeyProvider = (typeof MODEL_KEY_PROVIDERS)[number];
+
+export function isModelKeyProvider(value: string): value is ModelKeyProvider {
+	return (MODEL_KEY_PROVIDERS as readonly string[]).includes(value);
 }
 
 /** The key in use: config.json's, else the environment's. Read on every call, so changes apply at once. */
