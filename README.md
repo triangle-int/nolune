@@ -27,6 +27,9 @@ to several profiles, and you can switch between them whenever you need to.
 | The family profile | Everyone at home       | Meal plans, household notes, and family routines  |
 | A shared project   | The people taking part | A holiday, a birthday, or something you're making |
 
+The first time you sign in, nolune offers you a profile of your own and a few shared ones to start
+from: Family, Friends, or one for the two of you.
+
 Any member can add another existing user through **People & profile**. They join the profile's
 conversations and memory, so you don't have to keep forwarding answers or explaining the same
 background. Members can also manage the profile and its membership.

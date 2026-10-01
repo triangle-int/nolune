@@ -1516,9 +1516,19 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   as a `typing` event (and in the snapshot), and forgets someone whose page hasn't said so for 8 s:
   a browser that died or lost its connection. The page leaves out the person looking at it, and
   forgets everyone while its stream reconnects.
-- `/` redirects to the last profile opened (`nolune-profile` cookie) or the only one, else to
-  `/profiles`.
-  Creating a profile there opens its [welcome](#welcome).
+- `/` redirects to the last profile opened (`nolune-profile` cookie), or to the only one if
+  nobody else is in it, else to `/profiles`.
+- **Profiles** (`/profiles`) lists someone's profiles and is where they start, with a line on
+  what a profile is. Until they have one with only them in it, it offers one, named with their
+  first name, above the rest of the page; someone in no profile yet gets a greeting over it. Under
+  that, shared profiles by example: Family, Friends and Us two (for a couple), each with the
+  person's picture and dots in the avatar colors for whoever else might be in it. A click makes
+  one by that name, and an example they already have a profile by the name of is left out. A field
+  takes any other name, and the page says where people are added (People & profile, after an admin
+  has made them an account) and that only their [card](#cards) goes with them from one profile to
+  another. Someone added to others' profiles before they first signed in lands here too, once per
+  browser, since opening a profile sets the cookie. Creating a profile opens its
+  [welcome](#welcome).
 - **Models & keys** (`/admin`, admins only) has the API keys and the model presets. A key is
   write-only: the page shows where the key in use comes from (nolune's config or an environment
   variable) and its last four characters, never the key. A new one is checked with its provider

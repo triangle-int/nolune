@@ -856,10 +856,33 @@ export const de: Messages = {
 	profiles: {
 		title: 'Profile',
 		intro:
-			'Jedes Profil hat eigene Chats, ein eigenes Gedächtnis und eigene Fähigkeiten, geteilt von seinen Mitgliedern.',
-		none: 'Du bist noch in keinem Profil. Erstelle unten eines oder bitte jemanden, dich zu seinem hinzuzufügen.',
-		new: 'Neues Profil',
-		namePlaceholder: 'z. B. Familie, Oma, Hausaufgaben',
+			'Ein Profil ist ein Bereich mit eigenen Chats, eigenem Gedächtnis und eigenem Assistenten. Du kannst in mehreren sein und oben in der Seitenleiste zwischen ihnen wechseln.',
+		hello: (name: string) => `Hallo${to(name)}!`,
+		start: 'Fangen wir mit deinem eigenen Profil an.',
+		justYou: 'Nur du',
+		own: {
+			title: 'Dein eigenes Profil',
+			about: 'Für deine Projekte, Ideen und Pläne. Nur du bist darin, bis du jemanden hinzufügst.',
+			create: 'Mein Profil erstellen'
+		},
+		shared: {
+			title: 'Gemeinsame Profile',
+			about:
+				'Für die Menschen, mit denen du etwas zusammen machst. Alle darin sehen dieselben Chats und dasselbe Gedächtnis, und nolune weiß, wer gerade schreibt.',
+			examples: {
+				family: { name: 'Familie', about: 'Essenspläne, Haushalt, Familienalltag' },
+				friends: { name: 'Freunde', about: 'Ausflüge, Spieleabende, wer wem was schuldet' },
+				couple: { name: 'Wir zwei', about: 'Für ein Paar: Dates, Reisen, Pläne fürs Zuhause' }
+			},
+			addPeople: 'Sobald es da ist, fügst du unter {settings} Leute hinzu.',
+			needsAccount: 'Dafür brauchen sie zuerst ein Konto hier, das du unter {people} anlegst.',
+			askForAccount: 'Dafür brauchen sie zuerst ein Konto hier: Frag, wer nolune eingerichtet hat.',
+			custom: 'Oder gib ihm selbst einen Namen'
+		},
+		staysHere:
+			'Was in einem Profil gesagt wird, bleibt dort. Nur {card} geht mit dir in jedes: was du jedem über dich erzählen würdest, etwa welche Sprachen du sprichst.',
+		yourCard: 'deine Karte',
+		namePlaceholder: 'z. B. Oma, Hausaufgaben, Unsere Reise',
 		name: 'Name des Profils',
 		needsName: 'Gib dem Profil einen Namen.'
 	},
