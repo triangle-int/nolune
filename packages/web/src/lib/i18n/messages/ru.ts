@@ -544,6 +544,9 @@ export const ru: Messages = {
 	attachments: {
 		open: (name: string) => `Открыть ${name}`,
 		download: 'Скачать',
+		previous: 'Предыдущая картинка',
+		next: 'Следующая картинка',
+		position: (n: number, total: number) => `${n} из ${total}`,
 		onlyPath: (note: string) => `nolune получил только путь к файлу: ${note}`
 	},
 

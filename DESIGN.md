@@ -1288,7 +1288,8 @@ cached prefix doesn't change.
   carry `nosniff`, a sandboxing CSP (an SVG opened in its own tab can't run script) and an
   immutable cache header.
 - **The chat only loads nolune's copies.** The Markdown renderer swaps each target for its copy: a
-  picture (click to open a viewer with a Download button), a download card for files and for
+  picture (click to open a viewer with a Download button, which goes through the message's other
+  pictures with its arrows, the arrow keys or a swipe), a download card for files and for
   pictures browsers can't show, or a pulsing placeholder while the reply is still streaming.
   DOMPurify drops any other `<img>` source, `<style>`, inline styles, `srcset`, audio, video and SVG
   images, so the browser never loads anything a reply names from another site without a click. The
