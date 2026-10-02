@@ -40,6 +40,7 @@ import {
 	listCustomProviders,
 	normalizeApiKey,
 	normalizeProviderUrl,
+	nolunePlanAccountUrl,
 	nolunePlanOffered,
 	nolunePlanSignInState,
 	nolunePlanStatus,
@@ -101,7 +102,14 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 		},
 		// Who nolune is linked to the nolune plan as, and a code waiting to be approved; asking the
 		// API (and where the limits stand) is Check's. Never the token.
-		nolunePlan: offered ? { ...nolunePlanSignInState(), status: await nolunePlanStatus() } : null,
+		nolunePlan: offered
+			? {
+					...nolunePlanSignInState(),
+					status: await nolunePlanStatus(),
+					// Where a linked account with no plan subscribes.
+					accountUrl: nolunePlanAccountUrl()
+				}
+			: null,
 		// What memory search finds meaning with.
 		embeddings: embeddingState(),
 		embeddingDefaults: DEFAULT_EMBEDDING_MODELS,
@@ -323,6 +331,8 @@ export const actions: Actions = {
 	nolunePlanCheck: async ({ locals }) => {
 		requireAdmin(locals);
 		const status = await nolunePlanStatus({ check: true });
+		// No plan isn't an error here: the row says so, with the way to subscribe.
+		if (status.noPlan) return { plan: 'nolune-plan' as const, usage: null };
 		if (status.problem || !status.signedIn) {
 			const { m } = translations(locals.locale);
 			return fail(400, {

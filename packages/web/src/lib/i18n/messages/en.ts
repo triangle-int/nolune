@@ -960,7 +960,11 @@ export const en = {
 				code: 'Your code',
 				waiting: "Once it's linked there, this page goes on by itself.",
 				starting: 'Getting a code…',
-				tryAgain: 'Try again'
+				tryAgain: 'Try again',
+				noPlanTitle: 'Start your nolune plan',
+				noPlan:
+					"The account nolune is linked to has no plan yet. Subscribe on nolune's site, then come back: this page goes on by itself once the plan has started.",
+				subscribe: 'Subscribe'
 			}
 		},
 		avatar: {
@@ -1102,6 +1106,9 @@ export const en = {
 		nolunePlanLinkPage: "nolune's link page",
 		nolunePlanWaiting: 'This page goes on by itself once nolune is linked.',
 		nolunePlanLinked: 'Linked. Chats on nolune plan presets now use this plan.',
+		nolunePlanNoPlan:
+			"Linked, to an account with no plan yet. Subscribe on nolune's site: the limits show here once the plan has started.",
+		nolunePlanSubscribe: 'Subscribe',
 		nolunePlanNotLinked: "nolune isn't linked to a nolune plan.",
 		nolunePlanUnlinked: 'Unlinked.',
 		nolunePlanUnlinkedLocally:

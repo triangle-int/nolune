@@ -17,6 +17,7 @@ import {
 	listPresets,
 	membersWithNotes,
 	normalizeApiKey,
+	nolunePlanAccountUrl,
 	nolunePlanOffered,
 	nolunePlanStatus,
 	parseMemoryExport,
@@ -102,6 +103,15 @@ export const actions: Actions = {
 					? await chatGptPlanStatus({ check: true })
 					: await nolunePlanStatus({ check: true });
 		if (status.signedIn && !status.problem) return { plan, signedIn: status.signedIn };
+		// Linked, to an account with no plan yet: the step waits while it's subscribed to.
+		if ('noPlan' in status && status.noPlan) {
+			return fail(400, {
+				plan,
+				noPlan: true,
+				signedIn: status.signedIn,
+				accountUrl: nolunePlanAccountUrl()
+			});
+		}
 		const { m } = translations(locals.locale);
 		return fail(400, {
 			plan,

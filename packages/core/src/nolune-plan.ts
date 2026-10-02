@@ -37,6 +37,11 @@ export function nolunePlanOffered(): boolean {
 	return OPEN || !!process.env.NOLUNE_PLAN_API_URL;
 }
 
+/** The account page on nolune's API: where people sign in, subscribe, buy credits and manage it. */
+export function nolunePlanAccountUrl(): string {
+	return `${nolunePlanApiUrl()}/`;
+}
+
 export const NOLUNE_PLAN_HELP =
 	'Link nolune to the plan again: `nolune nolune-plan setup`, or the nolune plan under Models & keys.';
 
@@ -77,7 +82,7 @@ function writeStored(stored: Stored): void {
 
 function forget(): void {
 	rmSync(paths.nolunePlan, { force: true });
-	if (latest) setUsage(null);
+	if (latest || noPlanAt !== null) setUsage(null);
 }
 
 function notLinked(): PlanError {
@@ -223,11 +228,15 @@ async function asPlan<T>(call: () => Promise<T>): Promise<T> {
 
 /** The usage the API last said, and when. */
 let latest: { usage: NolunePlanUsage; at: number } | null = null;
+/** When the API last said the linked account has no plan: null while it has one, or isn't known. */
+let noPlanAt: number | null = null;
 const usageListeners = new Set<() => void>();
 let asking: Promise<void> | null = null;
 let soon: ReturnType<typeof setTimeout> | null = null;
 /** After this long, a usage that's read is asked for again. */
 const USAGE_STALE_MS = 10 * 60 * 1000;
+/** And an account with no plan, sooner: someone may be subscribing on the account page. */
+const NO_PLAN_STALE_MS = 60 * 1000;
 /**
  * How long after a request ends the usage is asked for: the API charges a stream once it has
  * ended, and requests that end together are asked about once.
@@ -236,7 +245,19 @@ const USAGE_AFTER_MS = 1500;
 
 function setUsage(usage: NolunePlanUsage | null): void {
 	latest = usage ? { usage, at: Date.now() } : null;
+	noPlanAt = null;
 	for (const listener of usageListeners) listener();
+}
+
+/**
+ * The API says the linked account has no plan. Listeners hear it when it's news, not on every ask:
+ * pages ask again when they hear, so telling them each time would have them ask on and on.
+ */
+function setNoPlan(): void {
+	const news = noPlanAt === null || latest !== null;
+	latest = null;
+	noPlanAt = Date.now();
+	if (news) for (const listener of usageListeners) listener();
 }
 
 /** Asks the API where the limits stand (`/v1/usage`), once at a time; nothing is charged. */
@@ -275,10 +296,14 @@ export function onNolunePlanUsage(listener: () => void): () => void {
  */
 export function nolunePlanUsage(): { usage: NolunePlanUsage; at: number } | null {
 	if (!readStored()) {
-		if (latest) setUsage(null);
+		if (latest || noPlanAt !== null) setUsage(null);
 		return null;
 	}
-	if (!latest || Date.now() - latest.at > USAGE_STALE_MS) void askUsage();
+	const now = Date.now();
+	const known = latest
+		? now - latest.at <= USAGE_STALE_MS
+		: noPlanAt !== null && now - noPlanAt <= NO_PLAN_STALE_MS;
+	if (!known) void askUsage();
 	return latest;
 }
 
@@ -543,6 +568,11 @@ export interface NolunePlanStatus extends PlanStatus {
 	account: PlanAccount | null;
 	/** Where the limits stand, when the API was asked. */
 	usage: NolunePlanUsage | null;
+	/**
+	 * The account nolune is linked to has no plan, as the API last said: it's subscribed to on the
+	 * account page (`nolunePlanAccountUrl`).
+	 */
+	noPlan: boolean;
 }
 
 /**
@@ -558,7 +588,8 @@ export async function nolunePlanStatus(opts: { check?: boolean } = {}): Promise<
 		installed: true,
 		account,
 		signedIn: account && describePlanAccount(account),
-		usage: null
+		usage: null,
+		noPlan: !!stored && noPlanAt !== null
 	};
 	if (!stored) return { ...status, problem: notLinked().message };
 	if (!opts.check) return { ...status, problem: null };
@@ -574,6 +605,7 @@ export async function nolunePlanStatus(opts: { check?: boolean } = {}): Promise<
 			...status,
 			account: null,
 			signedIn: null,
+			noPlan: false,
 			problem: `nolune's link to the nolune plan has ended. ${NOLUNE_PLAN_HELP}`
 		};
 	}
@@ -582,11 +614,12 @@ export async function nolunePlanStatus(opts: { check?: boolean } = {}): Promise<
 		return { ...status, problem: refused?.message ?? `nolune's API answered ${answer.status}.` };
 	}
 	const usage = (answer.body?.usage ?? null) as NolunePlanUsage | null;
-	setUsage(usage);
 	if (!usage) {
-		return { ...status, problem: planRefusal(402, { code: 'no_plan' })!.message };
+		setNoPlan();
+		return { ...status, noPlan: true, problem: planRefusal(402, { code: 'no_plan' })!.message };
 	}
-	return { ...status, usage, problem: null };
+	setUsage(usage);
+	return { ...status, usage, noPlan: false, problem: null };
 }
 
 /** Throws a PlanError unless nolune is linked to a plan the API takes. */

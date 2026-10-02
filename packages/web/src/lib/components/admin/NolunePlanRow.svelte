@@ -14,7 +14,7 @@
 	/*
 	 * The nolune plan's row in Models & keys: linking nolune to the plan with a code someone
 	 * approves on nolune's link page (from any device), checking the link and where the limits
-	 * stand, and unlinking it.
+	 * stand, and unlinking it. An account with no plan yet gets the way to subscribe.
 	 */
 
 	interface Props {
@@ -23,6 +23,8 @@
 			pending: { code: string; url: string; expiresAt: number } | null;
 			signInError: string | null;
 			status: NolunePlanStatus;
+			/** The account page, where an account with no plan subscribes. */
+			accountUrl: string;
 		};
 		/** What the last action on this row said. */
 		result: { planError?: string; planMessage?: string; usage?: NolunePlanUsage | null } | null;
@@ -39,6 +41,8 @@
 	const problem = $derived(result?.planError ?? plan.signInError);
 	/** Where the limits stand: the last Check's, else as the gateway last heard. */
 	const usage = $derived(result?.usage ?? planUsage.current?.usage ?? null);
+	/** Linked, to an account the API says has no plan yet. */
+	const noPlan = $derived(!!linked && !usage && plan.status.noPlan);
 
 	$effect(() => {
 		if (linked) void planUsage.refresh();
@@ -87,6 +91,13 @@
 					</Button>
 				</form>
 			{:else if linked}
+				{#if noPlan}
+					<!-- eslint-disable svelte/no-navigation-without-resolve -- the account page, another site -->
+					<Button href={plan.accountUrl} target="_blank" rel="noreferrer" size="sm">
+						{m.admin.nolunePlanSubscribe}
+					</Button>
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
+				{/if}
 				<form
 					method="POST"
 					action="?/nolunePlanCheck"
@@ -160,6 +171,8 @@
 	{/if}
 	{#if problem}
 		<p class="text-destructive sm:pl-12" role="alert">{problem}</p>
+	{:else if noPlan}
+		<p class="text-muted-foreground sm:pl-12">{m.admin.nolunePlanNoPlan}</p>
 	{:else if linked && usage}
 		<PlanUsageBars {usage} class="max-w-md sm:pl-12" />
 	{:else if result?.planMessage}

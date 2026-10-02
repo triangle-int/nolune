@@ -1014,7 +1014,11 @@ export const de: Messages = {
 				code: 'Dein Code',
 				waiting: 'Sobald es dort verknüpft ist, geht diese Seite von selbst weiter.',
 				starting: 'Code wird geholt…',
-				tryAgain: 'Nochmal versuchen'
+				tryAgain: 'Nochmal versuchen',
+				noPlanTitle: 'Schließ dein nolune-Abo ab',
+				noPlan:
+					'Das Konto, mit dem nolune verknüpft ist, hat noch kein Abo. Schließe es auf der Website von nolune ab und komm zurück: Diese Seite geht von selbst weiter, sobald das Abo läuft.',
+				subscribe: 'Abo abschließen'
 			}
 		},
 		avatar: {
@@ -1164,6 +1168,9 @@ export const de: Messages = {
 		nolunePlanLinkPage: 'die Verknüpfungsseite von nolune',
 		nolunePlanWaiting: 'Diese Seite geht von selbst weiter, sobald nolune verknüpft ist.',
 		nolunePlanLinked: 'Verknüpft. Chats mit nolune-Abo-Voreinstellungen nutzen jetzt dieses Abo.',
+		nolunePlanNoPlan:
+			'Verknüpft, mit einem Konto ohne Abo. Schließe es auf der Website von nolune ab: Sobald es läuft, stehen hier die Limits.',
+		nolunePlanSubscribe: 'Abo abschließen',
 		nolunePlanNotLinked: 'nolune ist mit keinem nolune-Abo verknüpft.',
 		nolunePlanUnlinked: 'Getrennt.',
 		nolunePlanUnlinkedLocally:

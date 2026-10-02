@@ -286,6 +286,7 @@ export {
 	NOLUNE_PLAN_HELP,
 	cancelNolunePlanSignIn,
 	checkNolunePlan,
+	nolunePlanAccountUrl,
 	nolunePlanApiUrl,
 	nolunePlanOffered,
 	nolunePlanSignInState,

@@ -200,17 +200,27 @@
 		error: string | null;
 		signedIn: string | null;
 		problem: string | null;
+		/** Linked, to an account with no plan yet. */
+		noPlan?: boolean;
+		/** The account page, where it subscribes. */
+		accountUrl?: string;
 	}
 	let nolune = $state<NoluneState | null>(null);
-	/** A code is waiting to be approved: once it is, on to the models. */
-	let waitingForNolune = $state(false);
+	/**
+	 * What the step waits on: a code to be approved, or a plan for the account it linked to. Once
+	 * it has both, on to the models.
+	 */
+	let waitingForNolune = $state<'link' | 'plan' | null>(null);
 
-	/** Asks where the link is, or starts or cancels it, and moves on once nolune is linked. */
-	async function askNolune(body?: Record<string, unknown>): Promise<NoluneState | null> {
+	/** Asks where the link is (with `check`, whether the account has a plan), or starts or cancels it. */
+	async function askNolune(
+		body?: Record<string, unknown>,
+		check = false
+	): Promise<NoluneState | null> {
 		let next: NoluneState;
 		try {
 			const res = await fetch(
-				'/api/nolune-plan/sign-in',
+				`/api/nolune-plan/sign-in${check ? '?check=1' : ''}`,
 				body
 					? {
 							method: 'POST',
@@ -231,26 +241,53 @@
 		// An answer that comes back after someone went back is for nothing.
 		if (view !== 'nolune') return next;
 		nolune = next;
-		if (next.pending) waitingForNolune = true;
-		else if (waitingForNolune) {
-			waitingForNolune = false;
-			if (!next.error && next.signedIn && !next.problem) {
-				play('confirm');
-				note = next.signedIn;
-				listModels();
-			}
+		if (next.pending) {
+			waitingForNolune = 'link';
+			return next;
+		}
+		// Turned down or run out (it says why), or not linked after all: nothing more to wait on.
+		if (next.error || !next.signedIn) {
+			if (waitingForNolune === 'link') waitingForNolune = null;
+			return next;
+		}
+		// Just linked: whether the account has a plan is the API's to say.
+		if (waitingForNolune === 'link' && !check) return askNolune(undefined, true);
+		if (next.noPlan) {
+			waitingForNolune = 'plan';
+			return next;
+		}
+		if (waitingForNolune && check && !next.problem) {
+			waitingForNolune = null;
+			play('confirm');
+			note = next.signedIn;
+			listModels();
 		}
 		return next;
 	}
 
-	/** nolune isn't linked, or the link doesn't work: link it here. */
-	async function toNolune() {
+	/**
+	 * nolune isn't linked, or the link doesn't work: link it here. Linked to an account with no
+	 * plan (what the plan's check said), it waits for one instead.
+	 */
+	async function toNolune(failed?: Record<string, unknown>) {
 		nolune = null;
-		waitingForNolune = false;
+		waitingForNolune = null;
 		view = 'nolune';
+		if (failed?.noPlan) {
+			nolune = {
+				pending: null,
+				error: null,
+				signedIn: String(failed.signedIn ?? ''),
+				problem: null,
+				noPlan: true,
+				accountUrl: String(failed.accountUrl ?? '')
+			};
+			waitingForNolune = 'plan';
+			return;
+		}
 		// A link already under way (from Models & keys, say) is followed as it is.
 		const found = await askNolune();
-		if (found && !found.pending && view === 'nolune') await startNolune();
+		if (found && !found.pending && !found.noPlan && view === 'nolune') await startNolune();
 	}
 
 	async function startNolune() {
@@ -261,15 +298,18 @@
 
 	function leaveNolune() {
 		// Not waiting any more: cancelling mustn't count as linking.
-		waitingForNolune = false;
-		void askNolune({ action: 'cancel' });
+		const linking = waitingForNolune === 'link';
+		waitingForNolune = null;
+		if (linking) void askNolune({ action: 'cancel' });
 		view = 'choose';
 	}
 
-	// The code is approved on another page, maybe another device: ask until it has been.
+	// The code is approved on another page, maybe another device, and the plan is subscribed to
+	// on the account page: ask until it has been.
 	$effect(() => {
 		if (view !== 'nolune' || !waitingForNolune) return;
-		const timer = setInterval(() => askNolune(), 2000);
+		const check = waitingForNolune === 'plan';
+		const timer = setInterval(() => askNolune(undefined, check), check ? 4000 : 2000);
 		return () => clearInterval(timer);
 	});
 
@@ -311,7 +351,7 @@
 				} else if (result.type === 'failure' && choice === 'chatgpt-plan') {
 					toChatgpt(result.data);
 				} else if (result.type === 'failure' && choice === 'nolune-plan') {
-					toNolune();
+					toNolune(result.data);
 				} else if (result.type === 'failure') {
 					problem = String(result.data?.planError ?? '');
 					installCommand = (result.data?.installCommand as string | null) ?? null;
@@ -584,12 +624,27 @@
 	<div class="space-y-6 text-center">
 		<div class="space-y-3">
 			<h2 class="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
-				{m.welcome.model.nolune.title}
+				{nolune?.noPlan ? m.welcome.model.nolune.noPlanTitle : m.welcome.model.nolune.title}
 			</h2>
-			<p class="mx-auto max-w-md text-muted-foreground">{m.welcome.model.nolune.about}</p>
+			<!-- Linked already, with no plan: what's left is subscribing. -->
+			<p class="mx-auto max-w-md text-muted-foreground">
+				{nolune?.noPlan ? m.welcome.model.nolune.noPlan : m.welcome.model.nolune.about}
+			</p>
 		</div>
 		<div class="flex flex-col items-center gap-3" aria-live="polite">
-			{#if nolune?.pending}
+			{#if nolune?.noPlan}
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- the account page, another site -->
+				<Button
+					href={nolune.accountUrl}
+					target="_blank"
+					rel="noreferrer"
+					size="lg"
+					class="h-11 min-w-56 px-8"
+				>
+					{m.welcome.model.nolune.subscribe}
+				</Button>
+				<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			{:else if nolune?.pending}
 				<p class="text-sm text-muted-foreground">{m.welcome.model.nolune.code}</p>
 				<p class="rounded-2xl bg-muted px-6 py-3 font-mono text-3xl font-semibold tracking-[0.2em]">
 					{nolune.pending.code}

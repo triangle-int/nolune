@@ -1028,7 +1028,11 @@ export const es: Messages = {
 				code: 'Tu código',
 				waiting: 'En cuanto se vincule allí, esta página seguirá sola.',
 				starting: 'Obteniendo un código…',
-				tryAgain: 'Intentar de nuevo'
+				tryAgain: 'Intentar de nuevo',
+				noPlanTitle: 'Empieza tu plan de nolune',
+				noPlan:
+					'La cuenta a la que está vinculado nolune aún no tiene plan. Suscríbete en el sitio de nolune y vuelve: esta página seguirá sola en cuanto empiece el plan.',
+				subscribe: 'Suscribirse'
 			}
 		},
 		avatar: {
@@ -1178,6 +1182,9 @@ export const es: Messages = {
 		nolunePlanWaiting: 'Esta página seguirá sola en cuanto nolune quede vinculado.',
 		nolunePlanLinked:
 			'Vinculado. Los chats con preajustes del plan de nolune ahora usan este plan.',
+		nolunePlanNoPlan:
+			'Vinculado a una cuenta que aún no tiene plan. Suscríbete en el sitio de nolune: los límites aparecerán aquí en cuanto empiece el plan.',
+		nolunePlanSubscribe: 'Suscribirse',
 		nolunePlanNotLinked: 'nolune no está vinculado a un plan de nolune.',
 		nolunePlanUnlinked: 'Desvinculado.',
 		nolunePlanUnlinkedLocally:

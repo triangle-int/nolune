@@ -8,6 +8,7 @@ import { embeddingSource } from './memory-embeddings.ts';
 import { listModels } from './models.ts';
 import {
 	cancelNolunePlanSignIn,
+	nolunePlanAccountUrl,
 	nolunePlanSignInState,
 	nolunePlanStatus,
 	nolunePlanUsage,
@@ -51,6 +52,8 @@ const seen: Seen[] = [];
 let decision: 'pending' | 'approved' | 'denied' = 'pending';
 /** The chat endpoint's answers, in turn. */
 let chats: Answer[] = [];
+/** Whether the account the gateway is linked to has a plan (`/v1/usage` says so). */
+let subscribed = true;
 /** The picture endpoint's answers, in turn; a PNG when there are none left. */
 let pictures: Answer[] = [];
 
@@ -112,7 +115,7 @@ function answer(request: Seen): Answer {
 		return { status: 401, json: { error: { code: 'not_signed_in', message: 'Link again.' } } };
 	switch (`${request.method} ${request.path}`) {
 		case 'GET /v1/usage':
-			return { json: { email: 'anna@example.com', usage: USAGE } };
+			return { json: { email: 'anna@example.com', usage: subscribed ? USAGE : null } };
 		case 'GET /v1/models':
 			return { json: { data: MODELS } };
 		case 'POST /v1/embeddings':
@@ -186,6 +189,7 @@ beforeEach(() => {
 	decision = 'pending';
 	chats = [];
 	pictures = [];
+	subscribed = true;
 	cancelNolunePlanSignIn();
 	vi.mocked(runCommand).mockReset();
 	vi.stubEnv('OPENAI_API_KEY', '');
@@ -370,6 +374,33 @@ describe('chats on the nolune plan', () => {
 
 		await signOutNolunePlan();
 		expect(nolunePlanUsage()).toBeNull();
+	});
+
+	it('says once that the account has no plan, and where to subscribe, without asking on and on', async () => {
+		await link();
+		subscribed = false;
+		const heard = vi.fn();
+		const off = onNolunePlanUsage(heard);
+		const status = await nolunePlanStatus({ check: true });
+		expect(status).toMatchObject({ noPlan: true, usage: null });
+		expect(status.problem).toContain(`has no nolune plan. Subscribe at ${base}`);
+		expect(nolunePlanAccountUrl()).toBe(`${base}/`);
+		expect(heard).toHaveBeenCalledTimes(1);
+
+		// Pages ask again when they hear: the answer is kept a while, and no news isn't told.
+		const asked = () => seen.filter((r) => r.path === '/v1/usage').length;
+		const before = asked();
+		for (let i = 0; i < 5; i++) expect(nolunePlanUsage()).toBeNull();
+		expect((await nolunePlanStatus()).noPlan).toBe(true);
+		await nolunePlanStatus({ check: true });
+		expect(asked()).toBe(before + 1);
+		expect(heard).toHaveBeenCalledTimes(1);
+
+		// Subscribed on the account page.
+		subscribed = true;
+		expect(await nolunePlanStatus({ check: true })).toMatchObject({ noPlan: false, usage: USAGE });
+		expect(heard).toHaveBeenCalledTimes(2);
+		off();
 	});
 
 	it('says when a limit starts again, in words', async () => {

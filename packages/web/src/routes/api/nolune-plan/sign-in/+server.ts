@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import {
 	PlanError,
 	cancelNolunePlanSignIn,
+	nolunePlanAccountUrl,
 	nolunePlanSignInState,
 	nolunePlanStatus,
 	startNolunePlanSignIn
@@ -15,16 +16,27 @@ import type { RequestHandler } from './$types';
  * same through its form actions. Never the token.
  */
 
-/** Where the link is, and who nolune is linked as, from what nolune keeps. */
-async function state() {
+/**
+ * Where the link is, and who nolune is linked as, from what nolune keeps. With `check`, a linked
+ * nolune asks the API too, which says whether the account has a plan yet.
+ */
+async function state(check = false) {
 	const { pending, signInError } = nolunePlanSignInState();
-	const { signedIn, problem } = await nolunePlanStatus();
-	return { pending, error: signInError, signedIn, problem };
+	const { signedIn, problem, noPlan } = await nolunePlanStatus({ check: check && !pending });
+	return {
+		pending,
+		error: signInError,
+		signedIn,
+		problem,
+		noPlan,
+		accountUrl: nolunePlanAccountUrl()
+	};
 }
 
-export const GET: RequestHandler = async ({ locals }) => {
+/** `?check=1` asks the API whether the account has a plan (the welcome, waiting on one). */
+export const GET: RequestHandler = async ({ locals, url }) => {
 	requireAdmin(locals);
-	return json(await state());
+	return json(await state(url.searchParams.get('check') === '1'));
 };
 
 /** `{ action: 'start' }` or `{ action: 'cancel' }`. */

@@ -1092,7 +1092,11 @@ export const ru: Messages = {
 				code: 'Ваш код',
 				waiting: 'Как только там привяжут, эта страница продолжит сама.',
 				starting: 'Получаем код…',
-				tryAgain: 'Попробовать снова'
+				tryAgain: 'Попробовать снова',
+				noPlanTitle: 'Оформите подписку nolune',
+				noPlan:
+					'У аккаунта, к которому привязан nolune, ещё нет подписки. Оформите её на сайте nolune и возвращайтесь: эта страница продолжит сама, как только подписка начнётся.',
+				subscribe: 'Оформить подписку'
 			}
 		},
 		avatar: {
@@ -1246,6 +1250,9 @@ export const ru: Messages = {
 		nolunePlanLinkPage: 'страницу привязки nolune',
 		nolunePlanWaiting: 'Эта страница продолжит сама, как только nolune будет привязан.',
 		nolunePlanLinked: 'Привязано. Чаты на пресетах с подпиской nolune теперь работают по ней.',
+		nolunePlanNoPlan:
+			'Привязано к аккаунту, у которого ещё нет подписки. Оформите её на сайте nolune: когда она начнётся, здесь появятся лимиты.',
+		nolunePlanSubscribe: 'Оформить подписку',
 		nolunePlanNotLinked: 'nolune не привязан к подписке nolune.',
 		nolunePlanUnlinked: 'Отвязано.',
 		nolunePlanUnlinkedLocally:

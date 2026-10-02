@@ -1031,7 +1031,11 @@ export const fr: Messages = {
 				code: 'Votre code',
 				waiting: 'Dès que c’est associé là-bas, cette page continue d’elle-même.',
 				starting: 'Obtention d’un code…',
-				tryAgain: 'Réessayer'
+				tryAgain: 'Réessayer',
+				noPlanTitle: 'Prenez votre abonnement nolune',
+				noPlan:
+					'Le compte auquel nolune est associé n’a pas encore d’abonnement. Abonnez-vous sur le site de nolune, puis revenez : cette page continue d’elle-même dès que l’abonnement a commencé.',
+				subscribe: 'S’abonner'
 			}
 		},
 		avatar: {
@@ -1184,6 +1188,9 @@ export const fr: Messages = {
 		nolunePlanWaiting: 'Cette page continue d’elle-même dès que nolune est associé.',
 		nolunePlanLinked:
 			'Associé. Les discussions avec un préréglage d’abonnement nolune utilisent maintenant cet abonnement.',
+		nolunePlanNoPlan:
+			'Associé à un compte qui n’a pas encore d’abonnement. Abonnez-vous sur le site de nolune : les limites s’afficheront ici dès qu’il aura commencé.',
+		nolunePlanSubscribe: 'S’abonner',
 		nolunePlanNotLinked: 'nolune n’est associé à aucun abonnement nolune.',
 		nolunePlanUnlinked: 'Dissocié.',
 		nolunePlanUnlinkedLocally:

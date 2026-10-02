@@ -2199,6 +2199,12 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   from `nolune nolune-plan setup` (which prints the page and the code), from the plan's row in
   Models & keys (which shows them and asks until it's linked), or from the welcome's model step,
   where the plan comes first, across the top, and is the one picked when no key is set.
+- **Linked, with no plan yet.** Someone can link an account they haven't subscribed with. Models &
+  keys and the welcome then say so and offer Subscribe, which opens the account page in a new tab
+  (`nolunePlanAccountUrl`); the welcome waits there, asking every 4 seconds, and carries on to the
+  models once there's a plan, rather than linking the same account again. The API's "no plan" is
+  kept for a minute (a usage for ten), and pages hear it once, when it's news: they ask again when
+  they hear, so telling them on every answer would have them ask on and on.
 - **What's kept** is `~/.nolune/nolune-plan.json` (mode 600, written whole and renamed into place),
   as `chatgpt.json` is: the account's email and the token the link gave, never shown or logged. The
   token is a better-auth session, sent as a bearer token on every request to `/v1`. It lasts 90
