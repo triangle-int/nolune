@@ -75,6 +75,12 @@ forwarding. Otherwise the gateway listens on `127.0.0.1:5780`, so only this comp
 [Remote access](/docs/guides/remote-access/) explains the relay, and how to use a tunnel of your own
 instead.
 
+:::caution[Notifications on iPhones need the relay]
+The nolune app for iPhone puts the bell's notifications on the lock screen only through nolune's
+relay, which holds the key Apple asks for. On a tunnel or a relay of your own, the app gets none; the
+bell still shows them whenever the app is open.
+:::
+
 ## Where things are
 
 - Logs: `nolune service logs -f`.

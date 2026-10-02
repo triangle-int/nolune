@@ -217,7 +217,7 @@ struct AddressScreen: View {
 			Button(skipTitle, action: skip)
 				.buttonStyle(QuietLinkStyle())
 				.padding(.top, 14)
-			Text("nolune's relay passes your family's traffic to this Mac, and could see it, as any tunnel could.")
+			Text("nolune's relay passes your family's traffic to this Mac, and could see it, as any tunnel could. It's also the only way notifications reach the nolune app for iPhone.")
 				.font(Theme.font(11))
 				.foregroundStyle(Theme.muted.opacity(0.8))
 				.multilineTextAlignment(.center)

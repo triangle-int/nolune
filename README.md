@@ -103,6 +103,8 @@ Without systemd, run `nolune start` under your own process manager instead.
 Setup asks how your family will open nolune. Say yes to the **nolune relay** and you get an address
 like `https://smiths.nolune.family` that works on any phone or laptop, at home or away, with no
 tunnel, port forwarding or domain to set up. You can turn it on later with `nolune relay enable`.
+It's also the only way the bell's notifications reach the nolune app for iPhone: on a tunnel of
+your own, the app gets none.
 
 Open the address from setup, sign in, and create your first profile. Its welcome helps you pick a
 model and personalize the assistant. Admins manage providers and models under **Models & keys**.
@@ -143,9 +145,10 @@ The installed gateway listens on `127.0.0.1:5780`. Other devices reach it in one
   `relay.nolune.dev`, which passes requests for your address down it, so nothing on your network
   has to be opened. TLS ends at the relay, as it does with any hosted tunnel, so its operator could
   read the traffic that passes through; it keeps none of it. You can
-  [run your own relay](packages/relay/README.md), too.
-- **Your own tunnel or reverse proxy**, such as Tailscale Funnel or Cloudflare Tunnel. Configure
-  its address:
+  [run your own relay](packages/relay/README.md), too, though only nolune's sends notifications to
+  the iPhone app.
+- **Your own tunnel or reverse proxy**, such as Tailscale Funnel or Cloudflare Tunnel, without
+  notifications on the iPhone app. Configure its address:
 
   ```sh
   nolune config set origin https://nolune.example.com
