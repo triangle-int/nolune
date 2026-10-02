@@ -24,5 +24,9 @@ ending in a slash, as every docs page does. Its
 links here skip SvelteKit's router, and the prerender ignores them. Locally, run the docs with
 `pnpm --filter @nolune/docs dev`.
 
+`/privacy` is nolune's privacy policy, which the App Store listing and the iOS app link. It says
+what nolune, its apps, the relay and this site do with people's information, so a change to any of
+them that sends or keeps something new belongs there too, with a new date.
+
 `static/og.png`, the picture shown when someone shares a link, is a 1200×630 screenshot of the hero
 with reduced motion on. Take a new one when the hero changes.

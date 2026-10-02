@@ -125,6 +125,11 @@ export const en = {
 		logOut: 'Log out'
 	},
 
+	/** In nolune for iOS (ios/), which shows this web app in a window of its own. */
+	app: {
+		connectElsewhere: 'Connect to another nolune'
+	},
+
 	update: {
 		available: (version: string) => `nolune ${version} is out`,
 		running: (version: string) => `You have ${version}.`,

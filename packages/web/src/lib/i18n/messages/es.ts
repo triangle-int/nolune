@@ -219,6 +219,11 @@ export const es: Messages = {
 		logOut: 'Cerrar sesión'
 	},
 
+	/** In nolune for iOS (ios/), which shows this web app in a window of its own. */
+	app: {
+		connectElsewhere: 'Conectar con otro nolune'
+	},
+
 	update: {
 		available: (version: string) => `nolune ${version} ya está disponible`,
 		running: (version: string) => `Tienes la versión ${version}.`,

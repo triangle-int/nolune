@@ -5,6 +5,7 @@
 	import CircleArrowUpIcon from '@lucide/svelte/icons/circle-arrow-up';
 	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import LogOutIcon from '@lucide/svelte/icons/log-out';
+	import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right';
 	import BoxIcon from '@lucide/svelte/icons/box';
 	import ContactIcon from '@lucide/svelte/icons/contact';
 	import IdCardIcon from '@lucide/svelte/icons/id-card';
@@ -14,6 +15,7 @@
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import type { Update } from '@nolune/core';
 	import { getI18n } from '$lib/i18n';
+	import { connectElsewhere, inIosApp } from '$lib/ios';
 	import { cn } from '$lib/utils';
 	import SettingsDialog from './SettingsDialog.svelte';
 	import UpdateDialog from './UpdateDialog.svelte';
@@ -31,6 +33,8 @@
 	let settingsOpen = $state(false);
 	let updateOpen = $state(false);
 	let logoutForm = $state<HTMLFormElement>();
+	/** In nolune for iOS: it can connect to another family's nolune. */
+	let inApp = $state(false);
 
 	/** A newer nolune, which the root layout only gives admins. */
 	const update = $derived<Update | null>(page.data.update ?? null);
@@ -44,6 +48,7 @@
 	const unseen = $derived(!!update && seen !== undefined && seen !== update.version);
 
 	onMount(() => {
+		inApp = inIosApp();
 		try {
 			seen = localStorage.getItem(SEEN_KEY);
 		} catch {
@@ -148,6 +153,12 @@
 			</DropdownMenu.Item>
 		{/if}
 		<DropdownMenu.Separator />
+		{#if inApp}
+			<DropdownMenu.Item onSelect={connectElsewhere}>
+				<ArrowLeftRightIcon />
+				{m.app.connectElsewhere}
+			</DropdownMenu.Item>
+		{/if}
 		<DropdownMenu.Item onSelect={() => logoutForm?.requestSubmit()}>
 			<LogOutIcon />
 			{m.userMenu.logOut}

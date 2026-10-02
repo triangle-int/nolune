@@ -28,7 +28,10 @@ webhook URLs).
 - **Privacy.** The relay could read what passes through it, as any hosted tunnel could; it keeps
   none of it. If you'd rather nobody in between could, use a tunnel of your own (below), or
   [run your own relay](https://github.com/triangle-int/nolune/tree/main/packages/relay) and point
-  nolune at it with `nolune relay enable --server https://relay.example.com`.
+  nolune at it with `nolune relay enable --server https://relay.example.com`. Either way, the
+  nolune app for iPhone gets no notifications (below).
+- **Notifications on iPhones.** The nolune app for iPhone puts the bell's notifications on the
+  lock screen through nolune's relay, the only one with the key Apple asks for.
 - **When the computer is off or asleep**, the address shows a page saying nolune is offline, which
   reloads itself until it's back. A restart doesn't show it: the relay waits a few seconds for
   nolune to come back.
@@ -50,6 +53,11 @@ nolune service restart
 ```
 
 While the relay is on, its address wins: `nolune relay disable` switches to this one.
+
+:::caution[No notifications on iPhones]
+On a tunnel of your own, the nolune app for iPhone gets no notifications on the lock screen: they
+only come through nolune's relay. The bell still shows them whenever the app is open.
+:::
 
 Either way, keep the host awake when the family needs access. On a Mac, that's System Settings >
 Energy.

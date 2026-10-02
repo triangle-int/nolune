@@ -10,7 +10,9 @@
 <div class="flex h-full flex-col">
 	<TopBar />
 	<main class="min-h-0 flex-1 overflow-y-auto">
-		<div class="mx-auto max-w-2xl space-y-8 px-4 py-8 sm:py-12">
+		<div
+			class="mx-auto max-w-2xl space-y-8 px-4 pt-8 pb-[max(2rem,env(safe-area-inset-bottom))] sm:py-12"
+		>
 			<div class="space-y-1">
 				<h1 class="text-2xl font-semibold">{m.services.title}</h1>
 				<p class="text-muted-foreground">{m.services.hint}</p>

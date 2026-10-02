@@ -666,6 +666,31 @@ export const notificationSeen = sqliteTable('notification_seen', {
 });
 
 /**
+ * iPhones that get their person's notifications (nolune for iOS, ios/ in the repository). Each
+ * belongs to the session it was registered in, so signing out there stops them.
+ */
+export const pushDevice = sqliteTable(
+	'push_device',
+	{
+		/** The token Apple gave the app on this iPhone, in hex. */
+		token: text('token').primaryKey(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		sessionId: text('session_id')
+			.notNull()
+			.references(() => session.id, { onDelete: 'cascade' }),
+		/** A development build's: Apple's sandbox servers deliver to it. */
+		sandbox: integer('sandbox', { mode: 'boolean' }).default(false).notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [
+		index('push_device_userId_idx').on(table.userId),
+		index('push_device_sessionId_idx').on(table.sessionId)
+	]
+);
+
+/**
  * Files attached in the composer that aren't sent yet. The bytes are already in the media store;
  * sending the message turns them into attachments. Rows older than a day are dropped.
  */

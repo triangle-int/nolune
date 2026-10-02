@@ -449,7 +449,8 @@ could: \`nolune relay disable\` stops using it.`
 		: `The gateway listens on http://${current.host}:${port}. To reach it from outside your home, run
 \`nolune relay enable\` for an address through nolune's relay, or point a tunnel of your own at
 it (Tailscale Funnel, Cloudflare Tunnel, or a VPS) and set its URL with
-\`nolune config set origin https://...\`.`;
+\`nolune config set origin https://...\`. Notifications on the nolune app for iPhone only come
+through the relay.`;
 
 	io.log(`
 Done. Next:
@@ -484,7 +485,8 @@ async function setupRelay(
 How will your family open nolune? nolune's relay gives it an address like
 https://smiths.nolune.family that works on any device, at home or away, with no tunnel or
 port forwarding. It passes their traffic to this computer, and could see it, as any tunnel
-could. Or keep nolune to this computer, or give a URL of your own.`);
+could. Or keep nolune to this computer, or give a URL of your own: then the nolune app for
+iPhone gets no notifications, which only come through the relay.`);
 		wanted = /^y/i.test(await ask(io, 'Use the relay? (y/n)', 'y'));
 	}
 	if (!wanted) return false;

@@ -2,7 +2,9 @@
 <html lang="%nolune.lang%">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<!-- cover: on an iPhone the page fills the screen, home indicator included, so the
+		     env(safe-area-inset-*) paddings (routes/+layout.svelte) can keep it clear. -->
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<meta name="text-scale" content="scale" />
 		%sveltekit.head%
 	</head>

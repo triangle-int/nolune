@@ -1,0 +1,430 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		69A05053C959656B2C8B88F1 /* Sky.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4CBB60BC4BC565CED7AE4D /* Sky.swift */; };
+		BF75C61ED3FF1D1DB47FBF10 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5AD3CE20E89735E4FCC0442 /* Theme.swift */; };
+		8F423AD0BB73F3CF01D1F54F /* Figtree.ttf in Resources */ = {isa = PBXBuildFile; fileRef = FF54697836A47F27BD0E144D /* Figtree.ttf */; };
+		95E8A6F78D0F93A6BD35366A /* OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 7DD8E182525E9028EE2D54F8 /* OFL.txt */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		159C05D04348C72B344DD450 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B088704C00453281B54502BE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4EECA88E608F628566EBBAF8;
+			remoteInfo = Nolune;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		1BF87FC737D2BC3276530DA1 /* Nolune.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nolune.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3C3E8DB76DE30F08DA20876F /* NoluneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NoluneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FE4CBB60BC4BC565CED7AE4D /* Sky.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Sky.swift; path = ../macos/Sources/Nolune/Sky.swift; sourceTree = SOURCE_ROOT; };
+		D5AD3CE20E89735E4FCC0442 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Theme.swift; path = ../macos/Sources/Nolune/Theme.swift; sourceTree = SOURCE_ROOT; };
+		FF54697836A47F27BD0E144D /* Figtree.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = Figtree.ttf; path = ../macos/Resources/Fonts/Figtree.ttf; sourceTree = SOURCE_ROOT; };
+		7DD8E182525E9028EE2D54F8 /* OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = OFL.txt; path = ../macos/Resources/Fonts/OFL.txt; sourceTree = SOURCE_ROOT; };
+		2E29FDADCE11CE5B06C9CB3C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		055903FB7AC9C8390FCCBC83 /* Nolune.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Nolune.entitlements; sourceTree = "<group>"; };
+		DE61A6F32BE83E4F44ACF024 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		6B386B30917B441E906CA517 /* Nolune */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Nolune;
+			sourceTree = "<group>";
+		};
+		92A3A45AE3361FB00FB6035B /* NoluneTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = NoluneTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		6399B85C575CC13283B23606 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		82D0AB0B603239CB1A57C9CC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		92A37F5CF73E08494295A184 = {
+			isa = PBXGroup;
+			children = (
+				DE61A6F32BE83E4F44ACF024 /* README.md */,
+				6B386B30917B441E906CA517 /* Nolune */,
+				F3166F77A4F4CFCF62BE9A96 /* Shared with macOS */,
+				872674A2D89FC3623617CCC7 /* Config */,
+				92A3A45AE3361FB00FB6035B /* NoluneTests */,
+				9548142E757D79D7A1C183CE /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9548142E757D79D7A1C183CE /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1BF87FC737D2BC3276530DA1 /* Nolune.app */,
+				3C3E8DB76DE30F08DA20876F /* NoluneTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		F3166F77A4F4CFCF62BE9A96 /* Shared with macOS */ = {
+			isa = PBXGroup;
+			children = (
+				FE4CBB60BC4BC565CED7AE4D /* Sky.swift */,
+				D5AD3CE20E89735E4FCC0442 /* Theme.swift */,
+				FF54697836A47F27BD0E144D /* Figtree.ttf */,
+				7DD8E182525E9028EE2D54F8 /* OFL.txt */,
+			);
+			name = "Shared with macOS";
+			sourceTree = "<group>";
+		};
+		872674A2D89FC3623617CCC7 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				2E29FDADCE11CE5B06C9CB3C /* Info.plist */,
+				055903FB7AC9C8390FCCBC83 /* Nolune.entitlements */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4EECA88E608F628566EBBAF8 /* Nolune */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 895C76F0E17BA9805EC3D643 /* Build configuration list for PBXNativeTarget "Nolune" */;
+			buildPhases = (
+				680CD50D35546E123DF7E764 /* Sources */,
+				6399B85C575CC13283B23606 /* Frameworks */,
+				50CA3AC35147A6C08710124C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				6B386B30917B441E906CA517 /* Nolune */,
+			);
+			name = Nolune;
+			packageProductDependencies = (
+			);
+			productName = Nolune;
+			productReference = 1BF87FC737D2BC3276530DA1 /* Nolune.app */;
+			productType = "com.apple.product-type.application";
+		};
+		3F49BFD06A3E8B16C0A773F7 /* NoluneTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A5C59AA1E5AC6A1AF72054B3 /* Build configuration list for PBXNativeTarget "NoluneTests" */;
+			buildPhases = (
+				0854E1F9F7D0D5EC270B5DBC /* Sources */,
+				82D0AB0B603239CB1A57C9CC /* Frameworks */,
+				3DCC7F8753D18F766C1D771A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				02F44B2CEC65801AB4A2F908 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				92A3A45AE3361FB00FB6035B /* NoluneTests */,
+			);
+			name = NoluneTests;
+			packageProductDependencies = (
+			);
+			productName = NoluneTests;
+			productReference = 3C3E8DB76DE30F08DA20876F /* NoluneTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B088704C00453281B54502BE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					4EECA88E608F628566EBBAF8 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					3F49BFD06A3E8B16C0A773F7 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = 4EECA88E608F628566EBBAF8;
+					};
+				};
+			};
+			buildConfigurationList = 065C851EE281B43C958B6AD9 /* Build configuration list for PBXProject "Nolune" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				de,
+				es,
+				fr,
+				ru,
+			);
+			mainGroup = 92A37F5CF73E08494295A184;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 9548142E757D79D7A1C183CE /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4EECA88E608F628566EBBAF8 /* Nolune */,
+				3F49BFD06A3E8B16C0A773F7 /* NoluneTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		50CA3AC35147A6C08710124C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8F423AD0BB73F3CF01D1F54F /* Figtree.ttf in Resources */,
+				95E8A6F78D0F93A6BD35366A /* OFL.txt in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3DCC7F8753D18F766C1D771A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		680CD50D35546E123DF7E764 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				69A05053C959656B2C8B88F1 /* Sky.swift in Sources */,
+				BF75C61ED3FF1D1DB47FBF10 /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0854E1F9F7D0D5EC270B5DBC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		02F44B2CEC65801AB4A2F908 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4EECA88E608F628566EBBAF8 /* Nolune */;
+			targetProxy = 159C05D04348C72B344DD450 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		F43087893A028660D8E5F94A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		61CA42EA460B4BD29E6E44ED /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		FB2BA525321163A609C8D3D6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Nolune.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = nolune;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.nolune.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		701223E6E6B91415C69096C0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Config/Nolune.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = nolune;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.nolune.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		FEB03F98E6291DAF25FCF44A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.nolune.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nolune.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Nolune";
+			};
+			name = Debug;
+		};
+		C097AD412246DC270280A867 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.nolune.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Nolune.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Nolune";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		065C851EE281B43C958B6AD9 /* Build configuration list for PBXProject "Nolune" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F43087893A028660D8E5F94A /* Debug */,
+				61CA42EA460B4BD29E6E44ED /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		895C76F0E17BA9805EC3D643 /* Build configuration list for PBXNativeTarget "Nolune" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FB2BA525321163A609C8D3D6 /* Debug */,
+				701223E6E6B91415C69096C0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A5C59AA1E5AC6A1AF72054B3 /* Build configuration list for PBXNativeTarget "NoluneTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FEB03F98E6291DAF25FCF44A /* Debug */,
+				C097AD412246DC270280A867 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B088704C00453281B54502BE /* Project object */;
+}
