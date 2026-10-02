@@ -164,19 +164,21 @@ function event(type: string, object: object): Stripe.Event {
 	return { id: `evt_${type}`, object: 'event', type, data: { object } } as unknown as Stripe.Event;
 }
 
+/** As Stripe sends it: the subscription's metadata (the userId Checkout put there) comes along. */
 const invoicePaid = (
 	id: string,
 	subscription: string,
-	billingReason: Stripe.Invoice.BillingReason = 'subscription_create'
+	billingReason: Stripe.Invoice.BillingReason = 'subscription_create',
+	{ customer = 'cus_1', userId }: { customer?: string; userId?: string } = {}
 ) =>
 	event('invoice.paid', {
 		id,
 		object: 'invoice',
 		billing_reason: billingReason,
-		customer: 'cus_1',
+		customer,
 		parent: {
 			type: 'subscription_details',
-			subscription_details: { subscription, metadata: {} }
+			subscription_details: { subscription, metadata: userId ? { userId } : {} }
 		}
 	});
 
@@ -409,8 +411,43 @@ describe("Stripe's events", () => {
 			periodEnd: t0 + 30 * DAY,
 			userId: person.id
 		});
-		await billing.handle(invoicePaid('in_1', 'sub_1'));
+		await billing.handle(
+			invoicePaid('in_1', 'sub_1', 'subscription_create', {
+				customer: 'cus_elsewhere',
+				userId: person.id
+			})
+		);
 		expect((await readAccount(db, person.id))?.limits.week).toBe(8_750_000);
+	});
+
+	it('pass over what the account sells besides nolune, without asking Stripe or warning', async () => {
+		const { db, billing, stripe, person, warnings } = await setUp();
+		// Another product's subscription and payment: a customer nobody here is, no userId.
+		await billing.handle(
+			invoicePaid('in_other', 'sub_other', 'subscription_cycle', { customer: 'cus_other' })
+		);
+		await billing.handle(
+			event('checkout.session.completed', {
+				id: 'cs_other',
+				mode: 'payment',
+				payment_status: 'paid',
+				customer: 'cus_other',
+				client_reference_id: 'someone-elses-user',
+				metadata: {}
+			})
+		);
+		await billing.handle(
+			event('customer.subscription.deleted', {
+				id: 'sub_other',
+				object: 'subscription',
+				customer: 'cus_other',
+				status: 'canceled',
+				metadata: {}
+			})
+		);
+		expect(stripe.calls).toEqual([]);
+		expect(warnings).toEqual([]);
+		expect(await readAccount(db, person.id)).toBeNull();
 	});
 
 	it('add a pack once its Checkout is paid, and keep it when the plan ends', async () => {

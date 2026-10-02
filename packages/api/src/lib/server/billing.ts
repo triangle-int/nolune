@@ -309,6 +309,10 @@ export class Billing {
 		const ref = invoice.parent?.subscription_details?.subscription;
 		const subscriptionId = typeof ref === 'string' ? ref : ref?.id;
 		if (!subscriptionId || !invoice.id) return;
+		// The account sells other things too, whose invoices come here as well: nolune's are those
+		// whose subscription says whose it is (Checkout puts it there), or whose customer is kept.
+		const hint = invoice.parent?.subscription_details?.metadata?.userId;
+		if (!(await this.userOf(invoice.customer, hint))) return;
 		// A new subscription's first period and each one after; a prorated change of tier is for
 		// when there's more than one.
 		if (
@@ -355,6 +359,12 @@ export class Billing {
 	/** A pack paid for: its credits, for as long as it lasts. */
 	private async checkoutPaid(session: Stripe.Checkout.Session): Promise<void> {
 		if (session.mode !== 'payment' || session.payment_status !== 'paid') return;
+		// Someone's here, or the payment is for something else the account sells.
+		const userId = await this.userOf(
+			session.customer,
+			session.client_reference_id ?? session.metadata?.userId
+		);
+		if (!userId) return;
 		const { data: items } = await this.stripe.checkout.sessions.listLineItems(session.id, {
 			expand: ['data.price.product']
 		});
@@ -367,14 +377,6 @@ export class Billing {
 			days = Math.max(days, offer.expiresInDays);
 		}
 		if (!credits) return;
-		const userId = await this.userOf(
-			session.customer,
-			session.client_reference_id ?? session.metadata?.userId
-		);
-		if (!userId) {
-			this.log.warn(`[nolune api] nobody is ${String(session.customer)}, paying ${session.id}`);
-			return;
-		}
 		const now = this.now();
 		await updateAccount(this.db, userId, (account) =>
 			addExtra(account ?? noPlan(now), {

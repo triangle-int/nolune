@@ -2408,7 +2408,10 @@ Triangle Interactive, LLC sells the plan, through Stripe.
   `customer.subscription.deleted`, sent when a cancelled subscription runs out, ends the plan
   unless another subscription holds it. Each event is checked by its signature, and each grant is
   keyed by what paid for it (the invoice, the Checkout Session), so an event Stripe sends twice
-  grants once. Events come in the endpoint's API version, else the account's default
+  grants once. The account sells Gensprite too, and the endpoint hears its events as well: an
+  event is nolune's when its subscription or Checkout says whose it is (`userId`, which Checkout
+  puts in both), or its customer is one the API keeps; the rest are passed over before Stripe is
+  asked anything, and logged nowhere. Events come in the endpoint's API version, else the account's default
   (`2026-01-28.clover` in October 2026); what the API reads of them is the same in both. Checked
   end to end in test mode: Checkout for the plan and a pack, cancelling in the portal, a
   subscription's end, and on a test clock a renewal, a failed payment and its recovery.
