@@ -120,7 +120,9 @@ a gigabyte of memory, and a 1 GB server running the relay has about half that fr
 kernel could stop the relay to make room. GitHub Actions builds it on each change
 (`.github/workflows/api-image.yml`) into `ghcr.io/triangle-int/nolune-api`, and the server pulls
 it: `latest` from `main`, a branch's own tag (`claude-nolune-plan-design`), and each commit's
-(`sha-1234567`).
+(`sha-1234567`). The package is public, as the repository is, so the server pulls it without signing
+in; GitHub makes a new package private, which its settings change (Change visibility). The
+image is `linux/amd64`, for the relay's server.
 
 1. **DNS.** An A (and AAAA) record for `api.nolune.dev`, **DNS only** like the others. The
    Cloudflare token edits `nolune.dev` already, which Caddy needs for the API's certificate too
