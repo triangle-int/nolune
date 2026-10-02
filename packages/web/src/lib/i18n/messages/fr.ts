@@ -315,6 +315,11 @@ export const fr: Messages = {
 			'Certaines images et certains PDF de cette discussion ne passent pas à un autre fournisseur : le nouveau modèle reçoit l’emplacement de leurs fichiers et peut les regarder à nouveau.',
 		switch: 'Changer',
 		change: 'Modifier',
+		compact: 'Résumer la discussion',
+		compactTitle: 'Résumer la discussion ?',
+		compactBody: (tokens: string | null) =>
+			`Le modèle écrit un court résumé de la discussion jusqu’ici et continue à partir de celui-ci : chaque réponse lit moins${tokens ? ` (environ ${tokens} tokens actuellement)` : ''}. Tout le monde voit toujours la discussion en entier, mais le modèle peut oublier les détails absents du résumé.`,
+		compactAction: 'Résumer',
 		models: (models: string[]) => models.join(', puis '),
 		usage: 'Consommation',
 		tokensInOut: (input: string, output: string) =>
@@ -346,6 +351,8 @@ export const fr: Messages = {
 		summarized: 'A résumé la conversation jusqu’ici',
 		summaryHint:
 			'La conversation était devenue trop longue pour le modèle : il continue à partir de ce résumé.',
+		summaryAsked:
+			'Quelqu’un dans la discussion a demandé ce résumé : le modèle continue à partir de celui-ci.',
 		running: (command: string) => `Exécution de ${command}`,
 		runningACommand: 'Exécution d’une commande',
 		ranACommand: 'A exécuté une commande',

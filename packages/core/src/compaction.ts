@@ -1,5 +1,11 @@
 import { supportsCompaction } from './anthropic.ts';
-import { compactedFrom, type Conversation, type MessageRow, type Usage } from './conversations.ts';
+import {
+	compactedFrom,
+	compactionSummary,
+	type Conversation,
+	type MessageRow,
+	type Usage
+} from './conversations.ts';
 import type { ModelReply, Provider } from './models.ts';
 import { isAgentPlan } from './plans.ts';
 import { promptTokens } from './usage.ts';
@@ -64,11 +70,30 @@ export function needsCompaction(
 	return promptTokens(usage) + usage.output >= COMPACT_SHARE * window;
 }
 
-/** What the runner asks the chat's model, as one more message after the conversation. */
-export const SUMMARY_REQUEST = `[This conversation has grown too long for your context window, so it is being summarized now. The summary will take the place of everything above, which you won't see again. Don't run any commands: reply only with the summary, in the conversation's language. Write down everything you will need to go on as if nothing was lost: who asked for what and what they prefer, what was done and found, decisions made, the state of any work in progress and its next steps, and the exact details (names, paths, numbers, commands). Wrap the summary in <summary></summary>.]`;
+/**
+ * What the runner asks the chat's model, as one more message after the conversation: because the
+ * conversation nears its window, or because someone in the chat asked for it (`asked`).
+ */
+export function summaryRequest(asked: boolean): string {
+	const why = asked
+		? 'Someone in the chat asked to summarize the conversation so far, so it is being summarized now.'
+		: 'This conversation has grown too long for your context window, so it is being summarized now.';
+	return `[${why} The summary will take the place of everything above, which you won't see again. Don't run any commands: reply only with the summary, in the conversation's language. Write down everything you will need to go on as if nothing was lost: who asked for what and what they prefer, what was done and found, decisions made, the state of any work in progress and its next steps, and the exact details (names, paths, numbers, commands). Wrap the summary in <summary></summary>.]`;
+}
 
 /**
- * The summary in the model's reply to SUMMARY_REQUEST, or null if it didn't write one. Without the
+ * Whether there's anything to summarize: a reply since the latest summary. The one that starts with
+ * Claude's summary doesn't count.
+ */
+export function hasNewReplies(rows: MessageRow[]): boolean {
+	const from = compactedFrom(rows);
+	const cut = rows[from];
+	const since = cut && compactionSummary(cut) !== null ? rows.slice(from + 1) : rows;
+	return since.some((row) => row.role === 'assistant');
+}
+
+/**
+ * The summary in the model's reply to summaryRequest, or null if it didn't write one. Without the
  * tags, the whole reply, unless the model went on to run a command: then its text was only what
  * it said first.
  */

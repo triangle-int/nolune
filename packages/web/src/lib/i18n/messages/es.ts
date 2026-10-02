@@ -322,6 +322,11 @@ export const es: Messages = {
 			'Algunas imágenes y PDF de este chat no pasan a otro proveedor: el nuevo modelo recibe dónde están sus archivos y puede volver a mirarlos.',
 		switch: 'Cambiar',
 		change: 'Cambiar',
+		compact: 'Resumir el chat',
+		compactTitle: '¿Resumir el chat?',
+		compactBody: (tokens: string | null) =>
+			`El modelo escribe un breve resumen del chat hasta ahora y continúa a partir de él, así que cada respuesta lee menos${tokens ? ` (ahora unos ${tokens} tokens)` : ''}. Todos siguen viendo el chat completo, pero el modelo puede olvidar detalles que el resumen no incluya.`,
+		compactAction: 'Resumir',
 		models: (models: string[]) => models.join(', luego '),
 		usage: 'Uso',
 		tokensInOut: (input: string, output: string) =>
@@ -353,6 +358,7 @@ export const es: Messages = {
 		summarized: 'Resumió la conversación hasta ahora',
 		summaryHint:
 			'La conversación se había vuelto demasiado larga para el modelo, así que continúa a partir de este resumen.',
+		summaryAsked: 'Alguien en el chat pidió este resumen: el modelo continúa a partir de él.',
 		running: (command: string) => `Ejecutando ${command}`,
 		runningACommand: 'Ejecutando un comando',
 		ranACommand: 'Ejecutó un comando',

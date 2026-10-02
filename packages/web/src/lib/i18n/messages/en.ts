@@ -230,6 +230,11 @@ export const en = {
 			"Some pictures and PDFs in this chat don't carry over to another provider: the new model gets where their files are, and can look at them again.",
 		switch: 'Switch',
 		change: 'Change',
+		compact: 'Summarize the chat',
+		compactTitle: 'Summarize the chat?',
+		compactBody: (tokens: string | null) =>
+			`The model writes a short summary of the chat so far and goes on from it, so each reply reads less${tokens ? ` (about ${tokens} tokens now)` : ''}. Everyone still sees the whole chat, but the model may forget details the summary leaves out.`,
+		compactAction: 'Summarize',
 		/** The models that wrote a reply, in order. */
 		models: (models: string[]) => models.join(', then '),
 		usage: 'Usage',
@@ -260,6 +265,7 @@ export const en = {
 		summarizing: 'Summarizing the conversation so far',
 		summarized: 'Summarized the conversation so far',
 		summaryHint: 'The chat had grown too long for the model, so it goes on from this summary.',
+		summaryAsked: 'Someone in the chat asked for this summary: the model goes on from it.',
 		running: (command: string) => `Running ${command}`,
 		runningACommand: 'Running a command',
 		ranACommand: 'Ran a command',

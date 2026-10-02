@@ -200,9 +200,11 @@ export {
 	type MediaRow
 } from './media.ts';
 export {
+	CompactionError,
 	changeCommandMode,
 	changeEffort,
 	changeModel,
+	compactConversation,
 	getSnapshot,
 	isRunning,
 	kick,

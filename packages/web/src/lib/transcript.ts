@@ -86,6 +86,11 @@ export type Entry =
 	  }
 	| { type: 'task_result'; key: string; message: Extract<DisplayMessage, { kind: 'task_result' }> }
 	| { type: 'memory'; key: string; look: DisplayMemoryLook }
+	/**
+	 * A summary of the conversation someone asked for after a reply, rather than one the model
+	 * needed in the middle of its work (a step of that work). `live`: still being written.
+	 */
+	| { type: 'compaction'; key: string; summary: string; live: boolean }
 	| Reply;
 
 /** Messages that aren't nolune's: each one ends the reply before it. */
@@ -180,10 +185,16 @@ export function buildTranscript(
 		r.parts.push({ type: 'text', key: `${r.key}-${r.parts.length}`, text, ...media });
 	};
 
+	let previousKind: DisplayMessage['kind'] | null = null;
 	for (const message of messages) {
 		addLooks(message.id);
 		const entry = messageEntry(message);
-		if (entry) {
+		if (message.kind === 'compaction' && previousKind === 'assistant') {
+			const key = `m${message.id}`;
+			entries.push({ type: 'compaction', key, summary: message.summary, live: false });
+			reply = null;
+			anchor = key;
+		} else if (entry) {
 			reply = null;
 			anchor = String(message.id);
 			entries.push(entry);
@@ -222,12 +233,21 @@ export function buildTranscript(
 			if (last?.type === 'activity') last.endedAt = Math.max(last.endedAt, message.createdAt);
 		}
 		previousAt = message.createdAt;
+		previousKind = message.kind;
 	}
 
 	addLooks(Infinity);
 
 	const streaming = live.filter((b): b is LiveBlock => b !== null);
-	if (streaming.length || running) {
+	if (
+		previousKind === 'assistant' &&
+		streaming.length === 1 &&
+		streaming[0].type === 'compaction'
+	) {
+		// Someone asked for a summary after the reply: the model calls nothing else meanwhile.
+		const summary = streaming[0].text;
+		entries.push({ type: 'compaction', key: 'compaction-live', summary, live: running });
+	} else if (streaming.length || running) {
 		// While running, there is always a reply to show progress in, even before any output.
 		const r = openReply();
 		const now = Date.now();

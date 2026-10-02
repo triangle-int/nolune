@@ -632,12 +632,22 @@ conversation: a chat no longer stops for good when it outgrows its model.
   shows what the model reads now.
 - **Other models' chats are summarized by the runner**, before a call, when the latest call read
   and wrote 85% of the window or more (`needsCompaction`): it sends the conversation's next request
-  with one more message asking for a summary (`SUMMARY_REQUEST`), so the provider's cache holds all
+  with one more message asking for a summary (`summaryRequest`), so the provider's cache holds all
   the rest, and saves the summary as a `compaction` row, which the model reads as a message
   (`[Earlier in this conversation, summarized to fit the context window:]`). Never right after a
   summary (a window the summary itself doesn't leave room in would only get one after another),
   and never without a known window. A model that writes no summary ends the turn with an error,
   as a failed call does.
+- **On request.** Anyone in the chat can have the model summarize it now, from the chat's menu
+  (Summarize the chat, after a dialog saying what that does; `POST /api/c/<id>/compact`,
+  `compactConversation`): the runner's summary, on any model, Claude's included, whatever the
+  window, with an ask that says someone asked (`summaryRequest`). It runs like a turn of the agent:
+  everyone with the chat open sees it, Stop ends it, and messages sent meanwhile start a turn once
+  it's done, from the summary. Not while the agent works, not on the Claude plan or in a
+  subagent's chat, and only with a reply since the latest summary. Asked for after a reply, it
+  needs no answer of its own (`awaitsReply`: a summary at the end counts as what came before it,
+  so Continue doesn't answer it), and the chat shows it as a card of its own rather than a step of
+  that reply. The context meter then shows the summary's size until the next call.
 - **Switching models** keeps the summary: Claude's block goes back only to the model that wrote
   it, while it compacts on the server; any other model gets its text as a message before the
   reply (`withoutCompaction`). A chat that comes to a plan with history sends the transcript from

@@ -303,6 +303,11 @@ export const de: Messages = {
 			'Manche Bilder und PDFs in diesem Chat gehen nicht zu einem anderen Anbieter mit: Das neue Modell bekommt, wo ihre Dateien liegen, und kann sie sich noch einmal ansehen.',
 		switch: 'Wechseln',
 		change: 'Ändern',
+		compact: 'Chat zusammenfassen',
+		compactTitle: 'Chat zusammenfassen?',
+		compactBody: (tokens: string | null) =>
+			`Das Modell schreibt eine kurze Zusammenfassung des bisherigen Chats und macht damit weiter, sodass jede Antwort weniger liest${tokens ? ` (gerade etwa ${tokens} Tokens)` : ''}. Alle sehen weiterhin den ganzen Chat, aber Details, die nicht in der Zusammenfassung stehen, kann das Modell vergessen.`,
+		compactAction: 'Zusammenfassen',
 		models: (models: string[]) => models.join(', dann '),
 		usage: 'Verbrauch',
 		tokensInOut: (input: string, output: string) => `${input} Tokens rein, ${output} raus`,
@@ -333,6 +338,8 @@ export const de: Messages = {
 		summarized: 'Hat das Gespräch bisher zusammengefasst',
 		summaryHint:
 			'Der Chat war zu lang für das Modell geworden, deshalb macht es mit dieser Zusammenfassung weiter.',
+		summaryAsked:
+			'Jemand im Chat hat um diese Zusammenfassung gebeten: Das Modell macht mit ihr weiter.',
 		running: (command: string) => `Führt ${command} aus`,
 		runningACommand: 'Führt einen Befehl aus',
 		ranACommand: 'Hat einen Befehl ausgeführt',

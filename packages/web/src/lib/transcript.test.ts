@@ -130,6 +130,34 @@ describe('summaries of the conversation', () => {
 	});
 });
 
+describe('a summary someone asked for', () => {
+	it('stands on its own after the reply, while written and once saved', () => {
+		const before = [human(1, 'Files?'), said(2, 'Two.')];
+		const writing = buildTranscript(before, [{ type: 'compaction', text: '' }], true);
+		expect(writing.map((entry) => entry.type)).toEqual(['human', 'reply', 'compaction']);
+		expect(writing[2]).toMatchObject({ summary: '', live: true });
+
+		const saved = buildTranscript(
+			[
+				...before,
+				{ id: 3, kind: 'compaction', summary: 'Anna asked.', usage: null, createdAt: 3 },
+				human(4, 'More?'),
+				said(5, 'Sure.')
+			],
+			[],
+			false
+		);
+		expect(saved.map((entry) => entry.type)).toEqual([
+			'human',
+			'reply',
+			'compaction',
+			'human',
+			'reply'
+		]);
+		expect(saved[2]).toMatchObject({ summary: 'Anna asked.', live: false });
+	});
+});
+
 describe('resultStatus', () => {
 	const result = (output: string, isError: boolean) => ({ output, isError, pictures: [] });
 

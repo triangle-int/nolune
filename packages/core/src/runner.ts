@@ -23,6 +23,7 @@ import {
 } from './background.ts';
 import {
 	appendRow,
+	awaitsReply,
 	commitQueuedRows,
 	compactedFrom,
 	compactionSummary,
@@ -67,11 +68,12 @@ import {
 	type ToolResultBlock
 } from './format.ts';
 import {
-	SUMMARY_REQUEST,
 	compactsOnServer,
+	hasNewReplies,
 	needsCompaction,
 	serverCompactAt,
-	summaryOf
+	summaryOf,
+	summaryRequest
 } from './compaction.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import {
@@ -1180,22 +1182,23 @@ async function providerMessages(conv: Conversation, messages: Message[]): Promis
 
 /**
  * Has the chat's model summarize the conversation, which would soon outgrow its context window
- * (compaction.ts), and saves the summary as a row of its own: the model calls after it start
- * there. The request is the conversation's next one with the ask at the end, so the provider's
- * cache still holds all the rest. The chat shows it as a step while the model writes. False when
- * the loop should end: stopped, or failed with `st.error`.
+ * or someone asked to (`asked`, compactConversation), and saves the summary as a row of its own:
+ * the model calls after it start there (compaction.ts). The request is the conversation's next one
+ * with the ask at the end, so the provider's cache still holds all the rest. The chat shows it as a
+ * step while the model writes. False when the loop should end: stopped, or failed with `st.error`.
  */
 async function compact(
 	conv: Conversation,
 	rows: MessageRow[],
 	st: State,
-	abort: AbortController
+	abort: AbortController,
+	asked = false
 ): Promise<boolean> {
 	const conversationId = conv.id;
 	const block: LiveBlock = { type: 'compaction', text: '' };
 	st.live = [block];
 	emit(conversationId, { type: 'live_block', index: 0, block });
-	const ask: Message = { role: 'user', blocks: [{ type: 'text', text: SUMMARY_REQUEST }] };
+	const ask: Message = { role: 'user', blocks: [{ type: 'text', text: summaryRequest(asked) }] };
 	let reply: ModelReply;
 	try {
 		reply = await streamTurn({
@@ -1225,7 +1228,9 @@ async function compact(
 	);
 	if (!summary) {
 		clearLive(conversationId);
-		st.error = `${conv.presetName} didn't write the summary this chat needs to fit its context window. Try again, or switch to a model with a larger one.`;
+		st.error = asked
+			? `${conv.presetName} didn't write a summary of the chat. Try again.`
+			: `${conv.presetName} didn't write the summary this chat needs to fit its context window. Try again, or switch to a model with a larger one.`;
 		return false;
 	}
 	const row = appendRow({
@@ -1241,6 +1246,63 @@ async function compact(
 	emit(conversationId, { type: 'message', message: toDisplay(row), replacesLive: true });
 	touchConversation(conversationId);
 	return true;
+}
+
+/** Why a chat can't be summarized now, in words for the person who asked. */
+export class CompactionError extends Error {}
+
+/**
+ * Summarizes the conversation now, as the runner does by itself once it nears the model's window
+ * (compaction.ts), because someone in the chat asked to: the model calls after it start from the
+ * summary. It runs like a turn of the agent, which Stop ends, for everyone who has the chat open;
+ * messages sent meanwhile start a turn once it's done. Throws CompactionError when it can't: the
+ * agent is working, the chat is on the Claude plan (Claude Code summarizes its own sessions) or a
+ * subagent's, or nothing came since the latest summary.
+ */
+export function compactConversation(conversationId: string): void {
+	const st = stateFor(conversationId);
+	const stored = getConversation(conversationId);
+	if (!stored) throw new CompactionError('This chat no longer exists.');
+	if (st.running) {
+		throw new CompactionError(
+			'nolune is working in this chat. Wait until it finishes, or stop it.'
+		);
+	}
+	if (isAgentPlan(stored.provider)) {
+		throw new CompactionError(
+			'Claude Code keeps chats on the Claude plan and summarizes them itself.'
+		);
+	}
+	if (isSubagentConversation(conversationId)) {
+		throw new CompactionError(
+			"This is a subagent's chat: only the agent that started it works on it."
+		);
+	}
+	const rows = committedRows(conversationId);
+	if (!hasNewReplies(rows)) throw new CompactionError('There is nothing new to summarize yet.');
+
+	const abort = new AbortController();
+	st.running = true;
+	st.error = null;
+	st.stoppedBy = null;
+	st.abort = abort;
+	emit(conversationId, { type: 'status', running: true, error: null });
+	runningChanged(conversationId, true);
+	compact(withCurrentContext(stored, rows), rows, st, abort, true)
+		.catch((err: unknown) => {
+			console.error(`[nolune] ${conversationId.slice(0, 8)} summarizing crashed:`, err);
+			st.error = err instanceof Error ? err.message : String(err);
+		})
+		.finally(() => {
+			st.running = false;
+			st.abort = null;
+			st.live = [];
+			st.toolOutput = null;
+			emit(conversationId, { type: 'status', running: false, error: st.error });
+			runningChanged(conversationId, false);
+			// Not a turn: nothing that waits for the agent's turn to end is told.
+			if (queuedRows(conversationId).length) kick(conversationId);
+		});
 }
 
 async function loop(conversationId: string): Promise<void> {
@@ -1259,7 +1321,7 @@ async function loop(conversationId: string): Promise<void> {
 			if (!stored) return;
 			commitQueued(conversationId);
 			const rows = committedRows(conversationId);
-			if (rows.at(-1)?.role !== 'user') return;
+			if (!awaitsReply(rows)) return;
 			countBlocksFrom(st, rows);
 			// The agent went on calling commands after auto mode told it to stop, and nobody has
 			// said anything since.
