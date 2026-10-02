@@ -399,6 +399,10 @@ export const ru: Messages = {
 	steps: {
 		thinking: 'Думает',
 		thinkingDots: 'Думает…',
+		summarizing: 'Кратко пересказывает разговор',
+		summarized: 'Кратко пересказал разговор',
+		summaryHint:
+			'Разговор стал слишком длинным для модели, поэтому дальше она опирается на этот пересказ.',
 		running: (command: string) => `Выполняет ${command}`,
 		runningACommand: 'Выполняет команду',
 		ranACommand: 'Выполнил команду',

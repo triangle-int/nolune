@@ -1,6 +1,13 @@
 import type { DisplayMemoryLook, DisplayMessage } from '@nolune/core';
 import { describe, expect, it } from 'vitest';
-import { buildTranscript, resultStatus } from './transcript';
+import type { Messages } from './i18n';
+import {
+	activeStepLabel,
+	buildTranscript,
+	resultStatus,
+	type ActivityPart,
+	type Reply
+} from './transcript';
 
 const human = (id: number, text: string): DisplayMessage => ({
 	id,
@@ -69,6 +76,57 @@ describe('what the note-taker saved', () => {
 		]);
 		expect(entries.map((entry) => entry.type)).toEqual(['human', 'reply', 'memory', 'reply']);
 		expect(new Set(entries.map((entry) => entry.key)).size).toBe(entries.length);
+	});
+});
+
+describe('summaries of the conversation', () => {
+	const usage = (input: number, output: number) => ({ input, cacheRead: 0, cacheWrite: 0, output });
+	const m = { steps: { summarizing: 'Summarizing' } } as unknown as Messages;
+
+	it("show as a step of nolune's work, with what writing them took", () => {
+		const messages: DisplayMessage[] = [
+			human(1, 'Files?'),
+			// The runner's, before the reply…
+			{ id: 2, kind: 'compaction', summary: 'Anna asked.', usage: usage(10, 3), createdAt: 2 },
+			// …or Claude's, starting it.
+			{
+				id: 3,
+				kind: 'assistant',
+				blocks: [
+					{ type: 'compaction', summary: 'Anna asked again.' },
+					{ type: 'text', text: 'Two.' }
+				],
+				media: {},
+				stopReason: 'end_turn',
+				usage: { ...usage(5, 1), compaction: usage(100, 20) },
+				provider: null,
+				model: null,
+				createdAt: 3
+			}
+		];
+		const [, reply] = buildTranscript(messages, [], false);
+		expect(reply).toMatchObject({
+			type: 'reply',
+			parts: [
+				{
+					type: 'activity',
+					steps: [
+						{ type: 'compaction', summary: 'Anna asked.' },
+						{ type: 'compaction', summary: 'Anna asked again.' }
+					]
+				},
+				{ type: 'text', text: 'Two.' }
+			],
+			usage: usage(115, 24)
+		});
+	});
+
+	it('say so while the model is writing one', () => {
+		const entries = buildTranscript([human(1, 'Files?')], [{ type: 'compaction', text: '' }], true);
+		const reply = entries[1] as Reply;
+		const part = reply.parts[0] as ActivityPart;
+		expect(part.steps).toEqual([{ type: 'compaction', summary: '' }]);
+		expect(activeStepLabel(part, {}, false, m)).toBe('Summarizing');
 	});
 });
 

@@ -370,10 +370,19 @@ export const message = sqliteTable(
 		/**
 		 * Written by the gateway, not a person: `trigger`, the first message of a background run;
 		 * `agent_message`, a subagent's task or a steer from the agent that started it;
-		 * `task_result`, what a background command printed, once it ended.
+		 * `task_result`, what a background command printed, once it ended; `compaction`, the chat's
+		 * model's summary of the conversation so far, which the requests after it start from.
 		 */
 		kind: text('kind', {
-			enum: ['human', 'trigger', 'agent_message', 'task_result', 'tool_results', 'assistant']
+			enum: [
+				'human',
+				'trigger',
+				'agent_message',
+				'task_result',
+				'compaction',
+				'tool_results',
+				'assistant'
+			]
 		}).notNull(),
 		senderId: text('sender_id').references(() => user.id, { onDelete: 'set null' }),
 		/**
@@ -383,7 +392,8 @@ export const message = sqliteTable(
 		senderName: text('sender_name'),
 		/**
 		 * What the human typed (without the "Name: " prefix). Trigger rows: the trigger's prompt.
-		 * Agent messages: what the agent wrote. Task results: the command's output.
+		 * Agent messages: what the agent wrote. Task results: the command's output. Compactions: the
+		 * summary.
 		 */
 		text: text('text'),
 		/**

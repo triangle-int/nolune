@@ -66,6 +66,15 @@ export interface ToolCallBlock {
 	input: unknown;
 }
 
+/**
+ * A reply's summary of the conversation before it, which Claude wrote on the server once the
+ * conversation neared its context window (compaction.ts): the requests after it start from here.
+ */
+export interface CompactionBlock {
+	type: 'compaction';
+	summary: string;
+}
+
 /** What a tool call printed, or that and the pictures it opened (`nolune view`). */
 export interface ToolResultBlock {
 	type: 'tool_result';
@@ -85,7 +94,14 @@ export interface OtherBlock {
 
 export type ResultBlock = TextBlock | ImageBlock | PdfBlock | OtherBlock;
 export type Block =
-	TextBlock | ImageBlock | PdfBlock | ReasoningBlock | ToolCallBlock | ToolResultBlock | OtherBlock;
+	| TextBlock
+	| ImageBlock
+	| PdfBlock
+	| ReasoningBlock
+	| ToolCallBlock
+	| CompactionBlock
+	| ToolResultBlock
+	| OtherBlock;
 
 /** A reply as its provider returned it. */
 export interface Native {
@@ -228,11 +244,11 @@ function str(value: unknown): string {
 	return typeof value === 'string' ? value : '';
 }
 
-export type ReplyBlock = TextBlock | ReasoningBlock | ToolCallBlock;
+export type ReplyBlock = TextBlock | ReasoningBlock | ToolCallBlock | CompactionBlock;
 
 /**
  * A reply in any provider's shape as nolune's blocks, in order: Anthropic's content blocks (`text`,
- * `thinking`, `tool_use`), OpenAI's output items (`message`, `reasoning`, `function_call`), or
+ * `thinking`, `tool_use`, `compaction`), OpenAI's output items (`message`, `reasoning`, `function_call`), or
  * OpenRouter's pieces: reasoning details (`reasoning.text`, `reasoning.summary`,
  * `reasoning.encrypted`) and tool calls (`function`) around a `text` block. They use different
  * type names, so no provider needs to be known. Anything else is skipped.
@@ -256,6 +272,10 @@ export function replyBlocks(content: unknown): ReplyBlock[] {
 					name: str(block.name),
 					input: block.input
 				});
+				break;
+			// Without a summary, the compaction failed and the API takes the block for nothing.
+			case 'compaction':
+				if (str(block.content)) blocks.push({ type: 'compaction', summary: str(block.content) });
 				break;
 			// OpenAI's Responses API
 			case 'message':
@@ -327,6 +347,22 @@ export function portableReply(blocks: Block[]): (TextBlock | ToolCallBlock)[] {
 	});
 }
 
+/**
+ * A reply without its compaction summary, for a model that gets the summary as a message instead
+ * (requestMessages): only Claude, with compaction on, takes the block itself.
+ */
+export function withoutCompaction(reply: Message): Message {
+	const native = reply.native && {
+		...reply.native,
+		content: reply.native.content.filter((b) => (b as Stored | null)?.type !== 'compaction')
+	};
+	return {
+		...reply,
+		blocks: reply.blocks.filter((b) => b.type !== 'compaction'),
+		...(native ? { native } : {})
+	};
+}
+
 /** Whether a picture or PDF is kept by another provider than `provider`, which can't open it. */
 export function heldElsewhere(block: ImageBlock | PdfBlock, provider: Provider): boolean {
 	return (
@@ -342,6 +378,17 @@ export function heldElsewhereNote(block: ImageBlock | PdfBlock): TextBlock {
 	return {
 		type: 'text',
 		text: `[${what} not shown: it went to the model this chat used before, and this model can't open that copy. The line before this says where its file is${block.type === 'image' ? '; `nolune view` shows it again' : ''}.]`
+	};
+}
+
+/**
+ * What a model reads of a summary of the conversation before it (compaction.ts): a message of its
+ * own, in place of everything it summarizes.
+ */
+export function compactionNote(summary: string): TextBlock {
+	return {
+		type: 'text',
+		text: `[Earlier in this conversation, summarized to fit the context window:]\n\n${summary}`
 	};
 }
 
