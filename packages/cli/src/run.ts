@@ -12,6 +12,7 @@ import {
 	INVITE_DAYS,
 	MAX_MEDIA_BYTES,
 	addPreset,
+	appManaged,
 	editPreset,
 	apiKeyStatuses,
 	checkApiKey,
@@ -26,8 +27,12 @@ import {
 	createUser,
 	deleteUser,
 	describeCommandSafety,
+	describeUpdates,
 	effectiveContextWindow,
 	findPreset,
+	forgetRelease,
+	idleCompactionChanged,
+	idleCompactionMinutes,
 	generatePassword,
 	getDb,
 	getDefaultPreset,
@@ -59,6 +64,7 @@ import {
 	removePreset,
 	saveApiKey,
 	saveCommandMode,
+	saveIdleCompaction,
 	saveCustomProvider,
 	saveSafetyPreset,
 	scanSkills,
@@ -68,6 +74,7 @@ import {
 	setSkillsEnabled,
 	splitModel,
 	updateConfig,
+	userPictureFile,
 	viewImage,
 	ViewLimitError,
 	type ApiKeyProvider,
@@ -79,13 +86,13 @@ import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
 import { planCommand, requireClaudePlan } from './plans.ts';
+import { MCP_HELP, mcpCommand } from './mcp.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { RELAY_HELP, RelayUnreachable, connectRelay, enableRelay, relayCommand } from './relay.ts';
 import { SOUL_HELP, soulCommand } from './soul.ts';
 import { TRIGGER_HELP, triggerCommand, wakeCommand } from './triggers.ts';
 import {
-	appManaged,
 	installService,
 	logFile,
 	renderServiceFile,
@@ -93,6 +100,7 @@ import {
 	serviceStatus,
 	uninstallService
 } from './service.ts';
+import { WEB_HELP, webCommand } from './web.ts';
 
 /** Built when shown, like generateHelp(): the gateway serves it for as long as it runs. */
 const help = () => `nolune - a family agent that runs on this computer
@@ -128,14 +136,22 @@ Settings (${paths.home})
                                              recommended). Not from the agent's own commands
   nolune config set safety-model <preset|chat>  the preset whose model does auto mode's checks, or
                                              chat for each chat's own model (the default)
-  nolune key set <anthropic|openai|openrouter|xai> [key]
+  nolune config set update-check <on|off>       on (the default): the gateway asks GitHub once a
+                                             day for nolune's newest release, and admins see when
+                                             there's one
+  nolune config set compact-when-idle <minutes|off>
+                                             summarize a chat after that many minutes without a
+                                             message, so its next reply reads less; off (the
+                                             default): only near the model's window, or on request
+  nolune key set <anthropic|openai|openrouter|xai|firecrawl> [key]
                                              store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures, xAI's
-                                             runs Grok. Admins can also do this on the web, under
+                                             runs Grok, Firecrawl's lifts the web search's daily
+                                             limit. Admins can also do this on the web, under
                                              Models & keys
-  nolune key rm <anthropic|openai|openrouter|xai>
+  nolune key rm <anthropic|openai|openrouter|xai|firecrawl>
                                              remove a stored key (the environment's is used, if set)
-  nolune env set <NAME> <value>                 extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
+  nolune env set <NAME> <value>                 extra env var for agent commands (e.g. HASS_TOKEN)
   nolune env rm <NAME> | nolune env list
 
 Custom providers (model servers of your own: Ollama, LM Studio, oMLX, vLLM, llama.cpp...)
@@ -178,7 +194,8 @@ Users (there's no sign-up page: admins add people here, or on the People page)
   nolune user passwd <name|email> [--password P]
   nolune user admin <name|email> [--off]
   nolune user rm <name|email>
-  nolune user list
+  nolune user list                              name, email, admin, and their picture's
+                                             file if they have one
 
 Model presets (shared by all profiles)
   nolune preset add <model> [--provider anthropic|openai|openrouter|xai|claude-plan|chatgpt-plan|nolune-plan|<custom>]
@@ -206,7 +223,9 @@ ${PROFILE_HELP}
   nolune skill new <name> [--description D] [--profile SLUG | --global]
   nolune skill list [--profile SLUG]
   nolune skill enable <name>... [--profile SLUG]
-  nolune skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
+  nolune skill disable <name>... [--profile SLUG]  leave out of the profile's chats
+
+${MCP_HELP}
 
 ${TRIGGER_HELP}
 
@@ -217,6 +236,8 @@ ${CARD_HELP}
 ${SOUL_HELP}
 
 ${generateHelp()}
+
+${WEB_HELP}
 
 Inside agent commands (NOLUNE_PROFILE is set, so --profile can be left out)
   nolune view <image>...                        show images to the agent: they're attached to the
@@ -443,7 +464,8 @@ could: \`nolune relay disable\` stops using it.`
 		: `The gateway listens on http://${current.host}:${port}. To reach it from outside your home, run
 \`nolune relay enable\` for an address through nolune's relay, or point a tunnel of your own at
 it (Tailscale Funnel, Cloudflare Tunnel, or a VPS) and set its URL with
-\`nolune config set origin https://...\`.`;
+\`nolune config set origin https://...\`. Notifications on the nolune app for iPhone only come
+through the relay.`;
 
 	io.log(`
 Done. Next:
@@ -478,7 +500,8 @@ async function setupRelay(
 How will your family open nolune? nolune's relay gives it an address like
 https://smiths.nolune.family that works on any device, at home or away, with no tunnel or
 port forwarding. It passes their traffic to this computer, and could see it, as any tunnel
-could. Or keep nolune to this computer, or give a URL of your own.`);
+could. Or keep nolune to this computer, or give a URL of your own: then the nolune app for
+iPhone gets no notifications, which only come through the relay.`);
 		wanted = /^y/i.test(await ask(io, 'Use the relay? (y/n)', 'y'));
 	}
 	if (!wanted) return false;
@@ -675,7 +698,9 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 						key.source === 'config' ? 'key set' : key.source === 'env' ? `key from ${key.env}` : '';
 					const shown = where
 						? `${where}${key.hint ? ` (…${key.hint})` : ''}`
-						: `no key (nolune key set ${key.provider})`;
+						: key.optional
+							? `no key: the free tier, limited per day (nolune key set ${key.provider})`
+							: `no key (nolune key set ${key.provider})`;
 					row(key.provider, shown);
 				}
 				const customs = listCustomProviders();
@@ -712,18 +737,20 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				row('images', `${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				row('embeddings', embeddingStatus());
 				row('commands', describeCommandSafety());
+				row('quiet chats', describeIdleCompaction());
 				row('env', Object.keys(config.commandEnv ?? {}).join(', ') || '-');
+				row('version', describeUpdates());
 				return;
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model> <value>]'
+					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model|update-check|compact-when-idle> <value>]'
 				);
 			}
 			const key = positional(
 				rest,
 				0,
-				'host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model'
+				'host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model|update-check|compact-when-idle'
 			);
 			if (key === 'command-mode' || key === 'safety-model') {
 				// Auto mode guards against the agent itself, so it can't be the one to turn it off.
@@ -749,6 +776,33 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 					saveSafetyPreset(id);
 				}
 				io.log(`Commands: ${describeCommandSafety()}.`);
+				return;
+			}
+			if (key === 'update-check') {
+				const on = positional(rest, 1, 'on|off');
+				if (on !== 'on' && on !== 'off') fail('update-check is on or off');
+				updateConfig((c) => {
+					if (on === 'on') delete c.updateCheck;
+					else c.updateCheck = false;
+				});
+				// What GitHub said last would go stale: the app's menu reads it too.
+				if (on === 'off') forgetRelease();
+				io.log(
+					on === 'on'
+						? 'nolune will look for a new release within the hour, then once a day.'
+						: 'nolune won’t look for new releases.'
+				);
+				return;
+			}
+			if (key === 'compact-when-idle') {
+				const value = positional(rest, 1, 'minutes|off');
+				try {
+					saveIdleCompaction(value === 'off' ? null : Number(value));
+				} catch (err) {
+					fail(`${(err as Error).message}, or off.`);
+				}
+				idleCompactionChanged();
+				io.log(`Quiet chats: ${describeIdleCompaction()}.`);
 				return;
 			}
 			if (key === 'embeddings') {
@@ -780,7 +834,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				} else if (key === 'claude-path') c.claudePath = value;
 				else
 					fail(
-						'you can set host, port, origin, image-model, embeddings, claude-path, command-mode or safety-model'
+						'you can set host, port, origin, image-model, embeddings, claude-path, command-mode, safety-model, update-check or compact-when-idle'
 					);
 			});
 			if (key === 'claude-path') {
@@ -925,7 +979,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Works once, within ${INVITE_DAYS} days. Take it back on the People page.`);
 			} else if (action === 'list') {
 				for (const u of listUsers()) {
-					io.log(`${u.name}\t${u.email}${u.isAdmin ? '\tadmin' : ''}`);
+					// Their picture's file last, for the macOS app's menu.
+					const picture = u.picture ? userPictureFile(u.picture) : null;
+					const fields = [u.name, u.email, u.isAdmin && 'admin', picture?.path];
+					io.log(fields.filter(Boolean).join('\t'));
 				}
 			} else fail('usage: nolune user create|invite|passwd|admin|rm|list');
 			return;
@@ -1017,7 +1074,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Created ${location}`);
 				if (slug && getProfileBySlug(slug)?.disabledSkills.includes(name)) {
 					io.log(
-						`"${name}" is turned off in this profile, so new chats won't list it. Turn it on with \`nolune skill enable ${name}\`.`
+						`"${name}" is turned off in this profile, so its chats won't list it. Turn it on with \`nolune skill enable ${name}\`.`
 					);
 				}
 			} else if (action === 'list') {
@@ -1058,6 +1115,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			return;
 		}
 
+		case 'mcp':
+			requireInit();
+			return mcpCommand(io, action, rest);
+
 		case 'trigger':
 			requireInit();
 			return triggerCommand(io, action, rest);
@@ -1084,6 +1145,9 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 
 		case 'generate':
 			return generateCommand(io, action, rest);
+
+		case 'web':
+			return webCommand(io, action, rest);
 
 		case 'view': {
 			const dir = io.env.NOLUNE_VIEW_DIR;
@@ -1112,4 +1176,12 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		default:
 			fail(`unknown command "${group}". See \`nolune help\`.`);
 	}
+}
+
+/** After how many quiet minutes chats are summarized, in words. */
+function describeIdleCompaction(): string {
+	const minutes = idleCompactionMinutes();
+	return minutes
+		? `summarized after ${minutes} minute${minutes === 1 ? '' : 's'} without a message`
+		: 'summarized only near the window, or on request';
 }

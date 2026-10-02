@@ -20,15 +20,15 @@
 	// Picking another language reloads the page, so this holds for the page's life.
 	setI18n(untrack(() => data.locale));
 
-	// What others change while the page is open: notifications, profile names and avatars, and the
-	// nolune plan's limits.
+	// What others change while the page is open: notifications, profile names and avatars, the
+	// nolune plan's limits, and for admins, a new release.
 	const signedIn = $derived(!!data.user);
 	$effect(() => {
 		if (!signedIn) return;
 		const source = new EventSource('/api/events');
 		source.onmessage = (event) => {
 			const { type } = JSON.parse(event.data) as {
-				type: 'notifications' | 'profiles' | 'nolune-plan';
+				type: 'notifications' | 'profiles' | 'nolune-plan' | 'update';
 			};
 			if (type === 'nolune-plan') void planUsage.refresh();
 			invalidate(`nolune:${type}`);
@@ -79,7 +79,15 @@
 <ModeWatcher />
 
 <Tooltip.Provider delayDuration={300}>
-	<div class="h-dvh">
+	<!--
+		Clear of what an iPhone draws over the page (app.html): below the status bar and, in
+		landscape, beside the notch, with the page's color around it. The bottom is each page's own:
+		the sidebar, the composer and the end of what scrolls pad themselves above the home
+		indicator, so the page still runs under it.
+	-->
+	<div
+		class="h-dvh pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]"
+	>
 		{@render children()}
 	</div>
 </Tooltip.Provider>

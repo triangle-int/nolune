@@ -22,6 +22,12 @@ browser ──HTTPS──▶ Caddy ──▶ relay ══ WebSocket (HTTP/2 insi
   streamed both ways (uploads, downloads, event streams). The relay sets `X-Forwarded-For`,
   `-Proto` and `-Host` itself and drops what the browser sent in them. WebSocket upgrades aren't
   passed on: nolune's pages use event streams.
+- **Notifications on iPhones.** Apple only takes notifications for nolune's iOS app (`ios/`) from
+  whoever holds the app's key, so the relay holds it and gateways send through it:
+  `POST /api/gateways/<name>/push` with the gateway's token, naming the family's iPhones by the
+  tokens Apple gave them. The relay passes each notification on to Apple (`src/push.ts`) and keeps
+  none of it, and answers with the iPhones Apple says are gone, which the gateway then forgets.
+  Without the key it answers 501, and the gateway sends nothing.
 - **Opened in a browser.** The relay's host and the domain without a name (`relay.nolune.dev`,
   `nolune.family`) send people to the site; `/api/health` answers `ok`, for monitoring.
 - **When a gateway isn't there.** For 15 seconds after a gateway leaves (a restart, a new
@@ -36,15 +42,16 @@ browser ──HTTPS──▶ Caddy ──▶ relay ══ WebSocket (HTTP/2 insi
   relay keeps what one person can take in check. Each address may pass 30 GB a month through the
   relay, both ways, counted by calendar month in UTC; a family rarely comes near it. Past it, the
   address shows a page saying its traffic is used up until the 1st, and `nolune relay status` says
-  so. Each network (an IPv4 address, or an IPv6 /64) may register 10 addresses an hour and have 10
-  at once. Names that belong to a site, like `www`, `api` or `login`, are reserved
-  (`src/names.ts`).
+  so. Each address may send 600 notifications an hour, one for each iPhone. Each network (an IPv4
+  address, or an IPv6 /64) may register 10 addresses an hour and have 10 at once. Names that
+  belong to a site, like `www`, `api` or `login`, are reserved (`src/names.ts`).
 
 ## Privacy
 
 TLS ends at the relay, as it does at any tunnel provider (ngrok, Cloudflare Tunnel): whoever runs
 the relay could read what passes through. The relay keeps none of it; it logs only registrations
-and gateways connecting and leaving. Families who'd rather no one in between could read their
+and gateways connecting and leaving. The same goes for notifications on their way to Apple, which
+carry their title and text, as notifications from any app do. Families who'd rather no one in between could read their
 traffic use a tunnel they run themselves, or run their own relay (`nolune relay enable --server`).
 
 ## Running it
@@ -89,10 +96,33 @@ Cloudflare DNS module, and `Caddyfile`). The relay's settings:
 | `RELAY_MONTHLY_GB`        | Traffic each address may pass in a month. 30 by default; 0: no limit.                                                                       |
 | `RELAY_MAX_PER_NETWORK`   | Addresses one network may have. 10 by default; 0: no limit.                                                                                 |
 | `RELAY_FORGET_AFTER_DAYS` | Days an address's nolune may stay away before its name is free again. 90 by default; 0: names stay taken.                                   |
+| `RELAY_PUSHES_PER_HOUR`   | Notifications each address may send in an hour, one for each iPhone. 600 by default; 0: no limit.                                           |
+| `APNS_KEY`                | nolune for iOS's key from Apple, for notifications on iPhones: the .p8 file's contents in base64 on one line. Unset: no notifications.      |
+| `APNS_KEY_ID`             | The key's ID.                                                                                                                               |
+| `APNS_TEAM_ID`            | The Apple developer team the key belongs to.                                                                                                |
+| `APNS_TOPIC`              | The app's bundle ID. `dev.nolune.app` by default.                                                                                           |
 | `RELAY_ADMIN_SOCKET`      | The operator's socket. `admin.sock` next to the gateways file.                                                                              |
 | `RELAY_TRUST_PROXY`       | `1`: the client's address is the last in `X-Forwarded-For` (Caddy's).                                                                       |
 | `RELAY_SCHEME`            | `http` to try it without TLS; addresses are `https` otherwise.                                                                              |
 | `HOST`, `PORT`            | Where it listens. `0.0.0.0:8080` by default.                                                                                                |
+
+For notifications on iPhones, the relay needs the iOS app's key from Apple. Only the app's
+publisher has one: in the [Apple Developer](https://developer.apple.com/account/resources/authkeys/list)
+account that publishes the app, Certificates, Identifiers & Profiles > Keys, make a key with Apple
+Push Notifications service (APNs) for both environments, download it (`AuthKey_<id>.p8`, which can
+only be downloaded once) and add it to `.env`:
+
+```sh
+cat >> .env <<END
+APNS_KEY=$(base64 < AuthKey_ABC123DEFG.p8 | tr -d '\n')
+APNS_KEY_ID=ABC123DEFG
+APNS_TEAM_ID=<the team ID, top right of the developer account>
+END
+docker compose up -d
+```
+
+A relay of your own can't send notifications to nolune's app, since its key isn't yours; it can to
+an app you build and sign yourself, with `APNS_TOPIC` set to that app's bundle ID.
 
 To try it on your own computer, without TLS:
 
@@ -195,7 +225,8 @@ Payments made since the dump are still in Stripe: sending their events again fro
 - **Is it all right?** `./check.sh` in this folder, on the server, answers in a few lines: whether
   the containers run, the certificates and until when, whether the relay (and the API) answers,
   the API's last backup, and the last errors in the logs.
-- **The logs** are lines to read (Caddy's in its console format, the relay's as `[relay] ...`):
+- **The logs** are lines to read (Caddy's in its console format, the relay's as `[relay] ...`),
+  capped at 30 MB a container, as nolune's [privacy policy](https://nolune.dev/privacy) says:
   `docker compose logs -f relay` for addresses coming and going, `docker compose logs -f caddy` for
   certificates, `docker compose logs --since 1h` for the last hour of both. The API's are
   `docker compose logs -f api`: it writes only what went wrong, as `[nolune api] ...`.

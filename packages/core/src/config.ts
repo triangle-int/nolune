@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import type { McpServerConfig } from './mcp.ts';
 import { paths } from './paths.ts';
 
 export interface Config {
@@ -11,6 +12,8 @@ export interface Config {
 	openrouterApiKey?: string;
 	/** For chats on xAI's Grok models (xai.ts). */
 	xaiApiKey?: string;
+	/** For `nolune web` (web.ts), past Firecrawl's free daily allowance. */
+	firecrawlApiKey?: string;
 	/**
 	 * Custom providers (custom-providers.ts): the family's own model servers, like Ollama or LM
 	 * Studio, each with an id from its name, the API it speaks, an address, and a key when it
@@ -44,12 +47,28 @@ export interface Config {
 	/** Extra environment variables for commands the agent runs (e.g. FIRECRAWL_API_KEY). */
 	commandEnv?: Record<string, string>;
 	/**
+	 * MCP servers whose tools the agent uses with `nolune mcp` (mcp.ts), by name, as MCP clients
+	 * write them: a command to run or an address, with their keys (`env`, `headers`).
+	 */
+	mcpServers?: Record<string, McpServerConfig>;
+	/**
 	 * How the agent's commands run (command-safety.ts): `auto`, a model checks each one first and
 	 * blocks what could do harm nobody asked for; `unrestricted`, they run as they are. Unset: auto.
 	 */
 	commandMode?: 'auto' | 'unrestricted';
 	/** The preset whose model does auto mode's checks. Unset, or removed: each chat's own model. */
 	safetyPresetId?: string;
+	/**
+	 * Minutes a chat stays quiet before the model summarizes it (compaction.ts), so the next reply
+	 * reads the summary rather than the whole chat. Unset: chats are summarized only when they near
+	 * the model's window, or when someone asks.
+	 */
+	compactWhenIdle?: number;
+	/**
+	 * Whether the gateway asks GitHub once a day for nolune's newest release, so admins hear when
+	 * there's a new one (updates.ts). Unset: it does.
+	 */
+	updateCheck?: boolean;
 	/** Where `nolune start` listens. Defaults: 127.0.0.1:5780 (put a tunnel or proxy in front). */
 	host?: string;
 	port?: number;
@@ -85,13 +104,28 @@ export const API_KEYS = {
 	anthropic: { label: 'Anthropic', field: 'anthropicApiKey', env: 'ANTHROPIC_API_KEY' },
 	openai: { label: 'OpenAI', field: 'openaiApiKey', env: 'OPENAI_API_KEY' },
 	openrouter: { label: 'OpenRouter', field: 'openrouterApiKey', env: 'OPENROUTER_API_KEY' },
-	xai: { label: 'xAI', field: 'xaiApiKey', env: 'XAI_API_KEY' }
+	xai: { label: 'xAI', field: 'xaiApiKey', env: 'XAI_API_KEY' },
+	firecrawl: { label: 'Firecrawl', field: 'firecrawlApiKey', env: 'FIRECRAWL_API_KEY' }
 } as const satisfies Record<string, { label: string; field: keyof Config; env: string }>;
 
 export type ApiKeyProvider = keyof typeof API_KEYS;
 
 export function isApiKeyProvider(value: string): value is ApiKeyProvider {
 	return Object.hasOwn(API_KEYS, value);
+}
+
+/** The keys that run chats. Firecrawl's is for the agent's web searches (web.ts). */
+export const MODEL_KEY_PROVIDERS = [
+	'anthropic',
+	'openai',
+	'openrouter',
+	'xai'
+] as const satisfies readonly ApiKeyProvider[];
+
+export type ModelKeyProvider = (typeof MODEL_KEY_PROVIDERS)[number];
+
+export function isModelKeyProvider(value: string): value is ModelKeyProvider {
+	return (MODEL_KEY_PROVIDERS as readonly string[]).includes(value);
 }
 
 /** The key in use: config.json's, else the environment's. Read on every call, so changes apply at once. */

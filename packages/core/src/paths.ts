@@ -38,6 +38,11 @@ export const paths = {
 	chatgpt: join(home, 'chatgpt.json'),
 	/** The token that links this gateway to the nolune plan (nolune-plan.ts). Readable by this user only. */
 	nolunePlan: join(home, 'nolune-plan.json'),
+	/**
+	 * nolune's newest release, as the gateway last heard from GitHub (updates.ts). The macOS app
+	 * reads it too, for its menu.
+	 */
+	latestRelease: join(home, 'latest-release.json'),
 	db: join(home, 'nolune.db'),
 	bin: join(home, 'bin'),
 	logs: join(home, 'logs'),
@@ -47,6 +52,8 @@ export const paths = {
 	trash: join(home, 'trash'),
 	/** Copies of the pictures and files shown in chats, named by their SHA-256. */
 	media: join(home, 'media'),
+	/** What each MCP server last said its tools are, for chats' tools (mcp.ts). */
+	mcpTools: join(home, 'mcp-tools.json'),
 	globalSkills: process.env.NOLUNE_GLOBAL_SKILLS || join(homedir(), '.agents', 'skills'),
 	/** Skills that ship with nolune, such as `automations`. */
 	builtinSkills: join(packageRoot, 'packages', 'core', 'skills'),
@@ -71,6 +78,14 @@ export function cliCommand(): string[] {
 	const source = join(packageRoot, 'packages', 'cli', 'src', 'index.ts');
 	if (existsSync(source)) return [process.execPath, '--no-warnings', source];
 	return [process.execPath, join(packageRoot, 'dist', 'cli.js')];
+}
+
+/**
+ * Run from nolune.app (macos/): its Node sits inside the app, and the app runs the gateway itself
+ * while it's open, with no LaunchAgent.
+ */
+export function appManaged(execPath = process.execPath): boolean {
+	return /\.app\/Contents\/MacOS\/node$/.test(execPath);
 }
 
 export function profileDir(slug: string): string {

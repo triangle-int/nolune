@@ -37,6 +37,13 @@ describe('createProfile', () => {
 		expect(createProfile('🏡', anna.id).slug).toBe('profile');
 		expect(() => createProfile('  ', anna.id)).toThrow('Profile name is required');
 	});
+
+	it('spells a Cyrillic name in Latin', () => {
+		const anna = makeUser('Anna');
+		expect(createProfile('Семья', anna.id).slug).toBe('semya');
+		expect(createProfile('Книжный клуб', anna.id).slug).toBe('knizhnyy-klub');
+		expect(createProfile('семья', anna.id).slug).toBe('semya-2');
+	});
 });
 
 describe('members', () => {

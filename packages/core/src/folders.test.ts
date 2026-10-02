@@ -64,6 +64,9 @@ describe('folders', () => {
 
 		renameFolder(trip.id, 'Japan');
 		expect(getFolder(profile.id, trip.id)).toMatchObject({ name: 'Japan', slug: 'trip-to-japan' });
+		expect(createFolder({ profile, name: 'Поездка в Японию', userId: user.id }).slug).toBe(
+			'poezdka-v-yaponiyu'
+		);
 	});
 
 	it('belong to their profile', () => {

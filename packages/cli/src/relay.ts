@@ -229,6 +229,7 @@ could. \`nolune relay disable\` stops using it.`);
 				delete c.relay;
 			});
 			io.log(`Stopped using the relay: ${relay.url} no longer leads here, and nolune's address is ${publicOrigin(config)}.
+The nolune app for iPhone gets no notifications without it.
 ${RESTART_HINT}${note}`);
 			return;
 		}

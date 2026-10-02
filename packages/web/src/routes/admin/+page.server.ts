@@ -2,6 +2,7 @@ import { error, fail } from '@sveltejs/kit';
 import {
 	CHATGPT_USAGE_URL,
 	CLAUDE_INSTALL_COMMAND,
+	MAX_IDLE_MINUTES,
 	ApiKeyError,
 	CustomProviderError,
 	DEFAULT_EMBEDDING_MODELS,
@@ -29,6 +30,8 @@ import {
 	getDefaultPreset,
 	getPreset,
 	isApiKeyProvider,
+	idleCompactionChanged,
+	idleCompactionMinutes,
 	isCommandMode,
 	isCustomProvider,
 	isProviderUrl,
@@ -45,6 +48,7 @@ import {
 	removeCustomProvider,
 	saveApiKey,
 	saveCommandMode,
+	saveIdleCompaction,
 	saveCustomProvider,
 	saveSafetyPreset,
 	splitModel,
@@ -103,6 +107,8 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 		embeddingDefaults: DEFAULT_EMBEDDING_MODELS,
 		// Whether a model checks the agent's commands first, and which.
 		commands: commandSafetyState(),
+		// After how many quiet minutes chats are summarized, if they are.
+		idleCompaction: { minutes: idleCompactionMinutes(), max: MAX_IDLE_MINUTES },
 		presets: listPresets().map((p) => ({
 			id: p.id,
 			name: p.name,
@@ -412,6 +418,20 @@ export const actions: Actions = {
 		// Unrestricted has nothing to check with, and the choice stays for when auto comes back.
 		if (mode === 'auto') saveSafetyPreset(presetId);
 		return { commandsMessage: translations(locals.locale).m.admin.commands.saved };
+	},
+	idleCompaction: async ({ locals, request }) => {
+		requireAdmin(locals);
+		const t = translations(locals.locale).m.admin.idleCompaction;
+		const form = await request.formData();
+		const on = form.get('enabled')?.toString() === 'on';
+		const minutes = on ? Number(form.get('minutes')?.toString().trim() || NaN) : null;
+		try {
+			saveIdleCompaction(minutes);
+		} catch {
+			return fail(400, { idleError: t.invalid(MAX_IDLE_MINUTES) });
+		}
+		idleCompactionChanged();
+		return { idleMessage: t.saved };
 	},
 	remove: async ({ locals, request }) => {
 		requireAdmin(locals);

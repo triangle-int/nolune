@@ -461,7 +461,7 @@ export function createResponse(
 /** One call on a custom provider of Anthropic's API, streamed, as Anthropic's (see models.ts). */
 export function streamMessage(
 	opts: Parameters<typeof anthropic.streamTurn>[0]
-): Promise<Anthropic.Message> {
+): ReturnType<typeof anthropic.streamTurn> {
 	return tagged('anthropic', opts.model, (provider) =>
 		anthropic.streamTurn(opts, messagesApi(provider))
 	);

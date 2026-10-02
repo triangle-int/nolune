@@ -42,12 +42,15 @@ No tunnel, port forwarding or domain of your own. See [Remote access](/docs/guid
   unchecked (not recommended). Not from the agent's own commands
 - `nolune config set safety-model <preset|chat>`: the preset whose model does auto mode's checks, or
   chat for each chat's own model (the default)
-- `nolune key set <anthropic|openai|openrouter|xai> [key]`: store an API key (prompts if omitted)
-  after checking it; OpenAI's runs GPT chats and makes pictures, xAI's runs Grok. Admins can also
-  do this on the web, under Models & keys
-- `nolune key rm <anthropic|openai|openrouter|xai>`: remove a stored key (the environment's is used,
-  if set)
-- `nolune env set <NAME> <value>`: extra env var for agent commands (e.g. FIRECRAWL_API_KEY)
+- `nolune config set update-check <on|off>`: on (the default): the gateway asks GitHub once a day
+  for nolune's newest release, and admins see when there's one
+- `nolune key set <anthropic|openai|openrouter|xai|firecrawl> [key]`: store an API key (prompts if
+  omitted) after checking it; OpenAI's runs GPT chats and makes pictures, xAI's runs Grok,
+  Firecrawl's lifts the web search's daily limit. Admins can also do this on the web, under Models &
+  keys
+- `nolune key rm <anthropic|openai|openrouter|xai|firecrawl>`: remove a stored key (the
+  environment's is used, if set)
+- `nolune env set <NAME> <value>`: extra env var for agent commands (e.g. HASS_TOKEN)
 - `nolune env rm <NAME> | nolune env list`
 
 ## Custom providers
@@ -90,7 +93,7 @@ There's no sign-up page: admins add people here, or on the **People** page in th
 - `nolune user passwd <name|email> [--password P]`
 - `nolune user admin <name|email> [--off]`
 - `nolune user rm <name|email>`
-- `nolune user list`
+- `nolune user list`: name, email, admin, and their picture's file if they have one
 
 ## Model presets
 
@@ -120,7 +123,24 @@ TOKENS|auto]`: change what's given; a new model is checked like add's. Chats alr
 - `nolune skill new <name> [--description D] [--profile SLUG | --global]`
 - `nolune skill list [--profile SLUG]`
 - `nolune skill enable <name>... [--profile SLUG]`
-- `nolune skill disable <name>... [--profile SLUG]`: leave out of the profile's new chats
+- `nolune skill disable <name>... [--profile SLUG]`: leave out of the profile's chats
+
+## MCP servers
+
+Other apps' and services' tools, which chats get next to nolune's own. See
+[Connected services](/docs/guides/connected-services/).
+
+- `nolune mcp add <name> <url> [--transport http|sse] [--header "Name: value"]... [--description D]
+[--profile SLUG]...`: connect a server at an address
+- `nolune mcp add <name> [--env NAME=value]... [--cwd DIR] [--description D] [--profile SLUG]... --
+<command> [args...]`: connect one this computer runs. nolune connects to check it; the same name
+  again changes it. `--profile`: only in those profiles (every profile without it)
+- `nolune mcp add-json <name> '<json>'`: the same, as MCP clients' settings write a server
+- `nolune mcp rm <name>`
+- `nolune mcp list`: the servers, and the names of their keys (never the keys)
+- `nolune mcp tools [<server> [<tool>]]`: their tools; with a tool, what it does and takes
+- `nolune mcp call <server> <tool> [<json>|-]`: call a tool with a JSON object of arguments (`-`
+  reads stdin); pictures it returns are attached for the agent
 
 ## Automations
 
@@ -189,6 +209,16 @@ Model openai/gpt-image-2.5-flare; change it with `nolune config set image-model`
 [--quality Q] [--background auto|transparent|opaque] [--format png|jpeg|webp] [--count N] [--model
 PROVIDER/MODEL] [--out DIR|FILE] [--dry-run]`: make pictures from a prompt, or change the
   `--image` ones; `-` reads the prompt from stdin
+
+## The web
+
+Through Firecrawl: its free tier, limited per day, until `nolune key set firecrawl`.
+
+- `nolune web search <query> [--limit N] [--news] [--recent day|week|month|year] [--country CC]`:
+  the top results' titles, addresses and snippets (5 unless --limit, at most 20); --news for news
+  articles, --country as someone there sees them (de)
+- `nolune web read <url> [--out FILE]`: a page's main text (or a PDF's) as Markdown; a long one is
+  saved whole to a file, whose path it prints
 
 ## Inside agent commands
 

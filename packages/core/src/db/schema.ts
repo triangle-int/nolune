@@ -299,7 +299,8 @@ export const conversation = sqliteTable(
 		/**
 		 * Frozen at creation so the prompt cache prefix never changes, except when the chat moves
 		 * to another folder, its folder's instructions or files change, or the profile's soul
-		 * changes: then it is built again at the start of the next turn.
+		 * changes: then it is built again at the start of the next turn. Also when someone reloads
+		 * the chat's tools (reloadTools).
 		 */
 		systemPrompt: text('system_prompt').notNull(),
 		folderId: text('folder_id').references(() => folder.id, { onDelete: 'set null' }),
@@ -315,7 +316,9 @@ export const conversation = sqliteTable(
 		/**
 		 * The tool definitions its requests send, frozen at creation like `systemPrompt`: a thinking
 		 * block is bound to the tools it was made with, so a new version of nolune that changes them
-		 * only reaches new chats. Null: chats from before this was saved (LEGACY_TOOLS).
+		 * only reaches new chats. Its MCP servers' tools come after nolune's, and are brought up to
+		 * date with the prompt (rebuildSystemPrompt: Reload tools, or a folder or soul change). Null:
+		 * chats from before this was saved (LEGACY_TOOLS).
 		 */
 		tools: text('tools', { mode: 'json' }).$type<Anthropic.Tool[]>(),
 		/**
@@ -372,20 +375,31 @@ export const message = sqliteTable(
 		/**
 		 * Written by the gateway, not a person: `trigger`, the first message of a background run;
 		 * `agent_message`, a subagent's task or a steer from the agent that started it;
-		 * `task_result`, what a background command printed, once it ended.
+		 * `task_result`, what a background command printed, once it ended; `compaction`, the chat's
+		 * model's summary of the conversation so far, which the requests after it start from.
 		 */
 		kind: text('kind', {
-			enum: ['human', 'trigger', 'agent_message', 'task_result', 'tool_results', 'assistant']
+			enum: [
+				'human',
+				'trigger',
+				'agent_message',
+				'task_result',
+				'compaction',
+				'tool_results',
+				'assistant'
+			]
 		}).notNull(),
 		senderId: text('sender_id').references(() => user.id, { onDelete: 'set null' }),
 		/**
 		 * Sender's display name when the message was sent. Trigger rows: the trigger's name. Agent
-		 * messages: the subagent's id. Task results: the command's summary.
+		 * messages: the subagent's id. Task results: the command's summary. Compactions: who asked for
+		 * it, if anyone did.
 		 */
 		senderName: text('sender_name'),
 		/**
 		 * What the human typed (without the "Name: " prefix). Trigger rows: the trigger's prompt.
-		 * Agent messages: what the agent wrote. Task results: the command's output.
+		 * Agent messages: what the agent wrote. Task results: the command's output. Compactions: the
+		 * summary.
 		 */
 		text: text('text'),
 		/**
@@ -654,6 +668,31 @@ export const notificationSeen = sqliteTable('notification_seen', {
 		.references(() => user.id, { onDelete: 'cascade' }),
 	seenAt: integer('seen_at', { mode: 'timestamp_ms' }).notNull()
 });
+
+/**
+ * iPhones that get their person's notifications (nolune for iOS, ios/ in the repository). Each
+ * belongs to the session it was registered in, so signing out there stops them.
+ */
+export const pushDevice = sqliteTable(
+	'push_device',
+	{
+		/** The token Apple gave the app on this iPhone, in hex. */
+		token: text('token').primaryKey(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		sessionId: text('session_id')
+			.notNull()
+			.references(() => session.id, { onDelete: 'cascade' }),
+		/** A development build's: Apple's sandbox servers deliver to it. */
+		sandbox: integer('sandbox', { mode: 'boolean' }).default(false).notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' }).default(now).notNull()
+	},
+	(table) => [
+		index('push_device_userId_idx').on(table.userId),
+		index('push_device_sessionId_idx').on(table.sessionId)
+	]
+);
 
 /**
  * Files attached in the composer that aren't sent yet. The bytes are already in the media store;

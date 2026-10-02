@@ -7,6 +7,7 @@ import { AVATARS, defaultAvatar, isAvatar, type Avatar } from './avatars.ts';
 import { getDb } from './db/index.ts';
 import { profile, profileMember, user } from './db/schema.ts';
 import { paths, profileDir, profileSkillsDir } from './paths.ts';
+import { slugBase } from './slugs.ts';
 import { findUser } from './users.ts';
 
 export type Profile = typeof profile.$inferSelect;
@@ -68,14 +69,7 @@ export function noticeProfileChanges(): void {
 }
 
 function slugify(name: string): string {
-	const base =
-		name
-			.normalize('NFKD')
-			.replace(/[̀-ͯ]/g, '')
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, '-')
-			.replace(/^-+|-+$/g, '')
-			.slice(0, 40) || 'profile';
+	const base = slugBase(name) || 'profile';
 	let slug = base;
 	for (
 		let i = 2;
@@ -198,7 +192,10 @@ export function setProfileAvatar(profileId: string, avatar: string): Avatar {
 	return avatar;
 }
 
-/** Turns skills on or off for this profile's new chats. Chats already started keep their prompt. */
+/**
+ * Turns skills on or off for this profile's chats: new ones list what's on, and so does a chat
+ * already going once its tools are reloaded (reloadTools in runner.ts).
+ */
 export function setSkillsEnabled(profileId: string, names: string[], enabled: boolean): void {
 	getDb().transaction((tx) => {
 		const found = tx.select().from(profile).where(eq(profile.id, profileId)).get();

@@ -1,4 +1,5 @@
 export {
+	appManaged,
 	cliCommand,
 	packageRoot,
 	paths,
@@ -13,16 +14,19 @@ export {
 	API_KEYS,
 	DEFAULT_PORT,
 	DEFAULT_RELAY_SERVER,
+	MODEL_KEY_PROVIDERS,
 	apiKeyHelp,
 	configExists,
 	initConfig,
 	isApiKeyProvider,
+	isModelKeyProvider,
 	publicOrigin,
 	readConfig,
 	updateConfig,
 	writeConfig,
 	type ApiKeyProvider,
 	type Config,
+	type ModelKeyProvider,
 	type RelayConfig
 } from './config.ts';
 export {
@@ -34,6 +38,18 @@ export {
 	saveApiKey,
 	type ApiKeyStatus
 } from './api-keys.ts';
+export {
+	DEFAULT_WEB_RESULTS,
+	MAX_WEB_RESULTS,
+	WEB_RECENT,
+	WebError,
+	readWebPage,
+	searchWeb,
+	webUrl,
+	type WebPage,
+	type WebRecent,
+	type WebResult
+} from './web.ts';
 export {
 	CUSTOM_APIS,
 	CUSTOM_LABELS,
@@ -146,12 +162,14 @@ export {
 	ModelSwitchError,
 	setEffort,
 	setHidden,
+	type Changes,
 	type Conversation,
 	type DisplayAttachment,
 	type DisplayBlock,
 	type DisplayMessage,
 	type DisplayPicture,
 	type DisplayResult,
+	type ToolChanges,
 	type Usage
 } from './conversations.ts';
 export {
@@ -184,9 +202,13 @@ export {
 	type MediaRow
 } from './media.ts';
 export {
+	CompactionError,
+	ReloadError,
 	changeCommandMode,
 	changeEffort,
 	changeModel,
+	chatToolChanges,
+	compactConversation,
 	getSnapshot,
 	isRunning,
 	kick,
@@ -194,6 +216,7 @@ export {
 	onRunningChange,
 	recoverAfterRestart,
 	refreshMemoryLooks,
+	reloadTools,
 	renameConversation,
 	runningConversationIds,
 	sendMessage,
@@ -208,6 +231,8 @@ export {
 	type Snapshot,
 	type Typist
 } from './runner.ts';
+export { MAX_IDLE_MINUTES, idleCompactionMinutes, saveIdleCompaction } from './compaction.ts';
+export { idleCompactionChanged } from './idle-compaction.ts';
 export { TitleError } from './titles.ts';
 export {
 	EFFORTS,
@@ -281,6 +306,36 @@ export {
 	type ProfileSkill,
 	type Skill
 } from './skills.ts';
+export {
+	MAX_CHAT_MCP_TOOLS,
+	MCP_TRANSPORTS,
+	McpServerError,
+	callMcpTool,
+	checkMcpServer,
+	closeMcpConnections,
+	describeFromServer,
+	findMcpServer,
+	findMcpTool,
+	holdMcpConnections,
+	isMcpAddress,
+	joinCommandLine,
+	listMcpServers,
+	listMcpTools,
+	mcpChatTools,
+	mcpResultText,
+	mcpServerNameProblem,
+	mcpToolName,
+	mcpToolServer,
+	parseMcpServer,
+	refreshMcpTools,
+	removeMcpServer,
+	saveMcpServer,
+	splitCommandLine,
+	type McpServerConfig,
+	type McpServerStatus,
+	type McpServerTools,
+	type McpTransport
+} from './mcp.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export {
 	MAX_ACTIVE_SUBAGENTS,
@@ -504,6 +559,7 @@ export {
 	type Notification,
 	type NotificationItem
 } from './notifications.ts';
+export { forgetSessionPushDevice, isDeviceToken, registerPushDevice } from './push.ts';
 export {
 	MAX_PAYLOAD_BYTES,
 	fireWebhook,
@@ -511,3 +567,20 @@ export {
 	runTriggerNow,
 	startScheduler
 } from './scheduler.ts';
+export {
+	NOLUNE_VERSION,
+	availableUpdate,
+	checkForUpdate,
+	describeUpdates,
+	forgetRelease,
+	installKind,
+	isNewer,
+	onReleaseFound,
+	savedRelease,
+	startUpdateChecks,
+	updateChecksOn,
+	type InstallKind,
+	type Release,
+	type SavedRelease,
+	type Update
+} from './updates.ts';

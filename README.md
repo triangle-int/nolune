@@ -27,6 +27,9 @@ to several profiles, and you can switch between them whenever you need to.
 | The family profile | Everyone at home       | Meal plans, household notes, and family routines  |
 | A shared project   | The people taking part | A holiday, a birthday, or something you're making |
 
+The first time you sign in, nolune offers you a profile of your own and a few shared ones to start
+from: Family, Friends, or one for the two of you.
+
 Any member can add another existing user through **People & profile**. They join the profile's
 conversations and memory, so you don't have to keep forwarding answers or explaining the same
 background. Members can also manage the profile and its membership.
@@ -45,8 +48,12 @@ background. Members can also manage the profile and its membership.
   delete notes on the Memory page, undo automatically saved memories, or turn learning from chats
   off.
 - **An assistant that can do the work.** It can work with files on the host computer, run commands,
-  inspect photos and documents, and return files in the chat. Give it a form to fill in or ask it
-  to find the photos from your last trip.
+  search the web and read pages, inspect photos and documents, and return files in the chat. Give
+  it a form to fill in, ask it to find the photos from your last trip, or which pharmacies are open
+  on Sunday. Searching needs no key, up to a daily limit.
+- **Your other apps, connected.** Admins connect MCP servers, like a calendar, GitHub, Notion or
+  the smart home, and chats get their tools next to nolune's own, on every model. Keep one to
+  the profiles it belongs to, like someone's own email in their profile.
 - **Help between conversations.** Ask for a recurring task in ordinary language. Automations run
   in the background and bring results to the notification bell, where you can continue the work
   as a conversation.
@@ -67,9 +74,10 @@ background. Members can also manage the profile and its membership.
 
 ## One tool. Less overhead. More cache reuse.
 
-nolune gives the agent a single tool: **`run_command`**. It uses the command line for files,
-memory, skills, automations, and background work. That keeps the tool definitions small while
-letting the assistant use the programs already on your computer.
+At its core, nolune gives the agent a single tool: **`run_command`**. It uses the command line for
+files, memory, skills, automations, and background work. That keeps the tool definitions small while
+letting the assistant use the programs already on your computer. MCP servers you connect add their
+tools next to it.
 
 The conversation is designed to keep its prompt cache stable: tool definitions and the system
 prompt are saved with the chat, new messages are appended, and recalled memories arrive with
@@ -99,6 +107,8 @@ Without systemd, run `nolune start` under your own process manager instead.
 Setup asks how your family will open nolune. Say yes to the **nolune relay** and you get an address
 like `https://smiths.nolune.family` that works on any phone or laptop, at home or away, with no
 tunnel, port forwarding or domain to set up. You can turn it on later with `nolune relay enable`.
+It's also the only way the bell's notifications reach the nolune app for iPhone: on a tunnel of
+your own, the app gets none.
 
 Open the address from setup, sign in, and create your first profile. Its welcome helps you pick a
 model and personalize the assistant. Admins manage providers and models under **Models & keys**.
@@ -130,7 +140,8 @@ a profile doesn't send an email invitation.
 
 Conversations are stored in a local SQLite database; profile files, memory, and configuration live
 under `~/.nolune` (or `NOLUNE_HOME`). When you use a hosted model or embeddings provider, relevant
-content is sent to that provider.
+content is sent to that provider. Once a day the gateway asks GitHub whether there's a newer
+release, so admins see when there is; `nolune config set update-check off` stops it.
 
 The installed gateway listens on `127.0.0.1:5780`. Other devices reach it in one of two ways:
 
@@ -138,9 +149,10 @@ The installed gateway listens on `127.0.0.1:5780`. Other devices reach it in one
   `relay.nolune.dev`, which passes requests for your address down it, so nothing on your network
   has to be opened. TLS ends at the relay, as it does with any hosted tunnel, so its operator could
   read the traffic that passes through; it keeps none of it. You can
-  [run your own relay](packages/relay/README.md), too.
-- **Your own tunnel or reverse proxy**, such as Tailscale Funnel or Cloudflare Tunnel. Configure
-  its address:
+  [run your own relay](packages/relay/README.md), too, though only nolune's sends notifications to
+  the iPhone app.
+- **Your own tunnel or reverse proxy**, such as Tailscale Funnel or Cloudflare Tunnel, without
+  notifications on the iPhone app. Configure its address:
 
   ```sh
   nolune config set origin https://nolune.example.com
@@ -150,7 +162,9 @@ The installed gateway listens on `127.0.0.1:5780`. Other devices reach it in one
 Keep the host awake when the family needs access. On macOS, access to protected folders may
 require Full Disk Access for the Node binary; setup prints its path. The macOS app in
 [`macos/`](macos/README.md) does the setup, the relay's address and Full Disk Access for you, with
-its own Node, and runs nolune while it's open in the menu bar.
+its own Node, and runs nolune while it's open in the menu bar. The iOS app in
+[`ios/`](ios/README.md) opens the family's nolune on an iPhone or iPad, with the bell's
+notifications on the lock screen, which come through the relay.
 
 See the [documentation](https://nolune.dev/docs/) (its pages are in
 [docs/src/content/docs](docs/src/content/docs)) for model connections, subscription integrations,

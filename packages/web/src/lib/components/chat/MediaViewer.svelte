@@ -150,7 +150,10 @@
 		ontouchend={onTouchend}
 		ontouchcancel={() => (touch = null)}
 		class={cn(
-			'max-h-[calc(100dvh-2rem)] gap-3 p-3 sm:max-w-[min(72rem,calc(100%-2rem))]',
+			// One column as wide as the viewer, else a long file name with no spaces in it
+			// (a phone's photo) widens it past the screen, and the picture with it.
+			// Clear of a phone's status bar, home indicator and notch too.
+			'max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] grid-cols-1 gap-3 p-3 sm:max-w-[min(72rem,calc(100%-2rem-env(safe-area-inset-left)-env(safe-area-inset-right)))]',
 			swipes && 'touch-pan-y touch-pinch-zoom'
 		)}
 	>
@@ -159,7 +162,7 @@
 			<img
 				src={picture.src}
 				alt={picture.alt}
-				class="mx-auto max-h-[calc(100dvh-8rem)] w-auto max-w-full rounded-3xl object-contain"
+				class="mx-auto max-h-[calc(100dvh-8rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] w-auto max-w-full rounded-3xl object-contain"
 			/>
 			<!-- Halfway down the viewer, which stays in the middle of the screen whatever the
 			     picture's height, so the arrows don't move away from under the pointer. -->

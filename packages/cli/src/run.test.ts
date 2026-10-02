@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+	NOLUNE_VERSION,
 	addMember,
 	cardChanges,
 	cardOf,
@@ -11,10 +12,14 @@ import {
 	createProfile,
 	findInvite,
 	initConfig,
+	paths,
 	readCard,
 	readMemoryNote,
 	readSoulFile,
+	readConfig,
 	runSubagent,
+	setAdmin,
+	setUserPicture,
 	updateConfig
 } from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -265,6 +270,21 @@ describe('nolune user invite', () => {
 	});
 });
 
+describe('nolune user list', () => {
+	it("prints each person's name, email, whether they're an admin, and their picture's file", async () => {
+		const anna = makeUser('Anna');
+		makeUser('Max');
+		setAdmin('Anna', true);
+		const picture = setUserPicture(anna.id, DOT);
+
+		expect(await run(['user', 'list'])).toEqual({
+			code: 0,
+			out: `Anna\tanna@example.com\tadmin\t${join(paths.media, picture)}\nMax\tmax@example.com\n`,
+			err: ''
+		});
+	});
+});
+
 describe('nolune preset edit', () => {
 	it("changes what it's given, and says chats on it keep theirs", async () => {
 		makePreset('Sonnet');
@@ -415,5 +435,62 @@ describe('command mode', () => {
 		expect((await run(['config'])).out).toContain(
 			"commands      auto mode, checked by each chat's own model"
 		);
+	});
+});
+
+describe('update check', () => {
+	it('is on until turned off, which forgets the release it heard of', async () => {
+		const latest = {
+			version: '99.0.0',
+			url: 'https://github.com/triangle-int/nolune/releases/tag/v99.0.0'
+		};
+		writeFileSync(
+			paths.latestRelease,
+			JSON.stringify({
+				checkedAt: '2026-10-01T09:00:00.000Z',
+				latest: { ...latest, publishedAt: null, downloads: {} }
+			})
+		);
+		expect((await run(['config'])).out).toContain(
+			`\nversion       ${NOLUNE_VERSION}; 99.0.0 is out (${latest.url}). Update: git pull && pnpm install && pnpm build\n`
+		);
+
+		expect(await run(['config', 'set', 'update-check', 'off'])).toEqual({
+			code: 0,
+			out: 'nolune won’t look for new releases.\n',
+			err: ''
+		});
+		expect(readConfig().updateCheck).toBe(false);
+		expect(existsSync(paths.latestRelease)).toBe(false);
+		expect((await run(['config'])).out).toContain(
+			`\nversion       ${NOLUNE_VERSION} (not checking for new releases)\n`
+		);
+		expect((await run(['config', 'set', 'update-check', 'maybe'])).err).toContain(
+			'update-check is on or off'
+		);
+
+		await run(['config', 'set', 'update-check', 'on']);
+		expect(readConfig().updateCheck).toBeUndefined();
+	});
+});
+
+describe('quiet chats', () => {
+	it('are summarized after the minutes set, until turned off', async () => {
+		expect((await run(['config'])).out).toContain(
+			'\nquiet chats   summarized only near the window, or on request\n'
+		);
+		expect(await run(['config', 'set', 'compact-when-idle', '55'])).toEqual({
+			code: 0,
+			out: 'Quiet chats: summarized after 55 minutes without a message.\n',
+			err: ''
+		});
+		expect(readConfig().compactWhenIdle).toBe(55);
+		expect((await run(['config', 'set', 'compact-when-idle', 'soon'])).err).toContain(
+			'Minutes are a whole number from 1 to 10080, or off.'
+		);
+		expect(readConfig().compactWhenIdle).toBe(55);
+
+		await run(['config', 'set', 'compact-when-idle', 'off']);
+		expect(readConfig().compactWhenIdle).toBeUndefined();
 	});
 });

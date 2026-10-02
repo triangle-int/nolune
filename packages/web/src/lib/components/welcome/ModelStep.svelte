@@ -7,7 +7,7 @@
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import MoonStarIcon from '@lucide/svelte/icons/moon-star';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
-	import type { ApiKeyProvider, ModelChoice } from '@nolune/core';
+	import type { ModelChoice, ModelKeyProvider } from '@nolune/core';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
@@ -18,7 +18,7 @@
 
 	interface Props {
 		isAdmin: boolean;
-		keys: { provider: ApiKeyProvider; label: string; consoleUrl: string; set: boolean }[];
+		keys: { provider: ModelKeyProvider; label: string; consoleUrl: string; set: boolean }[];
 		/** Whether the nolune plan is offered: first, since it needs no keys at all. */
 		nolunePlan?: boolean;
 		/** The model is saved, or someone who can't add one carries on without. */
@@ -28,7 +28,7 @@
 	let { isAdmin, keys, nolunePlan = false, ondone }: Props = $props();
 	const { m } = getI18n();
 
-	type Choice = 'nolune-plan' | 'claude-plan' | 'chatgpt-plan' | ApiKeyProvider;
+	type Choice = 'nolune-plan' | 'claude-plan' | 'chatgpt-plan' | ModelKeyProvider;
 	const CHOICES: { id: Choice; icon: typeof KeyRoundIcon }[] = [
 		...(untrack(() => nolunePlan) ? [{ id: 'nolune-plan' as const, icon: MoonStarIcon }] : []),
 		{ id: 'claude-plan', icon: SparklesIcon },

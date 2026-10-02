@@ -1,9 +1,18 @@
 # The relay behind Caddy. Set CLOUDFLARE_API_TOKEN and ACME_EMAIL in .env next to this file,
 # then: docker compose up -d --build (README.md).
+
+# Logs are capped at 30 MB a container: older lines go as new ones come (nolune.dev/privacy).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
 services:
   relay:
     build: .
     restart: unless-stopped
+    logging: *logging
     environment:
       RELAY_DOMAIN: ${RELAY_DOMAIN:-nolune.family}
       RELAY_HOST: ${RELAY_HOST:-relay.nolune.dev}
@@ -11,6 +20,12 @@ services:
       RELAY_MONTHLY_GB: ${RELAY_MONTHLY_GB:-30}
       RELAY_MAX_PER_NETWORK: ${RELAY_MAX_PER_NETWORK:-10}
       RELAY_FORGET_AFTER_DAYS: ${RELAY_FORGET_AFTER_DAYS:-90}
+      RELAY_PUSHES_PER_HOUR: ${RELAY_PUSHES_PER_HOUR:-600}
+      # Notifications on iPhones (README.md): nolune for iOS's key from Apple. Unset: none.
+      APNS_KEY: ${APNS_KEY:-}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_TOPIC: ${APNS_TOPIC:-dev.nolune.app}
     volumes:
       - relay-data:/data
 
@@ -19,6 +34,7 @@ services:
       context: .
       dockerfile: Caddy.Dockerfile
     restart: unless-stopped
+    logging: *logging
     ports:
       - '80:80'
       - '443:443'

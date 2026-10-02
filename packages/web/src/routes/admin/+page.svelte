@@ -16,6 +16,7 @@
 	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
 	import AddCustomProvider from '$lib/components/admin/AddCustomProvider.svelte';
 	import CommandSafety from '$lib/components/admin/CommandSafety.svelte';
+	import IdleCompaction from '$lib/components/admin/IdleCompaction.svelte';
 	import CustomProviderRow from '$lib/components/admin/CustomProviderRow.svelte';
 	import MemorySearch from '$lib/components/admin/MemorySearch.svelte';
 	import NolunePlanRow from '$lib/components/admin/NolunePlanRow.svelte';
@@ -77,14 +78,16 @@
 	function sourceText(key: KeyStatus): string {
 		if (key.source === 'config') return m.admin.savedInNolune(key.hint);
 		if (key.source === 'env') return m.admin.fromEnv(key.env, key.hint);
-		return m.admin.notSet;
+		return key.optional ? m.admin.notSetFree : m.admin.notSet;
 	}
 </script>
 
 <div class="flex h-full flex-col">
 	<TopBar />
 	<main class="min-h-0 flex-1 overflow-y-auto">
-		<div class="mx-auto max-w-2xl space-y-8 px-4 py-8 sm:py-12">
+		<div
+			class="mx-auto max-w-2xl space-y-8 px-4 pt-8 pb-[max(2rem,env(safe-area-inset-bottom))] sm:py-12"
+		>
 			<h1 class="text-2xl font-semibold">{m.admin.title}</h1>
 
 			<section class="space-y-3" aria-labelledby="keys-heading">
@@ -96,7 +99,9 @@
 				</div>
 				<ul class="overflow-hidden rounded-2xl border">
 					{#each data.keys as key (key.provider)}
-						{@const open = editing === key.provider || (!key.source && !key.envSet)}
+						<!-- Open while a key is missing, unless what it's for works without one. -->
+						{@const open =
+							editing === key.provider || (!key.source && !key.envSet && !key.optional)}
 						{@const busy = checking === key.provider}
 						{@const result = form?.provider === key.provider ? form : null}
 						<li class="space-y-3 border-b px-4 py-3 text-sm last:border-b-0">
@@ -112,7 +117,11 @@
 								<div class="min-w-0 flex-1">
 									<div class="font-medium">{key.label}</div>
 									<div class="text-muted-foreground">{m.admin.purposes[key.provider]}</div>
-									<div class={cn(key.source ? 'text-muted-foreground' : 'text-warning')}>
+									<div
+										class={cn(
+											key.source || key.optional ? 'text-muted-foreground' : 'text-warning'
+										)}
+									>
 										{sourceText(key)}
 									</div>
 								</div>
@@ -125,7 +134,7 @@
 											class="text-muted-foreground"
 											onclick={() => (editing = key.provider)}
 										>
-											{m.admin.replace}
+											{key.source || key.envSet ? m.admin.replace : m.common.add}
 										</Button>
 									{/if}
 									{#if key.source === 'config'}
@@ -171,7 +180,7 @@
 											<Button type="submit" disabled={busy} class="h-10 px-5 max-sm:flex-1">
 												{busy ? m.admin.checkingKey : m.common.save}
 											</Button>
-											{#if key.source || key.envSet}
+											{#if key.source || key.envSet || key.optional}
 												<Button
 													type="button"
 													variant="ghost"
@@ -192,8 +201,9 @@
 													class="underline">{new URL(key.consoleUrl).host}</a
 												>{/snippet}
 										</Rich>
-										<!-- xAI keeps no files of nolune's, so any key of the account does. -->
-										{#if key.source && key.provider !== 'xai'}
+										<!-- Where the chats' pictures and PDFs are kept. xAI keeps no files of nolune's,
+										so any key of the account does, and Firecrawl keeps none. -->
+										{#if key.source && key.provider !== 'xai' && key.provider !== 'firecrawl'}
 											{key.provider === 'openai' ? m.admin.sameProject : m.admin.sameWorkspace}
 										{/if}
 									</p>
@@ -592,6 +602,8 @@
 				presets={data.presets.map(({ id, name }) => ({ id, name }))}
 				result={form}
 			/>
+
+			<IdleCompaction setting={data.idleCompaction} result={form} />
 		</div>
 	</main>
 </div>

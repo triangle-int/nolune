@@ -54,7 +54,13 @@
 				<Sheet.Title>{m.sidebar.label}</Sheet.Title>
 				<Sheet.Description>{m.sidebar.description}</Sheet.Description>
 			</Sheet.Header>
-			<div class="flex h-full w-full flex-col">
+			<!-- Its color runs under the status bar and the home indicator; what's in it stays clear. -->
+			<div
+				class={cn(
+					'flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]',
+					side === 'left' ? 'pl-[env(safe-area-inset-left)]' : 'pr-[env(safe-area-inset-right)]'
+				)}
+			>
 				{@render children?.()}
 			</div>
 		</Sheet.Content>
@@ -85,7 +91,7 @@
 			data-slot="sidebar-container"
 			data-side={side}
 			class={cn(
-				'fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear data-[side=left]:start-0 data-[side=left]:group-data-[collapsible=offcanvas]:start-[calc(var(--sidebar-width)_*_-1)] data-[side=right]:end-0 data-[side=right]:group-data-[collapsible=offcanvas]:end-[calc(var(--sidebar-width)_*_-1)] md:flex',
+				'fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear data-[side=left]:start-[env(safe-area-inset-left)] data-[side=left]:group-data-[collapsible=offcanvas]:start-[calc(var(--sidebar-width)_*_-1)] data-[side=right]:end-[env(safe-area-inset-right)] data-[side=right]:group-data-[collapsible=offcanvas]:end-[calc(var(--sidebar-width)_*_-1)] md:flex',
 				// Adjust the padding for floating and inset variants.
 				variant === 'floating' || variant === 'inset'
 					? 'p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)_+_(--spacing(4))_+_2px)]'
@@ -97,7 +103,7 @@
 			<div
 				data-sidebar="sidebar"
 				data-slot="sidebar-inner"
-				class="flex size-full flex-col bg-sidebar group-data-[variant=floating]:rounded-2xl group-data-[variant=floating]:shadow-sm group-data-[variant=floating]:ring-1 group-data-[variant=floating]:ring-sidebar-border"
+				class="flex size-full flex-col bg-sidebar pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] group-data-[variant=floating]:rounded-2xl group-data-[variant=floating]:shadow-sm group-data-[variant=floating]:ring-1 group-data-[variant=floating]:ring-sidebar-border"
 			>
 				{@render children?.()}
 			</div>

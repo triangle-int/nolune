@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824" width="1024" height="1024">
+	<!-- nolune for iOS's icon: the macOS one (macos/Resources/AppIcon.svg) without its rounded
+	     corners and shadow, filling the square, which iOS rounds itself. Rendered to
+	     Nolune/Assets.xcassets/AppIcon.appiconset/AppIcon.png at 1024 points, with no alpha. -->
+	<defs>
+		<radialGradient id="space" cx="0.42" cy="0.38" r="0.85">
+			<stop offset="0" stop-color="#121a3c" />
+			<stop offset="0.55" stop-color="#080b1c" />
+			<stop offset="1" stop-color="#04060e" />
+		</radialGradient>
+		<radialGradient id="star" r="0.5">
+			<stop offset="0" stop-color="#ffffff" stop-opacity="0.9" />
+			<stop offset="0.35" stop-color="#ffffff" stop-opacity="0.25" />
+			<stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+		</radialGradient>
+		<filter id="blur" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+			<feGaussianBlur stdDeviation="70" />
+		</filter>
+		<filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+			<feGaussianBlur stdDeviation="14" />
+		</filter>
+		<clipPath id="body">
+			<rect x="100" y="100" width="824" height="824" />
+		</clipPath>
+	</defs>
+
+	<rect x="100" y="100" width="824" height="824" fill="url(#space)" />
+	<g clip-path="url(#body)">
+		<!-- The aurora, faint behind the star. -->
+		<g filter="url(#blur)" opacity="0.55">
+			<circle cx="360" cy="560" r="120" fill="#fe9042" opacity="0.5" />
+			<circle cx="520" cy="470" r="130" fill="#70e0c4" opacity="0.45" />
+			<circle cx="660" cy="560" r="120" fill="#a293fd" opacity="0.55" />
+		</g>
+		<!-- A few far stars. -->
+		<g fill="#ffffff">
+			<circle cx="258" cy="262" r="5" opacity="0.8" />
+			<circle cx="744" cy="236" r="4" opacity="0.6" />
+			<circle cx="806" cy="690" r="5" opacity="0.7" />
+			<circle cx="226" cy="760" r="3.5" opacity="0.5" />
+			<circle cx="640" cy="820" r="3" opacity="0.5" />
+			<circle cx="380" cy="190" r="3" opacity="0.45" />
+		</g>
+		<!-- The orbit, tilted, and its planets: campfire, planet, probe. -->
+		<g transform="rotate(-18 512 522)">
+			<ellipse cx="512" cy="522" rx="318" ry="116" fill="none" stroke="#ffffff" stroke-opacity="0.38" stroke-width="9" />
+			<g>
+				<circle cx="228" cy="575" r="44" fill="#fe9042" opacity="0.6" filter="url(#glow)" />
+				<circle cx="228" cy="575" r="30" fill="#fe9042" />
+				<circle cx="752" cy="446" r="40" fill="#a293fd" opacity="0.6" filter="url(#glow)" />
+				<circle cx="752" cy="446" r="26" fill="#a293fd" />
+				<circle cx="706" cy="614" r="42" fill="#70e0c4" opacity="0.6" filter="url(#glow)" />
+				<circle cx="706" cy="614" r="28" fill="#70e0c4" />
+			</g>
+		</g>
+		<!-- The star. -->
+		<circle cx="512" cy="522" r="170" fill="url(#star)" />
+		<circle cx="512" cy="522" r="50" fill="#ffffff" />
+	</g>
+</svg>

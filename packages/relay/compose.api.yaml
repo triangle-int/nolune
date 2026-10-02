@@ -2,12 +2,20 @@
 # and a daily backup of it (README.md, "nolune's API"). Added to compose.yaml by .env's
 # COMPOSE_FILE=compose.yaml:compose.api.yaml, so a relay alone is just compose.yaml. The API's
 # secrets are in api.env (api.env.example); API_DB_PASSWORD and API_HOST in .env.
+# Logs are capped at 30 MB a container, as compose.yaml's are (nolune.dev/privacy).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
 services:
   api:
     # Built by GitHub Actions (.github/workflows/api-image.yml) and pulled, never built here:
     # building it wants close to a gigabyte of memory, which would leave the relay short.
     image: ${API_IMAGE:-ghcr.io/triangle-int/nolune-api:latest}
     restart: unless-stopped
+    logging: *logging
     env_file: api.env
     environment:
       DATABASE_URL: postgres://nolune:${API_DB_PASSWORD:?set API_DB_PASSWORD}@postgres:5432/nolune_api
@@ -24,6 +32,7 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: nolune
       POSTGRES_DB: nolune_api
@@ -41,6 +50,7 @@ services:
   backup:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       PGHOST: postgres
       PGUSER: nolune

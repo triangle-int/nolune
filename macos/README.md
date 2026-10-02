@@ -68,6 +68,10 @@ onboarding over.
   icon to drag in when it doesn't, and checks in a new process every second until the switch is on:
   a running process may not see the grant before it relaunches. Any one protected file it can read
   is the answer, since none is on every Mac (macOS 27 moved the user's privacy database).
+- **New releases** (`Runtime.update`). The gateway asks GitHub once a day and keeps the answer in
+  `$NOLUNE_HOME/latest-release.json` (packages/core/src/updates.ts). When that's newer than the
+  app's own version, the menu gets a row on top that downloads the disk image for this Mac, and a
+  link to the release's notes. `--snapshot` draws it as `17-menu-update-dark`.
 - **Signing** (`scripts/build-app.sh`): every Mach-O in the package, then Node with the
   entitlements V8 needs (`Resources/node.entitlements`, as Node's own builds have), then the app.
 - **The DMG** (`dmg/`) opens to nolune and Applications side by side at 128 points, over a

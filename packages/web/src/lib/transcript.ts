@@ -25,6 +25,11 @@ export interface ToolResult {
 
 export type Step =
 	| { type: 'thinking'; text: string }
+	/**
+	 * The model summarized the conversation so far, which had grown too long for it, and goes on
+	 * from the summary. Empty while it's writing.
+	 */
+	| { type: 'compaction'; summary: string; asked: boolean }
 	| {
 			type: 'command';
 			id: string;
@@ -81,6 +86,12 @@ export type Entry =
 	  }
 	| { type: 'task_result'; key: string; message: Extract<DisplayMessage, { kind: 'task_result' }> }
 	| { type: 'memory'; key: string; look: DisplayMemoryLook }
+	/**
+	 * A summary of the conversation after a reply, which someone asked for (`asked`) or the chat
+	 * went quiet for, rather than one the model needed in the middle of its work (a step of that
+	 * work). `live`: still being written.
+	 */
+	| { type: 'compaction'; key: string; summary: string; asked: boolean; live: boolean }
 	| Reply;
 
 /** Messages that aren't nolune's: each one ends the reply before it. */
@@ -100,15 +111,18 @@ function messageEntry(message: DisplayMessage): Entry | null {
 	}
 }
 
+/** Sums usage, with what a summary of the conversation took in the call that wrote it. */
 function addUsage(total: Usage | null, u: Usage | null): Usage | null {
 	if (!u) return total;
-	if (!total) return { ...u };
-	return {
-		input: total.input + u.input,
-		cacheRead: total.cacheRead + u.cacheRead,
-		cacheWrite: total.cacheWrite + u.cacheWrite,
-		output: total.output + u.output
-	};
+	const sum: Usage = total ? { ...total } : { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+	for (const part of [u, u.compaction]) {
+		if (!part) continue;
+		sum.input += part.input;
+		sum.cacheRead += part.cacheRead;
+		sum.cacheWrite += part.cacheWrite;
+		sum.output += part.output;
+	}
+	return sum;
 }
 
 export function buildTranscript(
@@ -172,10 +186,17 @@ export function buildTranscript(
 		r.parts.push({ type: 'text', key: `${r.key}-${r.parts.length}`, text, ...media });
 	};
 
+	let previousKind: DisplayMessage['kind'] | null = null;
 	for (const message of messages) {
 		addLooks(message.id);
 		const entry = messageEntry(message);
-		if (entry) {
+		if (message.kind === 'compaction' && previousKind === 'assistant') {
+			const key = `m${message.id}`;
+			const asked = message.askedBy !== null;
+			entries.push({ type: 'compaction', key, summary: message.summary, asked, live: false });
+			reply = null;
+			anchor = key;
+		} else if (entry) {
 			reply = null;
 			anchor = String(message.id);
 			entries.push(entry);
@@ -188,7 +209,9 @@ export function buildTranscript(
 			for (const block of message.blocks) {
 				if (block.type === 'text') addText(r, block.text, { media: message.media });
 				else if (block.type === 'thinking') addStep(r, block, message.createdAt);
-				else
+				else if (block.type === 'compaction') {
+					addStep(r, { ...block, asked: false }, message.createdAt);
+				} else
 					addStep(
 						r,
 						{
@@ -202,25 +225,48 @@ export function buildTranscript(
 						message.createdAt
 					);
 			}
+		} else if (message.kind === 'compaction') {
+			// The runner had the model summarize the conversation before its next step.
+			const r = openReply();
+			r.usage = addUsage(r.usage, message.usage);
+			const step = { type: 'compaction' as const, summary: message.summary };
+			addStep(r, { ...step, asked: message.askedBy !== null }, message.createdAt);
 		} else if (message.kind === 'tool_results' && reply) {
 			// Command output arrived: the work that ends with these commands took until now.
 			const last = (reply as Reply).parts.at(-1);
 			if (last?.type === 'activity') last.endedAt = Math.max(last.endedAt, message.createdAt);
 		}
 		previousAt = message.createdAt;
+		previousKind = message.kind;
 	}
 
 	addLooks(Infinity);
 
 	const streaming = live.filter((b): b is LiveBlock => b !== null);
-	if (streaming.length || running) {
+	if (
+		previousKind === 'assistant' &&
+		streaming.length === 1 &&
+		streaming[0].type === 'compaction'
+	) {
+		// Someone asked for a summary after the reply: the model calls nothing else meanwhile.
+		const summary = streaming[0].text;
+		entries.push({
+			type: 'compaction',
+			key: 'compaction-live',
+			summary,
+			asked: false,
+			live: running
+		});
+	} else if (streaming.length || running) {
 		// While running, there is always a reply to show progress in, even before any output.
 		const r = openReply();
 		const now = Date.now();
 		for (const block of streaming) {
 			if (block.type === 'text') addText(r, block.text, { pending: true });
 			else if (block.type === 'thinking') addStep(r, { type: 'thinking', text: block.text }, now);
-			else if (block.id)
+			else if (block.type === 'compaction') {
+				addStep(r, { type: 'compaction', summary: block.text, asked: false }, now);
+			} else if (block.id)
 				addStep(r, { type: 'command', id: block.id, ...partialToolInput(block.text) }, now);
 		}
 		r.live = running;
@@ -231,7 +277,7 @@ export function buildTranscript(
 
 /**
  * What work in progress is doing, as its collapsed group says it: the summary of the command that
- * is running, or Thinking. The live avatar shows the same on hover.
+ * is running, summarizing the conversation, or Thinking. The live avatar shows the same on hover.
  */
 export function activeStepLabel(
 	part: ActivityPart,
@@ -240,6 +286,7 @@ export function activeStepLabel(
 	m: Messages
 ): string {
 	const last = part.steps.at(-1);
+	if (last?.type === 'compaction' && !last.summary) return m.steps.summarizing;
 	if (last?.type === 'command' && !results[last.id]) {
 		if (technical && last.command) return m.steps.running(firstLine(last.command, 80));
 		return last.summary ?? m.steps.runningACommand;

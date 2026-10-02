@@ -8,3 +8,6 @@ bun.lockb
 # Miscellaneous
 /packages/web/static/
 /drizzle/
+
+# Xcode writes these in its own format (ios/)
+/ios/Nolune/Assets.xcassets/

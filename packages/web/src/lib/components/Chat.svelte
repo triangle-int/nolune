@@ -9,10 +9,18 @@
 		ChatModel,
 		CommandMode,
 		DisplayAttachment,
+		Provider,
+		ToolChanges,
 		Usage
 	} from '@nolune/core';
 	import type { Avatar } from '@nolune/core/avatars';
-	import { cacheHitRate, cacheMissTokens, cacheTtlMs, promptTokens } from '@nolune/core/usage';
+	import {
+		cacheHitRate,
+		cacheMissTokens,
+		cachesWholePrompt,
+		cacheTtlMs,
+		promptTokens
+	} from '@nolune/core/usage';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
@@ -21,8 +29,10 @@
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import InfoIcon from '@lucide/svelte/icons/info';
+	import ListCollapseIcon from '@lucide/svelte/icons/list-collapse';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
@@ -113,6 +123,21 @@
 
 	const prefs = getPreferences();
 	const { m } = getI18n();
+
+	/** What reloading the chat's tools would bring, a phrase each. */
+	function changeLines(changes: ToolChanges): string[] {
+		const say = m.chat.tools;
+		const phrases: [string[] | undefined, (names: string) => string][] = [
+			[changes.services?.added, say.newServices],
+			[changes.services?.changed, say.changedServices],
+			[changes.services?.removed, say.removedServices],
+			[changes.skills?.added, say.newSkills],
+			[changes.skills?.changed, say.changedSkills],
+			[changes.skills?.removed, say.removedSkills]
+		];
+		return phrases.flatMap(([names, phrase]) => (names?.length ? [phrase(names.join(', '))] : []));
+	}
+
 	/** Reasoning levels' names, for the dialog that asks before changing it. */
 	const effortLabels: Record<string, { label: string } | undefined> = m.model.efforts;
 	const chat = new ChatState();
@@ -124,7 +149,11 @@
 	/** Sending a message turns a background run into a normal conversation. */
 	let continued = $state(false);
 	let renaming = $state<{ id: string; title: string } | null>(null);
+	let reloading = $state(false);
+	/** What reloading the chat's tools did, until the next message. */
+	let reloaded = $state<string | null>(null);
 	let deleteOpen = $state(false);
+	let compactOpen = $state(false);
 	let creatingFolder = $state(false);
 	const folder = $derived(folders.find((f) => f.id === folderId));
 	let viewing = $state<PictureGallery | null>(null);
@@ -221,44 +250,92 @@
 	/** The newest entry, past what the note-taker saved after it. */
 	const newest = $derived(entries.findLast((entry) => entry.type !== 'memory'));
 
-	/** Usage of the last reply, and summed over the whole conversation. */
+	/**
+	 * Usage of the last reply, and summed over the whole conversation, summaries of it included
+	 * (the runner's, and those Claude wrote at the start of a reply).
+	 */
 	const usage = $derived.by(() => {
 		let last: Usage | null = null;
+		/** A summary no model call has read yet: what it'll read of the conversation. */
+		let summary: number | null = null;
 		const total: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 		for (const m of chat.messages) {
-			if (m.kind !== 'assistant' || !m.usage) continue;
-			last = m.usage;
-			total.input += m.usage.input;
-			total.cacheRead += m.usage.cacheRead;
-			total.cacheWrite += m.usage.cacheWrite;
-			total.output += m.usage.output;
+			if ((m.kind !== 'assistant' && m.kind !== 'compaction') || !m.usage) continue;
+			if (m.kind === 'assistant') last = m.usage;
+			summary = m.kind === 'compaction' ? m.usage.output : null;
+			for (const part of [m.usage, m.usage.compaction]) {
+				if (!part) continue;
+				total.input += part.input;
+				total.cacheRead += part.cacheRead;
+				total.cacheWrite += part.cacheWrite;
+				total.output += part.output;
+			}
 		}
-		return last && { last, total };
+		return last && { last, total, summary };
 	});
 
-	const contextUsed = $derived(usage && promptTokens(usage.last) + usage.last.output);
+	const contextUsed = $derived(
+		usage && (usage.summary ?? promptTokens(usage.last) + usage.last.output)
+	);
+
+	/**
+	 * Whether someone can have the model summarize the chat now: not while it works, not on the
+	 * Claude plan (Claude Code summarizes its own sessions) or in a subagent's chat, and only with a
+	 * reply since the latest summary.
+	 */
+	const compactable = $derived(
+		model.provider !== 'claude-plan' && !conversation.subagent && repliedSinceSummary(chat.messages)
+	);
+
+	function repliedSinceSummary(messages: typeof chat.messages): boolean {
+		const summarized = messages.findLastIndex(
+			(m) =>
+				m.kind === 'compaction' ||
+				(m.kind === 'assistant' && m.blocks.some((b) => b.type === 'compaction'))
+		);
+		return messages.slice(summarized + 1).some((m) => m.kind === 'assistant');
+	}
+
+	async function compact() {
+		compactOpen = false;
+		stickToBottom = true;
+		await post('compact');
+	}
 
 	/**
 	 * Replies whose request processed again what the previous request had cached, keyed by id.
 	 * `expired`: the conversation sat idle past the cache's lifetime before that request.
+	 * `elsewhere`: on OpenAI, with the same model, so the request most likely reached a server
+	 * without the chat's cache.
 	 */
 	const cacheMisses = $derived.by(() => {
-		const misses: Record<number, { tokens: number; expired: boolean }> = {};
-		let previous: { usage: Usage; at: number } | null = null;
+		const misses: Record<number, { tokens: number; expired: boolean; elsewhere: boolean }> = {};
+		let previous: {
+			usage: Usage;
+			at: number;
+			provider: Provider | null;
+			model: string | null;
+		} | null = null;
 		// When the rows that led to the next request (a message, command output) arrived.
 		let resumedAt = 0;
 		for (const m of chat.messages) {
+			// From a summary of the conversation on, a request reads less than the one before it.
+			if (m.kind === 'compaction') previous = null;
 			if (m.kind !== 'assistant') {
 				resumedAt = Math.max(resumedAt, m.createdAt);
 				continue;
 			}
 			if (!m.usage) continue;
-			if (previous) {
-				const tokens = cacheMissTokens(previous.usage, m.usage);
+			if (previous && !m.usage.compaction) {
+				const tokens = cacheMissTokens(previous.usage, m.usage, previous.provider);
 				const expired = resumedAt - previous.at > cacheTtlMs(conversation.cacheTtl);
-				if (tokens > 0) misses[m.id] = { tokens, expired };
+				const elsewhere =
+					cachesWholePrompt(previous.provider) &&
+					m.provider === previous.provider &&
+					m.model === previous.model;
+				if (tokens > 0) misses[m.id] = { tokens, expired, elsewhere };
 			}
-			previous = { usage: m.usage, at: m.createdAt };
+			previous = { usage: m.usage, at: m.createdAt, provider: m.provider, model: m.model };
 			resumedAt = 0;
 		}
 		return misses;
@@ -282,15 +359,18 @@
 			tokens: misses.reduce((n, miss) => n + miss.tokens, 0),
 			reason: misses.some((miss) => miss.expired)
 				? m.chat.cacheExpired(conversation.cacheTtl)
-				: m.chat.cacheBroken
+				: misses.every((miss) => miss.elsewhere)
+					? m.chat.cacheElsewhere
+					: m.chat.cacheBroken
 		};
 	}
 
+	/** A summary at the end counts as what came before it, as in the runner (awaitsReply). */
 	const unanswered = $derived(
 		!chat.running &&
 			chat.queued.length === 0 &&
 			chat.messages.length > 0 &&
-			chat.messages[chat.messages.length - 1].kind !== 'assistant'
+			chat.messages.findLast((m) => m.kind !== 'compaction')?.kind !== 'assistant'
 	);
 
 	/** The newest entry when it's a reply: its avatar shows what nolune is doing. Older ones hold still. */
@@ -340,91 +420,169 @@
 
 	/** How close to the end the chat has to be to count as scrolled to the bottom. */
 	const BOTTOM_SLACK = 80;
-	/** Where the view was, and how tall the chat, when last placed or scrolled. */
-	let lastScrollTop = 0;
-	let lastScrollHeight = 0;
-	/** A pointer is down in the chat: dragging its scrollbar, or selecting text. */
-	let pointerDown = false;
+	/** How long a wheel, keys or a flick may still be moving the view after their last event. */
+	const SETTLE_MS = 250;
+	/** What a gesture sends to the element it began on, wherever that element has gone. */
+	const GESTURE_EVENTS = ['wheel', 'touchmove', 'touchend', 'touchcancel'];
 
 	/**
 	 * Keeps the view pinned to the newest content while the reader is at the bottom, whenever
 	 * anything changes size: new messages and streamed text, but also pictures that finish loading
-	 * and the composer growing. Starting to scroll up (wheel, trackpad, finger or keys) lets go
-	 * right away, before the view has moved far.
+	 * and the composer growing.
+	 *
+	 * Only the reader decides: starting to scroll up (wheel, trackpad, finger or keys) lets go
+	 * right away, before the view has moved far, and scrolling down to the end sticks to the bottom.
+	 * While they move the view it's theirs, and the chat follows again once it settles. When the
+	 * browser moves the view by itself (content changing size, focus), the choice stays, so the
+	 * chat never jumps to the bottom on its own.
 	 */
 	function autoscroll(node: HTMLElement) {
-		const observer = new ResizeObserver(() => {
+		/** Where the view was, and how tall the chat, when last placed or scrolled. */
+		let lastTop = node.scrollTop;
+		let lastHeight = node.scrollHeight;
+		let fingers = 0;
+		let touchY = 0;
+		/** A mouse or pen is down in the chat: dragging its scrollbar, or selecting text. */
+		let pointerDown = false;
+		/** Pending while a wheel, keys, a flick or a dragged scrollbar may still be moving the view. */
+		let settling: ReturnType<typeof setTimeout> | undefined;
+		const holding = () => fingers > 0 || settling !== undefined;
+
+		const remember = () => {
+			lastTop = node.scrollTop;
+			lastHeight = node.scrollHeight;
+		};
+		const follow = () => {
 			if (stickToBottom) node.scrollTop = node.scrollHeight;
+			remember();
+		};
+		const settle = () => {
+			clearTimeout(settling);
+			settling = setTimeout(() => {
+				settling = undefined;
+				if (holding()) return;
+				unwatch();
+				follow();
+			}, SETTLE_MS);
+		};
+		const release = () => {
+			if (node.scrollTop > 0) stickToBottom = false;
+		};
+
+		const observer = new ResizeObserver(() => {
+			if (!holding()) follow();
 			// Content that got shorter pulled the view up with it. Its scroll event only comes a
 			// frame later, maybe after the content grew back, and must not read as the reader
 			// scrolling up.
-			lastScrollTop = node.scrollTop;
-			lastScrollHeight = node.scrollHeight;
+			else remember();
 		});
 		observer.observe(node);
 		// The border box, so the padding the composer sets counts too.
 		for (const child of node.children) observer.observe(child, { box: 'border-box' });
 
-		const release = () => {
-			if (node.scrollTop > 0) stickToBottom = false;
+		/**
+		 * Touch events, and in Safari all of a wheel gesture's, go to the element the gesture began
+		 * on even once it's gone from the page, and from there they no longer reach the chat. The
+		 * reply being written is drawn anew with every word, so a gesture that starts on it is
+		 * listened to where it began too, until the view settles.
+		 */
+		const origins: EventTarget[] = [];
+		const watch = (target: EventTarget | null) => {
+			if (!target || target === node || origins.includes(target)) return;
+			origins.push(target);
+			for (const type of GESTURE_EVENTS) target.addEventListener(type, onOrigin, { passive: true });
 		};
-		let touchY = 0;
+		const unwatch = () => {
+			for (const target of origins.splice(0))
+				for (const type of GESTURE_EVENTS) target.removeEventListener(type, onOrigin);
+		};
+		const onOrigin = (event: Event) => {
+			if (node.contains(event.target as Node)) return; // it reaches the chat as well
+			if (event.type === 'wheel') onWheel(event as WheelEvent);
+			else if (event.type === 'touchmove') onTouchMove(event as TouchEvent);
+			else onTouchEnd(event as TouchEvent);
+		};
+
 		const onWheel = (event: WheelEvent) => {
+			watch(event.target);
 			if (event.deltaY < 0) release();
+			settle();
 		};
-		const onTouchStart = (event: TouchEvent) => (touchY = event.touches[0]?.clientY ?? 0);
+		/** The fingers down that began on the chat, wherever the elements they began on went. */
+		const countFingers = (event: TouchEvent) =>
+			Array.from(event.touches).filter(
+				(touch) => touch.target === node || origins.includes(touch.target)
+			).length;
+		const onTouchStart = (event: TouchEvent) => {
+			watch(event.target);
+			fingers = countFingers(event);
+			touchY = event.touches[0]?.clientY ?? 0;
+		};
 		const onTouchMove = (event: TouchEvent) => {
 			const y = event.touches[0]?.clientY ?? touchY;
 			if (y > touchY) release(); // a finger moving down scrolls up
 			touchY = y;
 		};
+		const onTouchEnd = (event: TouchEvent) => {
+			fingers = countFingers(event);
+			settle(); // a flick glides on after the finger lifts
+		};
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.defaultPrevented || !['ArrowUp', 'PageUp', 'Home'].includes(event.key)) return;
 			// Not in the composer or a menu, where the key does something else.
 			const target = event.target as Node;
-			if (target === document.body || node.contains(target)) release();
+			if (target !== document.body && !node.contains(target)) return;
+			release();
+			settle();
 		};
-		const onPointerDown = () => (pointerDown = true);
+		const onPointerDown = (event: PointerEvent) => {
+			// A finger's pointer events stop once the chat scrolls; its touch events don't.
+			if (event.pointerType === 'touch') return;
+			pointerDown = true;
+			settle();
+		};
 		const onPointerUp = () => (pointerDown = false);
+		const onScroll = () => {
+			const top = node.scrollTop;
+			const atBottom = node.scrollHeight - top - node.clientHeight < BOTTOM_SLACK;
+			if (top > lastTop && atBottom) stickToBottom = true;
+			else if (top < lastTop && !atBottom && stickToBottom) {
+				// The chat changed size since the view was placed: it got shorter, which pulled the
+				// view up, and grew again before this event (Safari and Firefox can lay it out in
+				// between). That was the browser, not the reader, so back to the end.
+				if (node.scrollHeight !== lastHeight && !pointerDown && !holding())
+					node.scrollTop = node.scrollHeight;
+				else stickToBottom = false;
+			}
+			if (holding()) settle(); // still moving: a flick gliding, keys repeating
+			remember();
+		};
+
+		node.addEventListener('scroll', onScroll, { passive: true });
 		node.addEventListener('wheel', onWheel, { passive: true });
 		node.addEventListener('touchstart', onTouchStart, { passive: true });
 		node.addEventListener('touchmove', onTouchMove, { passive: true });
+		node.addEventListener('touchend', onTouchEnd);
+		node.addEventListener('touchcancel', onTouchEnd);
 		node.addEventListener('pointerdown', onPointerDown);
 		window.addEventListener('pointerup', onPointerUp);
 		window.addEventListener('pointercancel', onPointerUp);
 		window.addEventListener('keydown', onKeyDown);
 		return () => {
 			observer.disconnect();
+			clearTimeout(settling);
+			unwatch();
+			node.removeEventListener('scroll', onScroll);
 			node.removeEventListener('wheel', onWheel);
 			node.removeEventListener('touchstart', onTouchStart);
 			node.removeEventListener('touchmove', onTouchMove);
+			node.removeEventListener('touchend', onTouchEnd);
+			node.removeEventListener('touchcancel', onTouchEnd);
 			node.removeEventListener('pointerdown', onPointerDown);
 			window.removeEventListener('pointerup', onPointerUp);
 			window.removeEventListener('pointercancel', onPointerUp);
 			window.removeEventListener('keydown', onKeyDown);
 		};
-	}
-
-	/**
-	 * Only the reader decides: scrolling down to the end sticks to the bottom, scrolling up lets
-	 * go. When the browser moves the view by itself (content changing size, focus), the choice
-	 * stays, so the chat never jumps to the bottom on its own.
-	 */
-	function onScroll(event: Event & { currentTarget: HTMLElement }) {
-		const node = event.currentTarget;
-		const top = node.scrollTop;
-		const atBottom = node.scrollHeight - top - node.clientHeight < BOTTOM_SLACK;
-		if (top > lastScrollTop && atBottom) stickToBottom = true;
-		else if (top < lastScrollTop && !atBottom && stickToBottom) {
-			// The chat changed size since the view was placed: it got shorter, which pulled the view
-			// up, and grew again before this event (Safari and Firefox can lay it out in between).
-			// That was the browser, not the reader, so back to the end.
-			if (node.scrollHeight !== lastScrollHeight && !pointerDown)
-				node.scrollTop = node.scrollHeight;
-			else stickToBottom = false;
-		}
-		lastScrollTop = node.scrollTop;
-		lastScrollHeight = node.scrollHeight;
 	}
 
 	/** Follows the newest content from now on, even what arrives while the view is on its way. */
@@ -457,6 +615,7 @@
 		// A "typing" still on its way would otherwise show them typing again after the message.
 		await typing.settled();
 		if (await post('messages', { text: message, uploads })) {
+			reloaded = null;
 			typing.sent();
 			text = '';
 			attachments.clear();
@@ -465,6 +624,22 @@
 		}
 		sending = false;
 		textarea?.focus();
+	}
+
+	/**
+	 * Reload tools: the chat gets the profile's skills and connected services as they are now, and
+	 * its next reply reads it all again.
+	 */
+	async function reloadTools() {
+		reloading = true;
+		reloaded = null;
+		const res = await post('tools');
+		if (res) {
+			const { changes } = (await res.json()) as { changes: ToolChanges | null };
+			chat.toolChanges = null;
+			reloaded = changes ? m.chat.tools.reloaded : m.chat.tools.upToDate;
+		}
+		reloading = false;
 	}
 
 	async function move(target: string | null) {
@@ -709,6 +884,22 @@
 					onmove={move}
 					onnew={() => (creatingFolder = true)}
 				/>
+				{#if compactable}
+					<DropdownMenu.Item disabled={chat.running} onSelect={() => (compactOpen = true)}>
+						<ListCollapseIcon />
+						{m.chat.compact}
+					</DropdownMenu.Item>
+				{/if}
+				{#if !conversation.subagent}
+					<DropdownMenu.Item
+						disabled={chat.running || reloading}
+						title={m.chat.tools.reloadHint}
+						onSelect={reloadTools}
+					>
+						<RefreshCwIcon />
+						{m.chat.tools.reload}
+					</DropdownMenu.Item>
+				{/if}
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item variant="destructive" onSelect={() => (deleteOpen = true)}>
 					<Trash2Icon />
@@ -743,12 +934,16 @@
 {/if}
 
 <div class="relative min-h-0 flex-1">
+	<!--
+		Relative, so what's positioned in the chat (text only screen readers read, say) is placed in
+		it. Placed outside it, deep down a long chat, it would stretch the page itself, and scrolling
+		past the chat's end would carry the page up with it, leaving empty space under the composer.
+	-->
 	<div
 		bind:this={scroller}
 		{@attach autoscroll}
 		{@attach pictureClicks((gallery) => (viewing = gallery))}
-		onscroll={onScroll}
-		class="@container/chat h-full overflow-y-auto [overflow-anchor:none]"
+		class="@container/chat relative h-full overflow-y-auto [overflow-anchor:none]"
 	>
 		<div
 			class="mx-auto flex max-w-3xl flex-col gap-7 px-4 pt-4 sm:px-6"
@@ -808,6 +1003,32 @@
 					</Collapsible.Root>
 				{:else if entry.type === 'memory'}
 					<MemoryLook look={entry.look} slug={page.params.slug ?? ''} />
+				{:else if entry.type === 'compaction'}
+					<Collapsible.Root class="rounded-2xl border px-4 py-2.5 text-sm">
+						<Collapsible.Trigger
+							disabled={entry.live}
+							class="group/summary flex w-full min-w-0 items-center gap-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+						>
+							<ListCollapseIcon class="size-3.5 shrink-0" />
+							<span class={cn('min-w-0 truncate', entry.live && 'thinking-shimmer')}>
+								{entry.live ? m.steps.summarizing : m.steps.summarized}
+							</span>
+							{#if !entry.live}
+								<ChevronRightIcon
+									class="size-3.5 shrink-0 transition-transform group-data-[state=open]/summary:rotate-90"
+								/>
+							{/if}
+						</Collapsible.Trigger>
+						<Collapsible.Content>
+							<p class="mt-2 text-xs text-muted-foreground">
+								{entry.asked ? m.steps.summaryAsked : m.steps.summaryIdle}
+							</p>
+							<Markdown
+								text={entry.summary}
+								class="mt-1.5 text-sm leading-relaxed text-muted-foreground"
+							/>
+						</Collapsible.Content>
+					</Collapsible.Root>
 				{:else}
 					{@render reply(entry, entry === newest)}
 				{/if}
@@ -907,6 +1128,23 @@
 				<ArrowDownIcon class="size-4" />
 			</button>
 		{/if}
+		{#if chat.toolChanges && !conversation.subagent}
+			<div
+				class="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-2xl border bg-background px-4 py-2 text-sm shadow-sm"
+			>
+				<span class="flex min-w-0 items-start gap-1.5 text-muted-foreground">
+					<RefreshCwIcon class="mt-0.5 size-3.5 shrink-0" />
+					<span>{changeLines(chat.toolChanges).join(' · ')}</span>
+				</span>
+				<Button
+					size="sm"
+					variant="outline"
+					disabled={chat.running || reloading}
+					title={m.chat.tools.reloadHint}
+					onclick={reloadTools}>{m.chat.tools.reload}</Button
+				>
+			</div>
+		{/if}
 		{#if conversation.subagent}
 			<div
 				class="flex items-center justify-between gap-3 rounded-[26px] border bg-background px-5 py-3 text-sm text-muted-foreground shadow-sm"
@@ -951,6 +1189,8 @@
 		{/if}
 		{#if actionError}
 			<p class="mt-2 text-center text-sm text-destructive">{actionError}</p>
+		{:else if reloaded}
+			<p class="mt-2 text-center text-xs text-muted-foreground">{reloaded}</p>
 		{:else if !chat.connected && chat.loaded}
 			<p class="mt-2 text-center text-xs text-warning">{m.chat.reconnecting}</p>
 		{:else}
@@ -1020,6 +1260,21 @@
 				</AlertDialog.Action>
 			</AlertDialog.Footer>
 		{/if}
+	</AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root bind:open={compactOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>{m.chat.compactTitle}</AlertDialog.Title>
+			<AlertDialog.Description>
+				{m.chat.compactBody(prefs.technical && contextUsed ? formatTokens(contextUsed) : null)}
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>{m.common.cancel}</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={compact}>{m.chat.compactAction}</AlertDialog.Action>
+		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
 

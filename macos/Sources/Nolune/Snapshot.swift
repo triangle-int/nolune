@@ -99,9 +99,17 @@ enum Snapshot {
 			await save(OnboardingView(onboarding: onboarding), size: size, as: name, in: folder)
 		}
 
+		// A stand-in for a profile picture: a moon rising in a dusk sky.
+		let picture = NSImage(size: NSSize(width: 64, height: 64), flipped: false) { rect in
+			NSGradient(starting: NSColor(Color(hex: 0xFE9042)), ending: NSColor(Color(hex: 0x3B2A6B)))?
+				.draw(in: rect, angle: 90)
+			NSColor(Color(hex: 0xFCEDD2)).setFill()
+			NSBezierPath(ovalIn: NSRect(x: 30, y: 30, width: 20, height: 20)).fill()
+			return true
+		}
 		let people = [
 			Runtime.Person(name: "Tim", email: "tim@example.com", isAdmin: true),
-			Runtime.Person(name: "Anna", email: "anna@example.com", isAdmin: false),
+			Runtime.Person(name: "Anna", email: "anna@example.com", isAdmin: false, picture: picture),
 			Runtime.Person(name: "Grandma", email: "grandma@example.com", isAdmin: false)
 		]
 		// The menu follows the system's appearance: both. Dark with the relay's address, light with
@@ -117,6 +125,21 @@ enum Snapshot {
 		await save(
 			StatusMenu(status: local).background(Color(hex: 0xF2F2F2)).environment(\.colorScheme, .light),
 			size: nil, as: "16-menu-light", in: folder
+		)
+		// With a new release out: the row that downloads it.
+		let outdated = GatewayStatus()
+		outdated.pose(
+			running: true, people: people,
+			relay: URL(string: "https://smiths.\(RelaySetup.domain)"),
+			update: Runtime.Update(
+				version: "0.4.0",
+				page: URL(string: "https://github.com/triangle-int/nolune/releases/tag/v0.4.0")!,
+				download: URL(string: "https://github.com/triangle-int/nolune/releases/download/v0.4.0/nolune-macos-apple-silicon.dmg")
+			)
+		)
+		await save(
+			StatusMenu(status: outdated).background(Color(hex: 0x2A2A2A)).environment(\.colorScheme, .dark),
+			size: nil, as: "17-menu-update-dark", in: folder
 		)
 	}
 

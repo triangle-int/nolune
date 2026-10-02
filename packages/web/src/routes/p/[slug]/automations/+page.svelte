@@ -55,7 +55,9 @@
 </PageHeader>
 
 <div class="min-h-0 flex-1 overflow-y-auto">
-	<div class="mx-auto max-w-2xl space-y-8 px-4 py-6 sm:py-10">
+	<div
+		class="mx-auto max-w-2xl space-y-8 px-4 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:py-10"
+	>
 		<p class="text-muted-foreground">
 			{m.automations.intro}
 		</p>

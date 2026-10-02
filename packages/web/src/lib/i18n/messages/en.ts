@@ -131,8 +131,27 @@ export const en = {
 		allProfiles: 'All profiles',
 		card: 'Your card',
 		modelsAndKeys: 'Models & keys',
+		services: 'Connected services',
 		people: 'People',
 		logOut: 'Log out'
+	},
+
+	/** In nolune for iOS (ios/), which shows this web app in a window of its own. */
+	app: {
+		connectElsewhere: 'Connect to another nolune'
+	},
+
+	update: {
+		available: (version: string) => `nolune ${version} is out`,
+		running: (version: string) => `You have ${version}.`,
+		npm: 'To update, run this in a terminal on the computer nolune runs on:',
+		source:
+			'To update, run this in nolune’s folder on the computer it runs on, then restart nolune:',
+		app: 'On the Mac nolune runs on, download the new app, quit nolune from its icon in the menu bar, then drag the new one to Applications and open it. The menu bar icon has the download too.',
+		kept: 'Chats, memory and settings stay as they are. What’s new says if anything else needs doing.',
+		whatsNew: 'What’s new',
+		download: 'Download',
+		copy: 'Copy the command'
 	},
 
 	header: {
@@ -200,6 +219,19 @@ export const en = {
 		fromNolune: (to: string) => `From nolune, to ${to}`,
 		finishedInBackground: (title: string) => `Finished in the background · ${title}`,
 		inBackground: 'Working in the background',
+		tools: {
+			reload: 'Reload tools',
+			reloadHint:
+				'Gives this chat the profile’s skills and connected services as they are now. Its next reply reads the whole chat again, so it costs more than usual.',
+			reloaded: 'This chat has the latest skills and tools now.',
+			upToDate: 'This chat already has the latest skills and tools.',
+			newSkills: (names: string) => `New skills: ${names}`,
+			changedSkills: (names: string) => `Updated skills: ${names}`,
+			removedSkills: (names: string) => `Skills no longer available: ${names}`,
+			newServices: (names: string) => `Connected: ${names}`,
+			changedServices: (names: string) => `Tools updated: ${names}`,
+			removedServices: (names: string) => `Disconnected: ${names}`
+		},
 		aCommand: 'A command',
 		subagent: (name: string) => `Subagent ${name}`,
 		stopping: 'stopping',
@@ -228,6 +260,11 @@ export const en = {
 			"Some pictures and PDFs in this chat don't carry over to another provider: the new model gets where their files are, and can look at them again.",
 		switch: 'Switch',
 		change: 'Change',
+		compact: 'Summarize the chat',
+		compactTitle: 'Summarize the chat?',
+		compactBody: (tokens: string | null) =>
+			`The model writes a short summary of the chat so far and goes on from it, so each reply reads less${tokens ? ` (about ${tokens} tokens now)` : ''}. Everyone still sees the whole chat, but the model may forget details the summary leaves out.`,
+		compactAction: 'Summarize',
 		/** The models that wrote a reply, in order. */
 		models: (models: string[]) => models.join(', then '),
 		usage: 'Usage',
@@ -242,6 +279,8 @@ export const en = {
 			`Over ${ttl === '5m' ? '5 minutes' : 'an hour'} passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).`,
 		cacheBroken:
 			'Context that should have come from the cache was processed again (slower and costlier). Switching the model or the reasoning level, moving the chat to another folder or changing its folder cause this once.',
+		cacheElsewhere:
+			"Context that should have come from the cache was processed again (slower and costlier). OpenAI keeps the cache on one of its servers, and this request most likely reached another one: nolune can't choose which. Switching the reasoning level, moving the chat to another folder or changing its folder cause this once too.",
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} cached`,
 		contextUsed: (used: string, window: string) =>
@@ -253,6 +292,11 @@ export const en = {
 	steps: {
 		thinking: 'Thinking',
 		thinkingDots: 'Thinking…',
+		summarizing: 'Summarizing the conversation so far',
+		summarized: 'Summarized the conversation so far',
+		summaryHint: 'The chat had grown too long for the model, so it goes on from this summary.',
+		summaryAsked: 'Someone in the chat asked for this summary: the model goes on from it.',
+		summaryIdle: 'The chat went quiet, so it was summarized: the model goes on from this.',
 		running: (command: string) => `Running ${command}`,
 		runningACommand: 'Running a command',
 		ranACommand: 'Ran a command',
@@ -724,7 +768,7 @@ export const en = {
 	skills: {
 		title: 'Skills',
 		intro:
-			"Skills are instructions nolune follows for specific tasks. It sees the name and description of every skill that's on, and reads the rest when a task calls for it. Turning off skills this profile doesn't need keeps nolune focused. Changes apply to new chats.",
+			"Skills are instructions nolune follows for specific tasks. It sees the name and description of every skill that's on, and reads the rest when a task calls for it. Turning off skills this profile doesn't need keeps nolune focused. Changes apply to new chats, and to a chat already going when someone reloads its tools.",
 		summary: (on: number, total: number, tokens: string) =>
 			`${on} of ${total} on · about ${tokens} tokens at the start of every new chat`,
 		madeFor: (profile: string) => `Made for ${profile}`,
@@ -809,12 +853,42 @@ export const en = {
 		satellite: 'Satellite'
 	},
 
+	/**
+	 * The profiles page, where someone in no profile starts: how profiles work, one of their own
+	 * first, and shared ones by example.
+	 */
 	profiles: {
 		title: 'Profiles',
-		intro: 'Each profile has its own chats, memory and skills, shared by its members.',
-		none: "You're not in any profile yet. Create one below, or ask someone to add you to theirs.",
-		new: 'New profile',
-		namePlaceholder: 'e.g. Family, Grandma, Homework',
+		intro:
+			'A profile is a space with its own chats, memory and assistant. You can be in several, and switch between them at the top of the sidebar.',
+		/** Over the page for someone in no profile yet. */
+		hello: (name: string) => `Hi${to(name)}!`,
+		start: "Let's start with a profile of your own.",
+		justYou: 'Just you',
+		own: {
+			title: 'Your own profile',
+			about: 'For your projects, ideas and plans. Only you are in it, unless you add someone.',
+			create: 'Create my profile'
+		},
+		shared: {
+			title: 'Shared profiles',
+			about:
+				"For the people you do things with. Everyone in one sees the same chats and memory, and nolune knows who's speaking.",
+			/** Each one's name is the name the profile gets. */
+			examples: {
+				family: { name: 'Family', about: 'Meal plans, the household, family routines' },
+				friends: { name: 'Friends', about: 'Trips, game nights, who owes whom' },
+				couple: { name: 'Us two', about: 'For a couple: dates, trips, plans for home' }
+			},
+			addPeople: "Once it's made, add people under {settings}.",
+			needsAccount: 'They need an account here first, which you make under {people}.',
+			askForAccount: 'They need an account here first: ask whoever set up nolune.',
+			custom: 'Or name one yourself'
+		},
+		staysHere:
+			"What's said in a profile stays in it. Only {card} goes with you into each one: what you'd tell anyone about yourself, like the languages you speak.",
+		yourCard: 'your card',
+		namePlaceholder: 'e.g. Grandma, Homework, Our trip',
 		name: 'Profile name',
 		needsName: 'Give the profile a name.'
 	},
@@ -958,7 +1032,9 @@ export const en = {
 				'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.',
 			openrouter:
 				'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.',
-			xai: "Runs chats and automations on xAI's Grok models."
+			xai: "Runs chats and automations on xAI's Grok models.",
+			firecrawl:
+				"Searches the web and reads pages for the agent. Without a key it uses Firecrawl's free tier, which allows this computer so many searches a day."
 		},
 		withoutIt: {
 			anthropic: 'Chats and automations on Claude models stop working until a new key is added.',
@@ -966,12 +1042,14 @@ export const en = {
 				"Chats and automations on OpenAI models stop working, and nolune can't make pictures, until a new key is added.",
 			openrouter:
 				'Chats and automations on OpenRouter models stop working until a new key is added.',
-			xai: 'Chats and automations on Grok models stop working until a new key is added.'
+			xai: 'Chats and automations on Grok models stop working until a new key is added.',
+			firecrawl: "Web searches go back to Firecrawl's free tier, with its daily limit."
 		},
 		savedInNolune: (hint: string | null) => `Saved in nolune${hint ? ` ending in ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`From the ${variable} environment variable${hint ? ` ending in ${hint}` : ''}`,
 		notSet: 'Not set',
+		notSetFree: 'Not set: the free tier, limited per day',
 		replace: 'Replace',
 		pasteKey: (provider: string) => `Paste the ${provider} API key`,
 		keyLabel: (provider: string) => `${provider} API key`,
@@ -1205,7 +1283,84 @@ export const en = {
 			checkerNote:
 				'A fast, capable model keeps chats quick: every command that does more than look costs a short call to it.',
 			saved: 'Saved. It applies from the next command.'
+		},
+		idleCompaction: {
+			title: 'Quiet chats',
+			hint: 'Once a chat has been quiet for a while, the model can summarize it, so its next reply reads the summary rather than the whole chat: faster, and cheaper. The chat still shows everything. Only chats past about 20,000 tokens are summarized, and none on the Claude plan, whose Claude Code summarizes its own.',
+			modes: { off: 'Off', on: 'On' },
+			offStatus:
+				"Chats are summarized only when they near the model's window, or when someone asks.",
+			onStatus: (minutes: number) =>
+				`Chats are summarized after ${p(minutes, { one: `${minutes} quiet minute`, other: `${minutes} quiet minutes` })}.`,
+			change: 'Change',
+			mode: 'Summarize quiet chats',
+			minutes: 'Minutes without a message',
+			cacheNote:
+				'Under 60 minutes, the summary reads the chat from the prompt cache, which costs little; later, it reads the whole chat again.',
+			invalid: (max: number) => `A whole number of minutes, from 1 to ${max}.`,
+			saved: 'Saved. It applies to chats from their next quiet spell.'
 		}
+	},
+
+	/**
+	 * Connected services, for admins: MCP servers, other apps' and services' tools, which the agent
+	 * uses with `nolune mcp`.
+	 */
+	services: {
+		title: 'Connected services',
+		hint: 'MCP servers give the agent the tools of other apps and services, like a calendar, GitHub, Notion or the smart home. New chats get their tools next to its own (a chat already going, once someone reloads its tools), and auto mode checks each call like a command. Every profile gets them, unless you choose some.',
+		add: 'Connect a server',
+		addTitle: 'Connect an MCP server',
+		addHint:
+			'Its instructions say what to give: the command that starts it on this computer, or its address, and the key it needs.',
+		name: 'Name',
+		namePlaceholder: 'github',
+		nameHint:
+			'What the agent calls it by: lowercase letters and digits, like github or home-assistant.',
+		kind: 'How nolune reaches it',
+		kinds: { stdio: 'A command', remote: 'An address' },
+		command: 'Command',
+		commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
+		commandHint:
+			"As you'd type it in a terminal. It runs on this computer with this account's access, and finds programs where the agent's commands do.",
+		address: 'Address',
+		addressHint: 'Its MCP address, which often ends in /mcp.',
+		transport: 'Protocol',
+		transports: { http: 'Streamable HTTP', sse: 'SSE (older servers)' },
+		env: 'Environment variables',
+		envHint: 'One per line, as NAME=value: the keys and tokens it needs.',
+		headers: 'Headers',
+		headersHint: 'One per line, as Name: value, like Authorization: Bearer …',
+		ifNeeded: '(if it needs any)',
+		secretsKept: (names: string[]) => `Saved: ${list(names)}. Leave empty to keep them.`,
+		description: 'What it’s for',
+		optional: '(optional)',
+		descriptionPlaceholder: 'The family’s calendars',
+		descriptionHint:
+			'A few words for the agent, so it knows when to use it. Left empty, nolune uses what the server says about itself.',
+		profiles: 'Profiles',
+		profilesHint: 'Only the profiles you choose get it. With none chosen, every profile does.',
+		everyProfile: 'In every profile',
+		onlyIn: (names: string[]) => `Only in ${list(names)}`,
+		keys: (names: string[]) => `with ${list(names)}`,
+		noKeys: 'no keys',
+		connecting: 'Connecting…',
+		check: 'Check',
+		checking: 'Checking…',
+		change: 'Change',
+		works: (n: number, names: string) =>
+			`It works: ${n} ${p(n, { one: 'tool', other: 'tools' })}${names ? ` (${names})` : ''}.`,
+		unchecked: (problem: string) => `Saved, but nolune couldn't connect to it. ${problem}`,
+		taken: (name: string) => `There's already a server called ${name}.`,
+		needCommand: 'Give the command that starts it.',
+		needAddress: 'Give its address, starting with http:// or https://.',
+		badEnv: (line: string) => `“${line}” isn't NAME=value.`,
+		badHeader: (line: string) => `“${line}” isn't Name: value.`,
+		broken: (problem: string) => `Its settings in config.json are broken: ${problem}`,
+		disconnect: 'Disconnect',
+		removeTitle: (name: string) => `Disconnect ${name}?`,
+		removeBody: "The agent can't use its tools any more, and nolune forgets its settings and keys.",
+		removed: 'Disconnected.'
 	},
 
 	/** Everyone with an account, for admins: adding people, invite links, passwords. */

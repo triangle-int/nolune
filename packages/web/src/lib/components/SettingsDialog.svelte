@@ -117,7 +117,7 @@
 	<!-- Opens on the dialog, not the name: a phone would bring up its keyboard. -->
 	<Dialog.Content
 		bind:ref={content}
-		class="max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-lg"
+		class="max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] gap-0 overflow-y-auto p-0 sm:max-w-lg"
 		onOpenAutoFocus={(event) => {
 			event.preventDefault();
 			content?.focus();

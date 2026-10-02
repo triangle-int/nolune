@@ -11,6 +11,7 @@ const ANSWERS: Record<string, [number, object]> = {
 	'sk-ant-good-0000000000001234': [200, { data: [] }],
 	'sk-openai-good-000000005678': [200, { data: [] }],
 	'sk-or-v1-good-00000000abcd': [200, { data: { label: 'nolune', limit: null, usage: 0 } }],
+	'fc-good-000000000000000ef01': [200, { success: true, data: { remainingCredits: 3000 } }],
 	'sk-restricted-0000000000000': [403, { error: { message: 'Missing scopes: api.model.read' } }],
 	'sk-broke-000000000000000000': [429, { error: { message: 'You exceeded your current quota' } }],
 	'sk-down-0000000000000000000': [503, { error: { message: 'Overloaded' } }]
@@ -34,6 +35,7 @@ beforeAll(async () => {
 	vi.stubEnv('ANTHROPIC_BASE_URL', `http://127.0.0.1:${port}`);
 	vi.stubEnv('OPENAI_BASE_URL', `http://127.0.0.1:${port}/v1`);
 	vi.stubEnv('OPENROUTER_BASE_URL', `http://127.0.0.1:${port}/api/v1`);
+	vi.stubEnv('FIRECRAWL_API_URL', `http://127.0.0.1:${port}`);
 });
 
 afterAll(() => {
@@ -47,6 +49,7 @@ beforeEach(() => {
 	vi.stubEnv('ANTHROPIC_API_KEY', '');
 	vi.stubEnv('OPENAI_API_KEY', '');
 	vi.stubEnv('OPENROUTER_API_KEY', '');
+	vi.stubEnv('FIRECRAWL_API_KEY', '');
 	seen.length = 0;
 });
 
@@ -61,6 +64,17 @@ describe('apiKeyStatuses', () => {
 		expect(JSON.stringify(keys.apiKeyStatuses())).not.toContain('good');
 		vi.stubEnv('OPENAI_API_KEY', '');
 		expect(status('openai')).toMatchObject({ source: null, hint: null, envSet: false });
+	});
+
+	it("says which keys what they're for works without", () => {
+		expect(keys.apiKeyStatuses().map((s) => [s.provider, s.optional])).toEqual([
+			['anthropic', false],
+			['openai', false],
+			['openrouter', false],
+			['xai', false],
+			// Web searches go through Firecrawl's free tier without one.
+			['firecrawl', true]
+		]);
 	});
 
 	it('prefers the saved key to the environment, and falls back to it when removed', () => {
@@ -98,8 +112,16 @@ describe('checkApiKey', () => {
 		await expect(keys.checkApiKey('openai', 'sk-openai-good-000000005678')).resolves.toBe(null);
 		// OpenRouter lists its models for anyone, so it's asked about the key itself.
 		await expect(keys.checkApiKey('openrouter', 'sk-or-v1-good-00000000abcd')).resolves.toBe(null);
-		expect(seen.map((s) => s.path)).toEqual(['/v1/models?limit=1', '/v1/models', '/api/v1/key']);
+		// Firecrawl has no models: it's asked for the key's credits.
+		await expect(keys.checkApiKey('firecrawl', 'fc-good-000000000000000ef01')).resolves.toBe(null);
+		expect(seen.map((s) => s.path)).toEqual([
+			'/v1/models?limit=1',
+			'/v1/models',
+			'/api/v1/key',
+			'/v2/team/credit-usage'
+		]);
 		expect(seen[2].key).toBe('sk-or-v1-good-00000000abcd');
+		expect(seen[3].key).toBe('fc-good-000000000000000ef01');
 	});
 
 	it('refuses a key the provider rejects', async () => {
@@ -110,6 +132,10 @@ describe('checkApiKey', () => {
 		await expect(keys.checkApiKey('openrouter', 'sk-or-v1-wrong')).rejects.toMatchObject({
 			reason: 'rejected',
 			message: expect.stringContaining("OpenRouter didn't accept this key")
+		});
+		await expect(keys.checkApiKey('firecrawl', 'fc-wrong')).rejects.toMatchObject({
+			reason: 'rejected',
+			message: expect.stringContaining("Firecrawl didn't accept this key")
 		});
 	});
 

@@ -12,7 +12,7 @@ import {
 	getDefaultPreset,
 	cardOf,
 	importMemoryExport,
-	isApiKeyProvider,
+	isModelKeyProvider,
 	isPlan,
 	listPresets,
 	membersWithNotes,
@@ -50,12 +50,19 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		nolunePlan: needsModel && isAdmin && nolunePlanOffered(),
 		keys:
 			needsModel && isAdmin
-				? apiKeyStatuses().map((k) => ({
-						provider: k.provider,
-						label: k.label,
-						consoleUrl: k.consoleUrl,
-						set: k.source !== null
-					}))
+				? apiKeyStatuses().flatMap((k) =>
+						// The step picks a model: Firecrawl's key has none.
+						isModelKeyProvider(k.provider)
+							? [
+									{
+										provider: k.provider,
+										label: k.label,
+										consoleUrl: k.consoleUrl,
+										set: k.source !== null
+									}
+								]
+							: []
+					)
 				: [],
 		exportPrompt: EXPORT_PROMPT
 	};
@@ -67,7 +74,7 @@ export const actions: Actions = {
 		requireAdmin(locals);
 		const form = await request.formData();
 		const provider = form.get('provider')?.toString() ?? '';
-		if (!isApiKeyProvider(provider)) error(400, 'Unknown provider');
+		if (!isModelKeyProvider(provider)) error(400, 'Unknown provider');
 		try {
 			const key = normalizeApiKey(form.get('key')?.toString() ?? '');
 			const warning = await checkApiKey(provider, key);

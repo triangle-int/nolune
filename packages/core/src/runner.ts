@@ -23,7 +23,10 @@ import {
 } from './background.ts';
 import {
 	appendRow,
+	awaitsReply,
 	commitQueuedRows,
+	compactedFrom,
+	compactionSummary,
 	committedRows,
 	foundText,
 	getConversation,
@@ -46,22 +49,36 @@ import {
 	setProviderSession,
 	setTitle,
 	toDisplay,
+	toolChanges,
 	toolsFor,
 	touchConversation,
 	type Conversation,
 	type DisplayMessage,
-	type MessageRow
+	type MessageRow,
+	type ToolChanges
 } from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
 import { eq } from 'drizzle-orm';
 import {
+	compactionNote,
 	messageText,
 	type Block,
 	type ImageBlock,
+	type Message,
 	type TextBlock,
 	type ToolResultBlock
 } from './format.ts';
+import {
+	compactsOnServer,
+	hasNewReplies,
+	idleCompactable,
+	needsCompaction,
+	serverCompactAt,
+	summaryOf,
+	summaryRequest,
+	type SummaryReason
+} from './compaction.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import {
 	BLOCK_STREAK_LIMIT,
@@ -72,6 +89,7 @@ import {
 	checkCommand,
 	commandMode,
 	refusedText,
+	type CheckAction,
 	type CommandMode
 } from './command-safety.ts';
 import { folderContextFor } from './folders.ts';
@@ -84,6 +102,7 @@ import {
 	mediaByMessage,
 	type PreparedMedia
 } from './media.ts';
+import { McpServerError, callMcpTool, findMcpTool, mcpResultText, mcpToolServer } from './mcp.ts';
 import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
 import { profileCards } from './memory-cards.ts';
 import { memberWords } from './memory-people.ts';
@@ -93,11 +112,11 @@ import { hasFileStore, resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
 import {
 	RUN_COMMAND_TOOL,
+	capOutput,
 	commandEnv,
 	parseRunCommandInput,
 	resolveCwd,
 	runCommand,
-	type RunCommandInput,
 	type RunCommandResult
 } from './run-command.ts';
 import { SubagentError, activeSubagents, listSubagents } from './subagents.ts';
@@ -105,7 +124,8 @@ import { TITLE_LIMIT, suggestTitle, typedTitle } from './titles.ts';
 import { cacheHitRate } from './usage.ts';
 
 export interface LiveBlock {
-	type: 'text' | 'thinking' | 'tool';
+	/** `compaction`: the conversation being summarized (compaction.ts); its text, the summary. */
+	type: 'text' | 'thinking' | 'tool' | 'compaction';
 	text: string;
 	id?: string;
 }
@@ -122,6 +142,8 @@ export type LiveEvent =
 	| { type: 'title'; title: string }
 	| { type: 'model'; model: ChatModel }
 	| { type: 'commands'; commands: ChatCommands }
+	/** What reloading its tools would change now (chatToolChanges): null when nothing. */
+	| { type: 'tools'; changes: ToolChanges | null }
 	| { type: 'background'; background: BackgroundItem[] }
 	/** What the note-taker saved from the chat (memory-changes.ts), all of it. */
 	| { type: 'memory'; memory: DisplayMemoryLook[] }
@@ -195,6 +217,8 @@ export interface Snapshot {
 	/** Null once the conversation was deleted. */
 	model: ChatModel | null;
 	commands: ChatCommands;
+	/** What reloading its tools would change: skills and MCP servers since its prompt was built. */
+	toolChanges: ToolChanges | null;
 	running: boolean;
 	error: string | null;
 	messages: DisplayMessage[];
@@ -339,6 +363,7 @@ export function getSnapshot(conversationId: string): Snapshot {
 		title: conv?.title ?? '',
 		model: conv ? chatModel(conv) : null,
 		commands: chatCommands(conv),
+		toolChanges: chatToolChanges(conversationId),
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
@@ -554,8 +579,14 @@ async function recall(
 	const slug = profileSlug(conv.profileId);
 	if (!slug || !text) return null;
 	try {
+		// The model no longer reads what came before the latest summary: only the summary.
 		const rows = [...committedRows(conv.id), ...queuedRows(conv.id)];
-		const known = [conv.systemPrompt, ...rows.map((row) => messageText(readRow(row).blocks))];
+		const known = [
+			conv.systemPrompt,
+			...rows
+				.slice(compactedFrom(rows))
+				.map((row) => `${compactionSummary(row) ?? ''}\n${messageText(readRow(row).blocks)}`)
+		];
 		// What's about who's asking comes first, by any name their note calls them.
 		const words = memberWords({ id: conv.profileId, slug }, sender.id, sender.name);
 		// The members' cards too: one that changed since the chat started has news.
@@ -703,9 +734,11 @@ async function runToolCall(
 			true
 		);
 	}
-	if (call.name !== RUN_COMMAND_TOOL.name)
+	const mcp = mcpToolServer(call.name) !== null;
+	if (call.name !== RUN_COMMAND_TOOL.name && !mcp)
 		return toolResult(call.id, `Unknown tool "${call.name}".`, true);
 	if (signal.aborted) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
+	if (mcp) return runMcpCall(conv, call, signal, st, images);
 	const input = parseRunCommandInput(call.input);
 	if (typeof input === 'string') return toolResult(call.id, `Invalid input: ${input}`, true);
 
@@ -721,7 +754,14 @@ async function runToolCall(
 		NOLUNE_USE: conv.hidden ? 'background' : 'person'
 	};
 
-	const blocked = await safetyCheck(conv, call, input, dir, signal, st);
+	const blocked = await safetyCheck(
+		conv,
+		call,
+		{ input, cwd: resolveCwd(input.cwd, dir) },
+		dir,
+		signal,
+		st
+	);
 	if (blocked) return blocked;
 
 	if (input.background) {
@@ -777,6 +817,86 @@ async function runToolCall(
 	}
 }
 
+/**
+ * A call to a tool of an MCP server (`mcp__<server>__<tool>`, mcp.ts), which the chat got when it
+ * was created: checked by auto mode like a command, then called on the server. What it returns is
+ * kept like a command's output, and its pictures are attached as `nolune view`'s are.
+ */
+async function runMcpCall(
+	conv: Conversation,
+	call: ToolCall,
+	signal: AbortSignal,
+	st: State,
+	images: ImageUse
+): Promise<ToolResultBlock> {
+	const slug = profileSlug(conv.profileId);
+	if (!slug) return toolResult(call.id, 'Not run: the profile no longer exists.', true);
+	const args = call.input;
+	if (!args || typeof args !== 'object' || Array.isArray(args)) {
+		return toolResult(call.id, 'Invalid input: the arguments must be an object.', true);
+	}
+	let found: Awaited<ReturnType<typeof findMcpTool>> | null;
+	try {
+		found = await untilAborted(findMcpTool(call.name, { profile: slug, signal }), signal);
+	} catch (err) {
+		return toolResult(call.id, `Not run: ${errorText(err)}`, true);
+	}
+	if (!found) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
+	const { server, tool } = found;
+	const hints = tool.annotations ?? {};
+	const blocked = await safetyCheck(
+		conv,
+		call,
+		{
+			tool: {
+				server,
+				tool: tool.name,
+				hints: {
+					readOnly: hints.readOnlyHint,
+					destructive: hints.destructiveHint,
+					openWorld: hints.openWorldHint
+				},
+				arguments: args
+			}
+		},
+		profileDir(slug),
+		signal,
+		st
+	);
+	if (blocked) return blocked;
+
+	const viewDir = createViewDir(images, pictureTypes(conv.provider));
+	try {
+		const result = await callMcpTool(server, tool.name, args as Record<string, unknown>, {
+			profile: slug,
+			signal
+		});
+		const text = capOutput(await mcpResultText(result, viewDir)).trim() || '(no output)';
+		const viewed = await viewedImageBlocks(conv, readViewedImages(viewDir), images);
+		const block = toolResult(call.id, text, result.isError === true, viewed.blocks);
+		if (viewed.attached.length) {
+			viewedMedia.set(block, await copyViewedImages(call.id, viewed.attached));
+		}
+		return block;
+	} catch (err) {
+		if (signal.aborted) return toolResult(call.id, `Not finished. ${stoppedText(st)}`, true);
+		// The server turned the call down (an unknown tool, arguments it doesn't take) or went away.
+		return toolResult(call.id, errorText(err, `${server} ${tool.name}`), true);
+	} finally {
+		rmSync(viewDir, { recursive: true, force: true });
+		commandEnded();
+	}
+}
+
+/** Why a call to a server failed, for the model: nolune's own words, or the server's with whose. */
+function errorText(err: unknown, whose?: string): string {
+	const message = err instanceof Error ? err.message : String(err);
+	if (err instanceof McpServerError || !whose) {
+		return `${message[0]?.toUpperCase() ?? ''}${message.slice(1)}`;
+	}
+	return `${whose}: ${message}`;
+}
+
 /** The promise's value, or null as soon as the signal aborts. */
 function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | null> {
 	if (signal.aborted) return Promise.resolve(null);
@@ -804,7 +924,7 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 
 async function safetyCheck(
 	conv: Conversation,
 	call: ToolCall,
-	input: RunCommandInput,
+	action: CheckAction,
 	dir: string,
 	signal: AbortSignal,
 	st: State
@@ -822,8 +942,7 @@ async function safetyCheck(
 			conv,
 			rows: committedRows(conv.id),
 			callId: call.id,
-			input,
-			cwd: resolveCwd(input.cwd, dir),
+			...action,
 			profile: { name: getProfile(conv.profileId)?.name ?? '', dir }
 		}),
 		signal
@@ -887,8 +1006,9 @@ function queueBackgroundResult(
 /**
  * The chat with a system prompt that has its folder and the profile's soul as they are now. When
  * the chat moved to another folder, its folder's instructions or files changed, or the soul
- * changed, the prompt is built again, which costs one prompt cache miss. Only between turns: in
- * the middle of one, the model is still working under the prompt it started with, and its latest
+ * changed, the prompt is built again, which costs one prompt cache miss; its skills and MCP
+ * servers' tools are brought up to date with it, at no further cost. Only between turns: in the
+ * middle of one, the model is still working under the prompt it started with, and its latest
  * thinking must go back with the tool results.
  */
 export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conversation {
@@ -904,6 +1024,51 @@ export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conv
 		.join(' and ');
 	console.log(`[nolune] ${conv.id.slice(0, 8)} ${what} changed, system prompt built again`);
 	return rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
+}
+
+/** Why a chat's tools can't be reloaded right now. */
+export class ReloadError extends Error {}
+
+/**
+ * What reloading the chat's tools would change (toolChanges): new, changed or removed skills and
+ * MCP servers. Null when it has them as they are now, or is gone.
+ */
+export function chatToolChanges(conversationId: string): ToolChanges | null {
+	const conv = getConversation(conversationId);
+	const owner = conv && getProfile(conv.profileId);
+	return conv && owner ? toolChanges(conv, owner) : null;
+}
+
+/**
+ * Reload tools: builds the chat's system prompt again (rebuildSystemPrompt), so it gets the
+ * profile's skills and MCP servers' tools as they are now, for everyone who has it open. Someone
+ * asks for it: the next request reads the whole chat again once, without the prompt cache, and
+ * the thinking from before is left out. Nothing happens when the prompt and tools would come out
+ * the same. Returns what changed, or null. Throws ReloadError while the chat is working, or when
+ * it stopped in the middle of a step (the model's thinking must go back with the step's results).
+ */
+export function reloadTools(conversationId: string): ToolChanges | null {
+	const conv = getConversation(conversationId);
+	const owner = conv && getProfile(conv.profileId);
+	if (!conv || !owner) throw new ReloadError('This chat no longer exists.');
+	if (isRunning(conversationId)) {
+		throw new ReloadError('nolune is working in this chat. Reload its tools once it’s done.');
+	}
+	const rows = committedRows(conversationId);
+	const lastReply = rows.findLast((row) => row.role === 'assistant');
+	if (lastReply && rowCalls(lastReply).length) {
+		throw new ReloadError(
+			'This chat stopped in the middle of a step. Send a message first, then reload its tools.'
+		);
+	}
+	const changes = toolChanges(conv, owner);
+	const context = folderContextFor(owner, conv.folderId);
+	const soul = readSoul(owner.slug);
+	const rebuilt = rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
+	emit(conversationId, { type: 'tools', changes: null });
+	if (rebuilt === conv) return null;
+	console.log(`[nolune] ${conversationId.slice(0, 8)} tools reloaded, system prompt built again`);
+	return changes;
 }
 
 /**
@@ -926,9 +1091,12 @@ async function saveReply(
 		: [];
 
 	const { usage } = reply;
+	const summarized = usage?.compaction
+		? ` (summarized the conversation first: in=${usage.compaction.input} cache_read=${usage.compaction.cacheRead} out=${usage.compaction.output})`
+		: '';
 	console.log(
 		usage
-			? `[nolune] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}`
+			? `[nolune] ${conversationId.slice(0, 8)} ${conv.model} in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} hit=${Math.floor(cacheHitRate(usage) * 100)}% out=${usage.output} stop=${reply.stopReason}${summarized}`
 			: `[nolune] ${conversationId.slice(0, 8)} ${conv.model} stop=${reply.stopReason}`
 	);
 	const assistantRow = appendRow({
@@ -1021,13 +1189,21 @@ function planInput(
 			.flatMap(content);
 	} else {
 		// Up to the last reply, or the results of its commands when another model's turn was still
-		// going when the chat switched to the plan.
+		// going when the chat switched to the plan. From the latest summary of the conversation on.
 		const seen = rows.findLastIndex((row) => !isPlanInput(row)) + 1;
+		const from = compactedFrom(rows);
 		const earlier = rows
-			.slice(0, seen)
-			.map((row) => (row.role === 'assistant' ? `You: ${plainText(row)}` : plainText(row)))
-			.filter((text) => text && text !== 'You: ');
-		input = rows.slice(seen).flatMap(content);
+			.slice(from, seen)
+			.map((row) => {
+				if (row.role !== 'assistant') return plainText(row);
+				const said = plainText(row);
+				const summary = compactionSummary(row);
+				return [summary !== null && compactionNote(summary).text, said && `You: ${said}`]
+					.filter(Boolean)
+					.join('\n\n');
+			})
+			.filter(Boolean);
+		input = rows.slice(Math.max(from, seen)).flatMap(content);
 		if (earlier.length) {
 			input.unshift({
 				type: 'text',
@@ -1130,6 +1306,192 @@ async function planTurn(
 	}
 }
 
+/** What each model call of the chat sends besides its messages, the same call after call. */
+function modelCall(conv: Conversation) {
+	return {
+		provider: conv.provider,
+		model: conv.model,
+		effort: conv.effort,
+		system: conv.systemPrompt,
+		tools: toolsFor(conv),
+		cacheTtl: conv.cacheTtl,
+		cacheKey: conv.id
+	};
+}
+
+/**
+ * The messages with their pictures and PDFs kept by reference, as this provider gets them, where
+ * the model takes them.
+ */
+async function providerMessages(conv: Conversation, messages: Message[]): Promise<Message[]> {
+	return resolveFiles(await readableMessages(conv.provider, conv.model, messages), conv.provider);
+}
+
+/**
+ * Has the chat's model summarize the conversation, because it would soon outgrow its context
+ * window, someone asked (compactConversation, `askedBy`) or it went quiet (compactIdle), and saves
+ * the summary as a row of its own: the model calls after it start there (compaction.ts). The
+ * request is the conversation's next one with the ask at the end, so the provider's cache still
+ * holds all the rest. The chat shows it as a step while the model writes. False when the loop
+ * should end: stopped, or failed with `st.error`.
+ */
+async function compact(
+	conv: Conversation,
+	rows: MessageRow[],
+	st: State,
+	abort: AbortController,
+	reason: SummaryReason = 'window',
+	askedBy: string | null = null
+): Promise<boolean> {
+	const conversationId = conv.id;
+	const block: LiveBlock = { type: 'compaction', text: '' };
+	st.live = [block];
+	emit(conversationId, { type: 'live_block', index: 0, block });
+	const ask: Message = { role: 'user', blocks: [{ type: 'text', text: summaryRequest(reason) }] };
+	let reply: ModelReply;
+	try {
+		reply = await streamTurn({
+			...modelCall(conv),
+			messages: await providerMessages(conv, [
+				...requestMessages(rows, conv.promptChangedAtSeq),
+				ask
+			]),
+			signal: abort.signal,
+			// Only the summary shows, once it's saved.
+			onEvent: () => {}
+		});
+	} catch (err) {
+		clearLive(conversationId);
+		if (abort.signal.aborted || isAbortError(err)) {
+			commitQueued(conversationId);
+			return false;
+		}
+		st.error = describeApiError(err);
+		console.error(`[nolune] ${conversationId.slice(0, 8)} summarizing failed:`, err);
+		return false;
+	}
+	const summary = summaryOf(reply);
+	const { usage } = reply;
+	console.log(
+		`[nolune] ${conversationId.slice(0, 8)} ${conv.model} summarized the conversation${usage ? ` in=${usage.input} cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite} out=${usage.output}` : ''} stop=${reply.stopReason}${summary ? '' : ' (no summary)'}`
+	);
+	if (!summary) {
+		clearLive(conversationId);
+		st.error =
+			reason === 'window'
+				? `${conv.presetName} didn't write the summary this chat needs to fit its context window. Try again, or switch to a model with a larger one.`
+				: `${conv.presetName} didn't write a summary of the chat. Try again.`;
+		return false;
+	}
+	const row = appendRow({
+		conversationId,
+		role: 'user',
+		kind: 'compaction',
+		senderName: askedBy ?? undefined,
+		text: summary,
+		blocks: [compactionNote(summary)],
+		usage
+	});
+	st.live = [];
+	st.toolOutput = null;
+	emit(conversationId, { type: 'message', message: toDisplay(row), replacesLive: true });
+	touchConversation(conversationId);
+	return true;
+}
+
+/** Why a chat can't be summarized now, in words for the person who asked. */
+export class CompactionError extends Error {}
+
+/**
+ * Summarizes the conversation now, as the runner does by itself once it nears the model's window
+ * (compaction.ts), because someone in the chat (`askedBy`, their name) asked to: the model calls
+ * after it start from the summary. It runs like a turn of the agent (runCompaction). Throws
+ * CompactionError when it can't: the agent is working, the chat is on the Claude plan (Claude Code
+ * summarizes its own sessions) or a subagent's, or nothing came since the latest summary.
+ */
+export function compactConversation(conversationId: string, askedBy: string): void {
+	const stored = getConversation(conversationId);
+	if (!stored) throw new CompactionError('This chat no longer exists.');
+	if (stateFor(conversationId).running) {
+		throw new CompactionError(
+			'nolune is working in this chat. Wait until it finishes, or stop it.'
+		);
+	}
+	if (isAgentPlan(stored.provider)) {
+		throw new CompactionError(
+			'Claude Code keeps chats on the Claude plan and summarizes them itself.'
+		);
+	}
+	if (isSubagentConversation(conversationId)) {
+		throw new CompactionError(
+			"This is a subagent's chat: only the agent that started it works on it."
+		);
+	}
+	const rows = committedRows(conversationId);
+	if (!hasNewReplies(rows)) throw new CompactionError('There is nothing new to summarize yet.');
+	runCompaction(stored, rows, 'asked', askedBy);
+}
+
+/**
+ * Summarizes a chat that went quiet, when it's worth it (idleCompactable; the minutes are
+ * idle-compaction.ts's to count): not while the agent works or a message waits. True if it started.
+ * A failure only goes to the log: nobody asked for it.
+ */
+export function compactIdle(conversationId: string): boolean {
+	const stored = getConversation(conversationId);
+	if (!stored || stateFor(conversationId).running || queuedRows(conversationId).length) {
+		return false;
+	}
+	const rows = committedRows(conversationId);
+	if (!idleCompactable(stored, rows)) return false;
+	console.log(`[nolune] ${conversationId.slice(0, 8)} went quiet, summarizing it`);
+	runCompaction(stored, rows, 'idle', null);
+	return true;
+}
+
+/**
+ * A summary outside the agent's loop, run like a turn of it: everyone with the chat open sees it,
+ * Stop ends it, and messages sent meanwhile start a turn once it's done, from the summary.
+ */
+function runCompaction(
+	stored: Conversation,
+	rows: MessageRow[],
+	reason: Exclude<SummaryReason, 'window'>,
+	askedBy: string | null
+): void {
+	const conversationId = stored.id;
+	const st = stateFor(conversationId);
+	const abort = new AbortController();
+	st.running = true;
+	st.error = null;
+	st.stoppedBy = null;
+	st.abort = abort;
+	emit(conversationId, { type: 'status', running: true, error: null });
+	runningChanged(conversationId, true);
+	compact(withCurrentContext(stored, rows), rows, st, abort, reason, askedBy)
+		.catch((err: unknown) => {
+			console.error(`[nolune] ${conversationId.slice(0, 8)} summarizing crashed:`, err);
+			st.error = err instanceof Error ? err.message : String(err);
+		})
+		.finally(() => {
+			// Nobody asked for a quiet chat's summary: a failure isn't the chat's to show.
+			if (reason === 'idle' && st.error) {
+				console.error(
+					`[nolune] ${conversationId.slice(0, 8)} quiet chat not summarized: ${st.error}`
+				);
+				st.error = null;
+			}
+			st.running = false;
+			st.abort = null;
+			st.live = [];
+			st.toolOutput = null;
+			emit(conversationId, { type: 'status', running: false, error: st.error });
+			runningChanged(conversationId, false);
+			// Not a turn: nothing that waits for the agent's turn to end is told.
+			if (queuedRows(conversationId).length) kick(conversationId);
+		});
+}
+
 async function loop(conversationId: string): Promise<void> {
 	const st = stateFor(conversationId);
 	if (st.running) return; // the running loop picks up new messages at its next step
@@ -1146,7 +1508,7 @@ async function loop(conversationId: string): Promise<void> {
 			if (!stored) return;
 			commitQueued(conversationId);
 			const rows = committedRows(conversationId);
-			if (rows.at(-1)?.role !== 'user') return;
+			if (!awaitsReply(rows)) return;
 			countBlocksFrom(st, rows);
 			// The agent went on calling commands after auto mode told it to stop, and nobody has
 			// said anything since.
@@ -1164,23 +1526,18 @@ async function loop(conversationId: string): Promise<void> {
 				if (!queuedRows(conversationId).length) return;
 				continue;
 			}
-			const messages = requestMessages(rows, conv.promptChangedAtSeq);
+			if (needsCompaction(conv, rows)) {
+				if (!(await compact(conv, rows, st, abort))) return;
+				continue;
+			}
+			const onServer = compactsOnServer(conv.provider, conv.model);
+			const messages = requestMessages(rows, conv.promptChangedAtSeq, onServer ? conv.model : null);
 			let reply: ModelReply;
 			try {
 				reply = await streamTurn({
-					provider: conv.provider,
-					model: conv.model,
-					effort: conv.effort,
-					system: conv.systemPrompt,
-					tools: toolsFor(conv),
-					cacheTtl: conv.cacheTtl,
-					cacheKey: conv.id,
-					// Pictures and PDFs kept by reference, as this provider gets them, where the model
-					// takes them.
-					messages: await resolveFiles(
-						await readableMessages(conv.provider, conv.model, messages),
-						conv.provider
-					),
+					...modelCall(conv),
+					messages: await providerMessages(conv, messages),
+					compactAt: onServer ? serverCompactAt(conv.contextWindow) : null,
 					signal: abort.signal,
 					onEvent: (event) => onStreamEvent(conversationId, event),
 					// Automations' and subagents' runs, which the nolune plan keeps a share of its limits from.
@@ -1240,6 +1597,11 @@ async function loop(conversationId: string): Promise<void> {
 		st.live = [];
 		st.toolOutput = null;
 		emit(conversationId, { type: 'status', running: false, error: st.error });
+		// The agent may have made a skill, or someone connected a server meanwhile: those who
+		// have the chat open see it can reload its tools.
+		if (st.emitter.listenerCount('event')) {
+			emit(conversationId, { type: 'tools', changes: chatToolChanges(conversationId) });
+		}
 		runningChanged(conversationId, false);
 		for (const listener of loopEndListeners) {
 			try {

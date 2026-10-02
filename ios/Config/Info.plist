@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+	What Xcode doesn't make from the build settings (GENERATE_INFOPLIST_FILE): the scene, the launch
+	screen, and what the web app can ask for. The reasons it asks are in Nolune/InfoPlist.xcstrings,
+	in each language.
+-->
+<dict>
+	<!-- One window, with SceneDelegate (UIKit, so the status bar can follow the page's color). -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<!-- Deep space, as the first screen opens on it. -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>Space</string>
+	</dict>
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleLightContent</string>
+	<!-- The web app's photo button, and its file picker's "Take Photo or Video". -->
+	<key>NSCameraUsageDescription</key>
+	<string>To take a photo or video for a message.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>To record sound with a video for a message.</string>
+	<!-- "Save Image" on a picture nolune hands over. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>To save pictures nolune makes or sends you.</string>
+	<!-- A nolune at http://<computer>.local or on localhost, while working on it. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>To open a nolune on a computer on this network.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- Only HTTPS, which Apple's export rules exempt: no question about it at each upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

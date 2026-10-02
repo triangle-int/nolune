@@ -41,3 +41,7 @@ vite.config.ts.timestamp-*
 # The macOS app (macos/)
 /macos/.build
 /macos/dist
+
+# The iOS app (ios/)
+/ios/build
+xcuserdata/

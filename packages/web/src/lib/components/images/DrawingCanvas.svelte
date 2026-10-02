@@ -144,7 +144,7 @@
 <!-- Above the template dialog, which keeps its overlay and blocks the page's pointer events
 	until it has finished closing: that would swallow the first stroke. -->
 <div
-	class="pointer-events-auto fixed inset-0 z-[60] flex flex-col bg-background pt-[env(safe-area-inset-top)] pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+	class="pointer-events-auto fixed inset-0 z-[60] flex flex-col bg-background pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[env(safe-area-inset-left)]"
 	role="dialog"
 	aria-modal="true"
 	aria-label={m.drawing.title}

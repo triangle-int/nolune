@@ -33,9 +33,21 @@ const DEFAULT_API_URL = 'https://api.openai.com/v1';
 const CATALOG_TTL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** Codex's latest release when this was written: the least the model catalog is asked as. */
+const CODEX_VERSION = '0.160.0';
+/** Codex's latest release, as npm says. */
+const DEFAULT_CODEX_RELEASE_URL = 'https://registry.npmjs.org/@openai/codex/latest';
+const CODEX_RELEASE_TTL_MS = 60 * 60 * 1000;
+const CODEX_RELEASE_TIMEOUT_MS = 5_000;
+
 /** Where the plan's requests go. NOLUNE_CHATGPT_API_URL points it at a stand-in, for tests. */
 function apiUrl(): string {
 	return (process.env.NOLUNE_CHATGPT_API_URL || DEFAULT_API_URL).replace(/\/+$/, '');
+}
+
+/** Where Codex's latest release is asked for. NOLUNE_CODEX_RELEASE_URL points it at a stand-in. */
+function codexReleaseUrl(): string {
+	return process.env.NOLUNE_CODEX_RELEASE_URL || DEFAULT_CODEX_RELEASE_URL;
 }
 
 let cached: { baseURL: string; client: OpenAI } | undefined;
@@ -183,11 +195,70 @@ function modelOf(entry: Record<string, unknown>): ChatGptModel | null {
 	};
 }
 
+/** "0.160.0" as its numbers; null for a version of another kind (a pre-release, say). */
+function versionParts(version: string): number[] | null {
+	const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+	return match ? match.slice(1).map(Number) : null;
+}
+
+function isNewer(version: string, than: string): boolean {
+	const a = versionParts(version);
+	const b = versionParts(than);
+	if (!a || !b) return false;
+	const i = a.findIndex((part, j) => part !== b[j]);
+	return i >= 0 && a[i] > b[i];
+}
+
+let releaseCache: { url: string; at: number; version: string } | null = null;
+
+/**
+ * The Codex version the model catalog is asked as. The catalog is Codex's: it shows a model only
+ * to a client at or past the model's `minimal_client_version`, and without a version it answers
+ * with an older list, so new models (gpt-6.1-sol, when it came) are missing. A new model comes
+ * with the Codex release that knows it, so this is Codex's latest release, looked up on npm at
+ * most hourly, and CODEX_VERSION when npm doesn't answer or says an older one.
+ */
+async function clientVersion(): Promise<string> {
+	const url = codexReleaseUrl();
+	if (releaseCache?.url === url && Date.now() - releaseCache.at < CODEX_RELEASE_TTL_MS) {
+		return releaseCache.version;
+	}
+	let version = CODEX_VERSION;
+	try {
+		const res = await fetch(url, {
+			headers: { accept: 'application/json' },
+			signal: AbortSignal.timeout(CODEX_RELEASE_TIMEOUT_MS)
+		});
+		const latest = res.ok ? str(((await res.json()) as Record<string, unknown>).version) : null;
+		if (latest && isNewer(latest, version)) version = latest;
+	} catch {
+		// The version nolune knows, until the next look.
+	}
+	releaseCache = { url, at: Date.now(), version };
+	return version;
+}
+
+/** The catalog's answer, asked as Codex `version`, or with no version when null. */
+async function askCatalog(token: string, version: string | null): Promise<Response> {
+	const url = new URL(`${apiUrl()}/models`);
+	if (version) url.searchParams.set('client_version', version);
+	try {
+		return await fetch(url, {
+			headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+		});
+	} catch (err) {
+		const why = err instanceof Error ? err.message : String(err);
+		throw new PlanError(`Couldn't reach OpenAI for the ChatGPT plan's models (${why}).`);
+	}
+}
+
 let catalogCache: { account: string; at: number; models: ChatGptModel[] } | null = null;
 
 /**
  * The models the signed-in account's plan offers, in ChatGPT's order: its model catalog, which
- * answers `GET /models` with the plan's token (a `models` array, not the API's `data`).
+ * answers `GET /models` with the plan's token (a `models` array, not the API's `data`), asked as
+ * Codex's latest release (clientVersion).
  */
 async function catalog(refresh = false): Promise<ChatGptModel[]> {
 	const account = requireRegistration().clientId;
@@ -198,16 +269,12 @@ async function catalog(refresh = false): Promise<ChatGptModel[]> {
 	) {
 		return catalogCache.models;
 	}
-	const token = await chatGptAccessToken();
-	let res: Response;
-	try {
-		res = await fetch(`${apiUrl()}/models`, {
-			headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
-			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-		});
-	} catch (err) {
-		const why = err instanceof Error ? err.message : String(err);
-		throw new PlanError(`Couldn't reach OpenAI for the ChatGPT plan's models (${why}).`);
+	const [token, version] = await Promise.all([chatGptAccessToken(), clientVersion()]);
+	let res = await askCatalog(token, version);
+	if (res.status === 400) {
+		// Should OpenAI stop taking the version, the list without one beats none.
+		await res.body?.cancel();
+		res = await askCatalog(token, null);
 	}
 	const text = await res.text();
 	let body: Record<string, unknown> = {};
