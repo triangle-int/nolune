@@ -58,7 +58,7 @@ async function start(): Promise<Service> {
 	const sendEmail = emailSender({
 		// At a public address, codes printed to the log would reach nobody: it needs Resend.
 		apiKey: env.ORIGIN?.startsWith('https://') ? required('RESEND_API_KEY') : env.RESEND_API_KEY,
-		from: env.EMAIL_FROM || 'nolune <account@nolune.dev>'
+		from: env.EMAIL_FROM || 'nolune <account@mail.nolune.dev>'
 	});
 	const auth = createAuth({
 		db,

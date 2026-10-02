@@ -2181,7 +2181,8 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   `ok` while Postgres does, for the container's health check and `check.sh`. Updating it
   rebuilds and restarts the API only. About 40 MB for the API and 55 MB for Postgres, idle.
 - **Accounts** are better-auth's, with no password: the sign-in page emails a 6-digit code (through
-  Resend's API, with plain fetch), good for 5 minutes and 5 tries, and the first sign-in makes the
+  Resend's API, with plain fetch, from `account@mail.nolune.dev`: a subdomain, so what it sends
+  doesn't weigh on `nolune.dev`'s own reputation), good for 5 minutes and 5 tries, and the first sign-in makes the
   account. Since anyone can ask for a code to any address, the page sends at most 3 to an address
   and 10 to a network every 10 minutes, and takes 20 tries at codes from a network (its own limits:
   better-auth's apply to requests through its handler, not to the calls form actions make).
