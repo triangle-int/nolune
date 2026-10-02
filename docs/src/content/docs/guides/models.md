@@ -72,7 +72,9 @@ differently.
   load, so copy its address and paste it under Models & keys (or into `setup` at a terminal).
   nolune keeps the sign-in in `~/.nolune/chatgpt.json`, readable by you only. See and limit what
   nolune uses in [ChatGPT's usage settings](https://chatgpt.com/settings/usage), where you can also
-  disconnect it. `nolune chatgpt-plan models` lists what the plan offers, and
+  disconnect it. `nolune chatgpt-plan models` lists what the plan offers (OpenAI lists a new model
+  only to Codex versions made for it, so nolune asks for the list as Codex's latest release, which
+  it looks up on npm), and
   `nolune chatgpt-plan logout` signs out. Earlier versions ran Codex for this: its folder,
   `~/.nolune/codex`, isn't used any more and can be deleted.
 
