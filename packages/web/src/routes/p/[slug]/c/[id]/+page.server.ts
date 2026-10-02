@@ -3,17 +3,16 @@ import {
 	EFFORTS,
 	TitleError,
 	commandMode,
-	deleteConversation,
 	getConversation,
 	getDefaultPreset,
 	heldFileProviders,
 	listPresets,
 	renameConversation,
-	stopConversation,
 	subagentByConversation
 } from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireConversation } from '$lib/server/access';
+import { removeChat } from '$lib/server/chats';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals, params }) => {
@@ -66,9 +65,7 @@ export const actions: Actions = {
 
 	delete: async ({ locals, params }) => {
 		const { profile, user } = requireConversation(locals, params.id);
-		// Nothing keeps working, or reports back, for a chat that's gone.
-		stopConversation(params.id, user.name);
-		deleteConversation(params.id);
+		removeChat(params.id, user.name);
 		redirect(303, `/p/${profile.slug}`);
 	}
 };

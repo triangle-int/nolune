@@ -252,8 +252,23 @@ export function createConversation(
 	return created;
 }
 
-export function listConversations(profileId: string) {
-	return getDb()
+/** Where a page of listConversations starts: after this conversation, in its order. */
+export interface ConversationCursor {
+	updatedAt: Date;
+	id: string;
+}
+
+/**
+ * The profile's visible conversations, most recently active first, the id breaking a tie so pages
+ * neither skip nor repeat one. All of them, or `page.limit` after `page.after`.
+ */
+export function listConversations(
+	profileId: string,
+	page?: { limit: number; after?: ConversationCursor }
+) {
+	const visible = and(eq(conversation.profileId, profileId), eq(conversation.hidden, false));
+	const after = page?.after;
+	const query = getDb()
 		.select({
 			id: conversation.id,
 			title: conversation.title,
@@ -262,9 +277,19 @@ export function listConversations(profileId: string) {
 			updatedAt: conversation.updatedAt
 		})
 		.from(conversation)
-		.where(and(eq(conversation.profileId, profileId), eq(conversation.hidden, false)))
-		.orderBy(desc(conversation.updatedAt))
-		.all();
+		.where(
+			after
+				? and(
+						visible,
+						or(
+							lt(conversation.updatedAt, after.updatedAt),
+							and(eq(conversation.updatedAt, after.updatedAt), lt(conversation.id, after.id))
+						)
+					)
+				: visible
+		)
+		.orderBy(desc(conversation.updatedAt), desc(conversation.id));
+	return page ? query.limit(page.limit).all() : query.all();
 }
 
 export function getConversation(id: string): Conversation | undefined {

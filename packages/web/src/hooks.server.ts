@@ -25,8 +25,11 @@ export const init: ServerInit = () => {
 	holdMcpConnections();
 };
 
-/** Webhook URLs and invite links carry their own secret token instead of a login. */
-const PUBLIC_PATHS = ['/login', '/api/auth/', '/api/hooks/', '/invite/'];
+/**
+ * Webhook URLs and invite links carry their own secret token instead of a login. Apps ask which
+ * nolune this is (`/api/version`) before anyone signs in.
+ */
+const PUBLIC_PATHS = ['/login', '/api/auth/', '/api/hooks/', '/invite/', '/api/version'];
 
 /**
  * `nolune start` raises adapter-node's body limit so attachments can be uploaded. Every other route
