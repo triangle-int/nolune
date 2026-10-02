@@ -9,6 +9,7 @@ import {
 	hasPlan,
 	noPlan,
 	startPlan,
+	takeBack,
 	type PeriodGrant
 } from './limits.ts';
 import { customer, user } from './schema.ts';
@@ -103,7 +104,7 @@ export interface SubscriptionState {
 /** The Stripe calls billing makes: Stripe's own client, or a stand-in in tests. */
 export type StripeApi = Pick<
 	Stripe,
-	'customers' | 'checkout' | 'billingPortal' | 'subscriptions' | 'prices'
+	'customers' | 'checkout' | 'billingPortal' | 'subscriptions' | 'prices' | 'invoicePayments'
 >;
 
 export interface BillingOptions {
@@ -299,6 +300,8 @@ export class Billing {
 				return this.checkoutPaid(event.data.object);
 			case 'customer.subscription.deleted':
 				return this.subscriptionEnded(event.data.object);
+			case 'charge.refunded':
+				return this.chargeRefunded(event.data.object);
 		}
 	}
 
@@ -383,6 +386,47 @@ export class Billing {
 				expiresAt: now + days * DAY
 			})
 		);
+	}
+
+	/**
+	 * A payment refunded in full (from the Dashboard, or by Stripe itself under Managed Payments)
+	 * takes back what's left of what it paid for: a period's credits or a pack's. A refund of part
+	 * of a payment takes nothing, and is logged for whoever made it to settle.
+	 */
+	private async chargeRefunded(charge: Stripe.Charge): Promise<void> {
+		// Someone's here, or the payment was for something else the account sells.
+		const userId = await this.userOf(charge.customer, charge.metadata?.userId);
+		if (!userId) return;
+		const ref = charge.payment_intent;
+		const paymentIntent = typeof ref === 'string' ? ref : ref?.id;
+		if (!paymentIntent) return;
+		if (!charge.refunded) {
+			this.log.warn(
+				`[nolune api] ${charge.id} was refunded in part (${charge.amount_refunded} of ${charge.amount}); its credits stay`
+			);
+			return;
+		}
+		const source = await this.paidFor(paymentIntent);
+		if (!source) {
+			this.log.warn(`[nolune api] ${charge.id} was refunded, and paid for nothing nolune granted`);
+			return;
+		}
+		await updateAccount(this.db, userId, (account) => (account ? takeBack(account, source) : null));
+	}
+
+	/** What a payment paid for, as its credits' source: a period's invoice, or a pack's Checkout. */
+	private async paidFor(paymentIntent: string): Promise<string | null> {
+		const { data: payments } = await this.stripe.invoicePayments.list({
+			payment: { type: 'payment_intent', payment_intent: paymentIntent },
+			limit: 1
+		});
+		const invoice = payments[0]?.invoice;
+		if (invoice) return typeof invoice === 'string' ? invoice : (invoice.id ?? null);
+		const { data: sessions } = await this.stripe.checkout.sessions.list({
+			payment_intent: paymentIntent,
+			limit: 1
+		});
+		return sessions[0]?.id ?? null;
 	}
 
 	/** A subscription that ran out ends the plan, unless another one holds it now. */

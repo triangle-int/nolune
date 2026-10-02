@@ -2434,7 +2434,11 @@ Triangle Interactive, LLC sells the plan, through Stripe.
   does one for a subscription that has run out since. `checkout.session.completed` (or
   `async_payment_succeeded`, for a payment that comes later) adds a pack's credits.
   `customer.subscription.deleted`, sent when a cancelled subscription runs out, ends the plan
-  unless another subscription holds it. Each event is checked by its signature, and each grant is
+  unless another subscription holds it. `charge.refunded` for a payment refunded in full (from
+  the Dashboard, or by Stripe itself, which under Managed Payments may refund within 60 days)
+  takes back what's left of what it paid for, found by its payment intent (the invoice's payment,
+  or the pack's Checkout Session): spent credits stay spent, and those carried over from an
+  earlier period stay. A refund of part of a payment takes nothing and is logged. Each event is checked by its signature, and each grant is
   keyed by what paid for it (the invoice, the Checkout Session), so an event Stripe sends twice
   grants once. The account sells Gensprite too, and the endpoint hears its events as well: an
   event is nolune's when its subscription or Checkout says whose it is (`userId`, which Checkout

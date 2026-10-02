@@ -66,6 +66,8 @@ function fakeStripe() {
 	const calls: { name: string; params: unknown; options?: unknown }[] = [];
 	const subscriptions: FakeSubscription[] = [];
 	const lineItems = new Map<string, { price: object; quantity: number }[]>();
+	/** What each payment paid for: a period's invoice, or a pack's Checkout Session. */
+	const paidFor = new Map<string, { invoice?: string; session?: string }>();
 	let customers = 0;
 	const subscriptionObject = (s: FakeSubscription) => ({
 		id: s.id,
@@ -96,6 +98,11 @@ function fakeStripe() {
 					calls.push({ name: 'checkout.sessions.create', params });
 					return { id: 'cs_test_1', url: 'https://checkout.stripe.com/c/pay/cs_test_1' };
 				},
+				list: async (params: { payment_intent: string }) => {
+					calls.push({ name: 'checkout.sessions.list', params });
+					const session = paidFor.get(params.payment_intent)?.session;
+					return { data: session ? [{ id: session }] : [] };
+				},
 				listLineItems: async (id: string, params: unknown) => {
 					calls.push({
 						name: 'checkout.sessions.listLineItems',
@@ -113,6 +120,13 @@ function fakeStripe() {
 				}
 			}
 		},
+		invoicePayments: {
+			list: async (params: { payment: { payment_intent: string } }) => {
+				calls.push({ name: 'invoicePayments.list', params });
+				const invoice = paidFor.get(params.payment.payment_intent)?.invoice;
+				return { data: invoice ? [{ invoice }] : [] };
+			}
+		},
 		subscriptions: {
 			list: async (params: { customer: string }) => {
 				calls.push({ name: 'subscriptions.list', params });
@@ -128,7 +142,7 @@ function fakeStripe() {
 			}
 		}
 	};
-	return { api: api as unknown as StripeApi, calls, subscriptions, lineItems };
+	return { api: api as unknown as StripeApi, calls, subscriptions, lineItems, paidFor };
 }
 
 async function setUp(options: { managedPayments?: boolean; portalConfiguration?: string } = {}) {
@@ -189,6 +203,22 @@ const checkoutCompleted = (id: string, paid = true, type = 'checkout.session.com
 		customer: 'cus_1',
 		client_reference_id: 'u1',
 		metadata: { userId: 'u1' }
+	});
+
+/** A payment refunded, in full unless `refunded` says how much of it. */
+const chargeRefunded = (
+	paymentIntent: string,
+	{ customer = 'cus_1', refunded = 2000 }: { customer?: string; refunded?: number } = {}
+) =>
+	event('charge.refunded', {
+		id: `ch_${paymentIntent}`,
+		object: 'charge',
+		customer,
+		payment_intent: paymentIntent,
+		amount: 2000,
+		amount_refunded: refunded,
+		refunded: refunded === 2000,
+		metadata: {}
 	});
 
 describe('what a product grants', () => {
@@ -543,6 +573,51 @@ describe("Stripe's events", () => {
 			})
 		);
 		expect((await readAccount(db, person.id))?.limits?.month).toBe(25_000_000);
+	});
+
+	it('take back what is left of a period or a pack whose payment is refunded', async () => {
+		const { db, billing, stripe, person, warnings } = await setUp();
+		await billing.customerFor(person);
+		stripe.subscriptions.push({
+			id: 'sub_1',
+			customer: 'cus_1',
+			status: 'active',
+			periodEnd: t0 + 30 * DAY
+		});
+		await billing.handle(invoicePaid('in_1', 'sub_1'));
+		stripe.lineItems.set('cs_1', [{ price: packPrice, quantity: 1 }]);
+		await billing.handle(checkoutCompleted('cs_1'));
+		await updateAccount(db, person.id, (account) => ({
+			...account!,
+			credits: account!.credits.map((c) => (c.source === 'in_1' ? { ...c, left: 15_000_000 } : c))
+		}));
+		stripe.paidFor.set('pi_plan', { invoice: 'in_1' });
+		stripe.paidFor.set('pi_pack', { session: 'cs_1' });
+
+		// Part of a payment: logged, and the credits stay.
+		await billing.handle(chargeRefunded('pi_plan', { refunded: 1000 }));
+		expect(warnings.at(-1)).toMatch(/refunded in part/);
+		expect((await readAccount(db, person.id))?.credits[0].left).toBe(15_000_000);
+
+		// All of it: what's left of the period goes, and the month started with that much less.
+		await billing.handle(chargeRefunded('pi_plan'));
+		await billing.handle(chargeRefunded('pi_plan'));
+		expect(await readAccount(db, person.id)).toMatchObject({
+			limits: { month: 10_000_000 },
+			credits: [
+				{ source: 'in_1', kind: 'plan', left: 0 },
+				{ source: 'cs_1', kind: 'extra', left: 10_000_000 }
+			]
+		});
+		await billing.handle(chargeRefunded('pi_pack'));
+		expect((await readAccount(db, person.id))?.credits[1]).toMatchObject({ left: 0 });
+	});
+
+	it('pass over refunds of what the account sells besides nolune', async () => {
+		const { billing, stripe, warnings } = await setUp();
+		await billing.handle(chargeRefunded('pi_elsewhere', { customer: 'cus_elsewhere' }));
+		expect(stripe.calls).toHaveLength(0);
+		expect(warnings).toHaveLength(0);
 	});
 
 	it('keep a pack paid for with no plan, for when there is one', async () => {
