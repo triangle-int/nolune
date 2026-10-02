@@ -50,6 +50,8 @@ export const paths = {
 	trash: join(home, 'trash'),
 	/** Copies of the pictures and files shown in chats, named by their SHA-256. */
 	media: join(home, 'media'),
+	/** What each MCP server last said its tools are, for chats' tools (mcp.ts). */
+	mcpTools: join(home, 'mcp-tools.json'),
 	globalSkills: process.env.NOLUNE_GLOBAL_SKILLS || join(homedir(), '.agents', 'skills'),
 	/** Skills that ship with nolune, such as `automations`. */
 	builtinSkills: join(packageRoot, 'packages', 'core', 'skills'),

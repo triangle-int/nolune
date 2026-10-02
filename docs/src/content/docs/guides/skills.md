@@ -7,7 +7,9 @@ Skills live in `~/.nolune/profiles/<profile>/skills` and `~/.agents/skills`
 ([Agent Skills](https://agentskills.io) format). The agent creates its own with `nolune skill new`.
 
 Each skill's name and description go into every new chat, so turn off the ones a profile doesn't
-need on its **Skills** page (or `nolune skill disable <name> --profile <slug>`).
+need on its **Skills** page (or `nolune skill disable <name> --profile <slug>`). A chat already going
+keeps the skills it started with; when they changed, a line above its composer says so, and
+**Reload tools** (also in the chat's menu) gives it the skills as they are now.
 
 ## Searching the web
 

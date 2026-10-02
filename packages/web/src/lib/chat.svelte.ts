@@ -7,6 +7,7 @@ import type {
 	LiveBlock,
 	LiveEvent,
 	Snapshot,
+	ToolChanges,
 	Typist
 } from '@nolune/core';
 import type { ToolResult } from './transcript';
@@ -21,6 +22,8 @@ export class ChatState {
 	model = $state<ChatModel | null>(null);
 	/** How its commands run, which anyone in the profile can change. Null until then. */
 	commands = $state<ChatCommands | null>(null);
+	/** What reloading its tools would bring: skills and connected services that changed. */
+	toolChanges = $state<ToolChanges | null>(null);
 	messages = $state<DisplayMessage[]>([]);
 	queued = $state<DisplayMessage[]>([]);
 	running = $state(false);
@@ -51,6 +54,7 @@ export class ChatState {
 				this.title = event.snapshot.title;
 				this.model = event.snapshot.model;
 				this.commands = event.snapshot.commands;
+				this.toolChanges = event.snapshot.toolChanges;
 				this.messages = event.snapshot.messages;
 				this.queued = event.snapshot.queued;
 				this.running = event.snapshot.running;
@@ -70,6 +74,9 @@ export class ChatState {
 				break;
 			case 'commands':
 				this.commands = event.commands;
+				break;
+			case 'tools':
+				this.toolChanges = event.changes;
 				break;
 			case 'background':
 				this.background = event.background;

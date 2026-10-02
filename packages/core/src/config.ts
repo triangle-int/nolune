@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import type { McpServerConfig } from './mcp.ts';
 import { paths } from './paths.ts';
 
 export interface Config {
@@ -44,6 +45,11 @@ export interface Config {
 	embeddings?: 'off' | { provider: 'openai' | 'openrouter' | 'custom-openai'; model: string };
 	/** Extra environment variables for commands the agent runs (e.g. FIRECRAWL_API_KEY). */
 	commandEnv?: Record<string, string>;
+	/**
+	 * MCP servers whose tools the agent uses with `nolune mcp` (mcp.ts), by name, as MCP clients
+	 * write them: a command to run or an address, with their keys (`env`, `headers`).
+	 */
+	mcpServers?: Record<string, McpServerConfig>;
 	/**
 	 * How the agent's commands run (command-safety.ts): `auto`, a model checks each one first and
 	 * blocks what could do harm nobody asked for; `unrestricted`, they run as they are. Unset: auto.

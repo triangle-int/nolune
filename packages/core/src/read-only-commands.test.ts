@@ -27,7 +27,10 @@ describe('isReadOnlyCommand', () => {
 		'nolune agent watch agent-1',
 		'nolune trigger list',
 		'nolune soul',
-		'nolune skill list'
+		'nolune skill list',
+		'nolune mcp',
+		'nolune mcp tools github',
+		'nolune mcp tools github search_issues'
 	])('lets `%s` through', (command) => {
 		expect(isReadOnlyCommand(command)).toBe(true);
 	});
@@ -73,6 +76,9 @@ describe('isReadOnlyCommand', () => {
 		['a nolune command that writes', 'nolune memory add home "The wifi is slow"'],
 		['a nolune command about another profile', 'nolune memory show core --profile kids'],
 		['nolune config', 'nolune config'],
+		['a call to an MCP tool', `nolune mcp call github search_issues '{"query": "bug"}'`],
+		['connecting an MCP server', 'nolune mcp add files -- npx -y server-files ~'],
+		['removing an MCP server', 'nolune mcp rm github'],
 		['nolune alone', 'nolune'],
 		['an empty command', '   '],
 		['an empty part', 'ls && && ls'],
