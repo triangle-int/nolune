@@ -2137,11 +2137,12 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
 _Built, not open yet._ nolune's API (`packages/api`) signs people in, links gateways, keeps the
 limits, passes chats and embeddings on to OpenRouter, and sells the plan through Stripe (its
 account page and webhook); nolune's side links to it and runs chats, memory search and their
-errors on it, and makes pictures on it. The API is packaged to run next to the relay
-(`compose.api.yaml`), and has run there end to end in containers, but isn't on a server yet. Still
-to come: putting it on one (and Stripe's live mode), and automations that wait out a limit. Until the API
-is open to everyone, the web UI offers the plan only when `NOLUNE_PLAN_API_URL` points nolune at
-one (`nolunePlanOffered`); the CLI always has it.
+errors on it, and makes pictures on it. The API runs next to the relay (`compose.api.yaml`), at
+`api.nolune.dev`, on Stripe's test mode. Still to come: Stripe's live mode, automations that wait
+out a limit, and the privacy policy saying what the API keeps. Until the plan is open to everyone
+(`NOLUNE_PLAN_OPEN`, in `nolune-plan-open.ts`), the web UI offers it only when
+`NOLUNE_PLAN_API_URL` points nolune at an API (`nolunePlanOffered`), the CLI always has it, and
+nolune.dev's Pricing shows it only on previews.
 
 The two plans run chats on a subscription someone already has, and nothing else: pictures still
 need an OpenAI key, and search by meaning an OpenAI or OpenRouter one. The nolune plan is a
@@ -2701,6 +2702,7 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   which has no relay to send them.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).
-- The nolune plan (see [The nolune plan](#the-nolune-plan)): putting the API on the relay's
-  server, and automations that wait out a limit rather than fail; then opening it (`OPEN` in
-  `nolune-plan.ts`).
+- The nolune plan (see [The nolune plan](#the-nolune-plan)): Stripe's live mode, automations that
+  wait out a limit rather than fail, and `nolune.dev/privacy` saying what the API keeps (the email,
+  what's spent, Stripe's customer); then opening it (`NOLUNE_PLAN_OPEN` in `nolune-plan-open.ts`),
+  which also shows Pricing on nolune.dev.

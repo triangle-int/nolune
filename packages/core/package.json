@@ -12,7 +12,8 @@
 		"./memory-export": "./src/memory-export.ts",
 		"./memory-categories": "./src/memory-categories.ts",
 		"./schedule": "./src/schedule.ts",
-		"./paths": "./src/paths.ts"
+		"./paths": "./src/paths.ts",
+		"./nolune-plan-open": "./src/nolune-plan-open.ts"
 	},
 	"scripts": {
 		"check": "tsc -p .",

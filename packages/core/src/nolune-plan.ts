@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync }
 import { dirname } from 'node:path';
 import type { ChatApi } from './openrouter.ts';
 import type { ImageApi } from './openrouter-images.ts';
+import { NOLUNE_PLAN_OPEN } from './nolune-plan-open.ts';
 import { paths } from './paths.ts';
 import { PlanError, describePlanAccount, type PlanAccount, type PlanStatus } from './plans.ts';
 
@@ -28,13 +29,9 @@ export function nolunePlanApiUrl(): string {
 	return (process.env.NOLUNE_PLAN_API_URL || DEFAULT_API_URL).replace(/\/+$/, '');
 }
 
-/** Whether nolune's API is open to everyone. Until it is, the web UI offers the plan only when
- * NOLUNE_PLAN_API_URL points nolune at an API (a local one, in development); the CLI always has it. */
-const OPEN = false;
-
 /** Whether the web UI offers the plan: Models & keys, the welcome, Add a model. */
 export function nolunePlanOffered(): boolean {
-	return OPEN || !!process.env.NOLUNE_PLAN_API_URL;
+	return NOLUNE_PLAN_OPEN || !!process.env.NOLUNE_PLAN_API_URL;
 }
 
 /** The account page on nolune's API: where people sign in, subscribe, buy credits and manage it. */
