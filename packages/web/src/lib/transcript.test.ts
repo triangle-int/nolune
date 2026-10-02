@@ -27,6 +27,7 @@ const said = (id: number, text: string): DisplayMessage => ({
 	media: {},
 	stopReason: 'end_turn',
 	usage: null,
+	provider: null,
 	model: null,
 	createdAt: id
 });
@@ -98,6 +99,7 @@ describe('summaries of the conversation', () => {
 				media: {},
 				stopReason: 'end_turn',
 				usage: { ...usage(5, 1), compaction: usage(100, 20) },
+				provider: null,
 				model: null,
 				createdAt: 3
 			}

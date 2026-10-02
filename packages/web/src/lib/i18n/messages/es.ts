@@ -336,6 +336,8 @@ export const es: Messages = {
 			`Pasaron más de ${ttl === '5m' ? '5 minutos' : 'una hora'} desde el paso anterior, así que la conversación en caché caducó y se procesó de nuevo (más lento y más caro).`,
 		cacheBroken:
 			'El contexto que debía salir de la caché se procesó de nuevo (más lento y más caro). Pasa una vez al cambiar el modelo o el nivel de razonamiento, mover el chat a otra carpeta o cambiar su carpeta.',
+		cacheElsewhere:
+			'El contexto que debía salir de la caché se procesó de nuevo (más lento y más caro). OpenAI guarda la caché en uno de sus servidores, y esta petición probablemente llegó a otro: nolune no puede elegir cuál. También pasa una vez al cambiar el nivel de razonamiento, mover el chat a otra carpeta o cambiar su carpeta.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} en caché`,
 		contextUsed: (used: string, window: string) =>

@@ -149,7 +149,8 @@ export type DisplayMessage =
 			media: Record<string, DisplayMedia>;
 			stopReason: string | null;
 			usage: Usage | null;
-			/** The model that wrote it: a conversation can switch models. */
+			/** The provider and model that wrote it: a conversation can switch models. */
+			provider: Provider | null;
 			model: string | null;
 			createdAt: number;
 	  }
@@ -964,6 +965,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 		media: toDisplayMedia(mediaRows),
 		stopReason: row.stopReason,
 		usage: row.usage ? (JSON.parse(row.usage) as Usage) : null,
+		provider: row.provider,
 		model: row.model,
 		createdAt
 	};
