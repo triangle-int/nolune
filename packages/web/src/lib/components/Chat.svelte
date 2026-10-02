@@ -9,6 +9,7 @@
 		ChatModel,
 		CommandMode,
 		DisplayAttachment,
+		ToolChanges,
 		Usage
 	} from '@nolune/core';
 	import type { Avatar } from '@nolune/core/avatars';
@@ -23,6 +24,7 @@
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
@@ -110,6 +112,21 @@
 
 	const prefs = getPreferences();
 	const { m } = getI18n();
+
+	/** What reloading the chat's tools would bring, a phrase each. */
+	function changeLines(changes: ToolChanges): string[] {
+		const say = m.chat.tools;
+		const phrases: [string[] | undefined, (names: string) => string][] = [
+			[changes.services?.added, say.newServices],
+			[changes.services?.changed, say.changedServices],
+			[changes.services?.removed, say.removedServices],
+			[changes.skills?.added, say.newSkills],
+			[changes.skills?.changed, say.changedSkills],
+			[changes.skills?.removed, say.removedSkills]
+		];
+		return phrases.flatMap(([names, phrase]) => (names?.length ? [phrase(names.join(', '))] : []));
+	}
+
 	/** Reasoning levels' names, for the dialog that asks before changing it. */
 	const effortLabels: Record<string, { label: string } | undefined> = m.model.efforts;
 	const chat = new ChatState();
@@ -121,6 +138,9 @@
 	/** Sending a message turns a background run into a normal conversation. */
 	let continued = $state(false);
 	let renaming = $state<{ id: string; title: string } | null>(null);
+	let reloading = $state(false);
+	/** What reloading the chat's tools did, until the next message. */
+	let reloaded = $state<string | null>(null);
 	let deleteOpen = $state(false);
 	let creatingFolder = $state(false);
 	const folder = $derived(folders.find((f) => f.id === folderId));
@@ -526,6 +546,7 @@
 		// A "typing" still on its way would otherwise show them typing again after the message.
 		await typing.settled();
 		if (await post('messages', { text: message, uploads })) {
+			reloaded = null;
 			typing.sent();
 			text = '';
 			attachments.clear();
@@ -534,6 +555,22 @@
 		}
 		sending = false;
 		textarea?.focus();
+	}
+
+	/**
+	 * Reload tools: the chat gets the profile's skills and connected services as they are now, and
+	 * its next reply reads it all again.
+	 */
+	async function reloadTools() {
+		reloading = true;
+		reloaded = null;
+		const res = await post('tools');
+		if (res) {
+			const { changes } = (await res.json()) as { changes: ToolChanges | null };
+			chat.toolChanges = null;
+			reloaded = changes ? m.chat.tools.reloaded : m.chat.tools.upToDate;
+		}
+		reloading = false;
 	}
 
 	async function move(target: string | null) {
@@ -778,6 +815,16 @@
 					onmove={move}
 					onnew={() => (creatingFolder = true)}
 				/>
+				{#if !conversation.subagent}
+					<DropdownMenu.Item
+						disabled={chat.running || reloading}
+						title={m.chat.tools.reloadHint}
+						onSelect={reloadTools}
+					>
+						<RefreshCwIcon />
+						{m.chat.tools.reload}
+					</DropdownMenu.Item>
+				{/if}
 				<DropdownMenu.Separator />
 				<DropdownMenu.Item variant="destructive" onSelect={() => (deleteOpen = true)}>
 					<Trash2Icon />
@@ -980,6 +1027,23 @@
 				<ArrowDownIcon class="size-4" />
 			</button>
 		{/if}
+		{#if chat.toolChanges && !conversation.subagent}
+			<div
+				class="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-2xl border bg-background px-4 py-2 text-sm shadow-sm"
+			>
+				<span class="flex min-w-0 items-start gap-1.5 text-muted-foreground">
+					<RefreshCwIcon class="mt-0.5 size-3.5 shrink-0" />
+					<span>{changeLines(chat.toolChanges).join(' · ')}</span>
+				</span>
+				<Button
+					size="sm"
+					variant="outline"
+					disabled={chat.running || reloading}
+					title={m.chat.tools.reloadHint}
+					onclick={reloadTools}>{m.chat.tools.reload}</Button
+				>
+			</div>
+		{/if}
 		{#if conversation.subagent}
 			<div
 				class="flex items-center justify-between gap-3 rounded-[26px] border bg-background px-5 py-3 text-sm text-muted-foreground shadow-sm"
@@ -1024,6 +1088,8 @@
 		{/if}
 		{#if actionError}
 			<p class="mt-2 text-center text-sm text-destructive">{actionError}</p>
+		{:else if reloaded}
+			<p class="mt-2 text-center text-xs text-muted-foreground">{reloaded}</p>
 		{:else if !chat.connected && chat.loaded}
 			<p class="mt-2 text-center text-xs text-warning">{m.chat.reconnecting}</p>
 		{:else}

@@ -192,7 +192,10 @@ export function setProfileAvatar(profileId: string, avatar: string): Avatar {
 	return avatar;
 }
 
-/** Turns skills on or off for this profile's new chats. Chats already started keep their prompt. */
+/**
+ * Turns skills on or off for this profile's chats: new ones list what's on, and so does a chat
+ * already going once its tools are reloaded (reloadTools in runner.ts).
+ */
 export function setSkillsEnabled(profileId: string, names: string[], enabled: boolean): void {
 	getDb().transaction((tx) => {
 		const found = tx.select().from(profile).where(eq(profile.id, profileId)).get();

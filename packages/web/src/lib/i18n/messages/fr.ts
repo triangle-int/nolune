@@ -289,6 +289,19 @@ export const fr: Messages = {
 		fromNolune: (to: string) => `De nolune, pour ${to}`,
 		finishedInBackground: (title: string) => `Terminé en arrière-plan · ${title}`,
 		inBackground: 'Travail en arrière-plan',
+		tools: {
+			reload: 'Recharger les outils',
+			reloadHint:
+				'Donne à cette discussion les compétences et services connectés du profil tels qu’ils sont maintenant. Sa prochaine réponse relit toute la discussion, et coûte donc plus que d’habitude.',
+			reloaded: 'Cette discussion a maintenant les dernières compétences et les derniers outils.',
+			upToDate: 'Cette discussion avait déjà les dernières compétences et les derniers outils.',
+			newSkills: (names: string) => `Nouvelles compétences : ${names}`,
+			changedSkills: (names: string) => `Compétences mises à jour : ${names}`,
+			removedSkills: (names: string) => `Compétences plus disponibles : ${names}`,
+			newServices: (names: string) => `Connecté : ${names}`,
+			changedServices: (names: string) => `Outils mis à jour : ${names}`,
+			removedServices: (names: string) => `Déconnecté : ${names}`
+		},
 		aCommand: 'Une commande',
 		subagent: (name: string) => `Sous-agent ${name}`,
 		stopping: 'en cours d’arrêt',
@@ -802,7 +815,7 @@ export const fr: Messages = {
 	skills: {
 		title: 'Compétences',
 		intro:
-			'Les compétences sont des instructions que nolune suit pour des tâches précises. Il voit le nom et la description de chaque compétence activée, et lit le reste quand une tâche le demande. Désactiver celles dont ce profil n’a pas besoin aide nolune à rester concentré. Les changements s’appliquent aux nouvelles discussions.',
+			'Les compétences sont des instructions que nolune suit pour des tâches précises. Il voit le nom et la description de chaque compétence activée, et lit le reste quand une tâche le demande. Désactiver celles dont ce profil n’a pas besoin aide nolune à rester concentré. Les changements s’appliquent aux nouvelles discussions, et à une discussion en cours quand quelqu’un recharge ses outils.',
 		summary: (on: number, total: number, tokens: string) =>
 			`${on} sur ${total} activées · environ ${tokens} tokens au début de chaque nouvelle discussion`,
 		madeFor: (profile: string) => `Faites pour ${profile}`,
@@ -1306,7 +1319,7 @@ export const fr: Messages = {
 	 */
 	services: {
 		title: 'Services connectés',
-		hint: 'Les serveurs MCP donnent à l’agent les outils d’autres applications et services, comme un agenda, GitHub, Notion ou la maison connectée. Les nouvelles discussions reçoivent leurs outils à côté des siens, et le mode auto vérifie chaque appel comme une commande. Tous les profils les ont, sauf si vous en choisissez certains.',
+		hint: 'Les serveurs MCP donnent à l’agent les outils d’autres applications et services, comme un agenda, GitHub, Notion ou la maison connectée. Les nouvelles discussions reçoivent leurs outils à côté des siens (une discussion en cours, quand quelqu’un recharge ses outils), et le mode auto vérifie chaque appel comme une commande. Tous les profils les ont, sauf si vous en choisissez certains.',
 		add: 'Connecter un serveur',
 		addTitle: 'Connecter un serveur MCP',
 		addHint:

@@ -42,6 +42,7 @@ import { effectiveContextWindow, getPreset } from './presets.ts';
 import type { Profile } from './profiles.ts';
 import { mcpChatTools, mcpToolServer } from './mcp.ts';
 import { LEGACY_TOOLS, TOOLS } from './run-command.ts';
+import { catalogSkills, skillsInPrompt, type CatalogSkill } from './skills.ts';
 import { readSoul } from './soul.ts';
 import { promptTokens } from './usage.ts';
 
@@ -161,6 +162,23 @@ export type DisplayMessage =
 			createdAt: number;
 	  };
 
+/** Names of skills or connected services, by what happened to them. */
+export interface Changes {
+	added: string[];
+	changed: string[];
+	/** Removed, turned off, or (a server) disconnected. */
+	removed: string[];
+}
+
+/**
+ * What building a chat's prompt again would change: the profile's skills, and the tools of its MCP
+ * servers, as they are now against what the chat has.
+ */
+export interface ToolChanges {
+	skills: Changes | null;
+	services: Changes | null;
+}
+
 /** The model a conversation is created with: a preset's, or another conversation's. */
 type ModelChoice = { presetId: string } | { modelOf: Conversation };
 
@@ -247,9 +265,84 @@ export function getConversation(id: string): Conversation | undefined {
 	return getDb().select().from(conversation).where(eq(conversation.id, id)).get();
 }
 
-/** The tool definitions the conversation's requests send, as they were when it was created. */
+/**
+ * The tool definitions the conversation's requests send: nolune's own as they were when it was
+ * created, then its MCP servers' as they were when its prompt was last built.
+ */
 export function toolsFor(conv: Pick<Conversation, 'tools'>): Anthropic.Tool[] {
 	return conv.tools ?? LEGACY_TOOLS;
+}
+
+/**
+ * The chat's tools with its profile's servers' tools as they are now (mcpChatTools), after its
+ * own, which stay as it saved them. Null when it has those already, in whatever order.
+ */
+export function currentTools(
+	conv: Pick<Conversation, 'tools'>,
+	profile: string
+): Anthropic.Tool[] | null {
+	const saved = toolsFor(conv);
+	const tools = [...saved.filter((t) => !mcpToolServer(t.name)), ...mcpChatTools(profile)];
+	const had = new Map(saved.map((t) => [t.name, JSON.stringify(t)]));
+	const same =
+		tools.length === saved.length && tools.every((t) => had.get(t.name) === JSON.stringify(t));
+	return same ? null : tools;
+}
+
+/** What's different between two sets of things, each by name, as text to compare. */
+function changes(before: Map<string, string>, after: Map<string, string>): Changes | null {
+	const added = [...after.keys()].filter((name) => !before.has(name));
+	const changed = [...after.keys()].filter(
+		(name) => before.has(name) && before.get(name) !== after.get(name)
+	);
+	const removed = [...before.keys()].filter((name) => !after.has(name));
+	return added.length || changed.length || removed.length ? { added, changed, removed } : null;
+}
+
+export function skillChanges(
+	before: readonly CatalogSkill[],
+	after: readonly CatalogSkill[]
+): Changes | null {
+	const byName = (skills: readonly CatalogSkill[]) =>
+		new Map(skills.map((s) => [s.name, JSON.stringify([s.description, s.location])]));
+	return changes(byName(before), byName(after));
+}
+
+/** Which MCP servers' tools differ between two sets of a chat's tools. */
+export function serviceChanges(
+	before: readonly Anthropic.Tool[],
+	after: readonly Anthropic.Tool[]
+): Changes | null {
+	const byServer = (tools: readonly Anthropic.Tool[]) => {
+		const servers = new Map<string, Anthropic.Tool[]>();
+		for (const tool of tools) {
+			const server = mcpToolServer(tool.name);
+			if (server) servers.set(server, [...(servers.get(server) ?? []), tool]);
+		}
+		return new Map(
+			[...servers].map(([server, list]) => [
+				server,
+				JSON.stringify(list.sort((a, b) => a.name.localeCompare(b.name)))
+			])
+		);
+	};
+	return changes(byServer(before), byServer(after));
+}
+
+/**
+ * What building the chat's prompt again (rebuildSystemPrompt) would change in its skills and its
+ * MCP servers' tools. Null when it has them as they are now. Skills count as the same in a prompt
+ * from before nolune could read them back (skillsInPrompt).
+ */
+export function toolChanges(
+	conv: Pick<Conversation, 'tools' | 'systemPrompt'>,
+	profile: Pick<Profile, 'slug' | 'disabledSkills'>
+): ToolChanges | null {
+	const tools = currentTools(conv, profile.slug);
+	const had = skillsInPrompt(conv.systemPrompt);
+	const skills = had && skillChanges(had, catalogSkills(profile));
+	const services = tools && serviceChanges(toolsFor(conv), tools);
+	return skills || services ? { skills, services } : null;
 }
 
 /**
@@ -378,7 +471,9 @@ export function setPreset(id: string, presetId: string): Conversation {
  * Builds the system prompt again, with the chat's folder (`folderContext`) and the profile's soul
  * as they are now, and notes the last row before it: its thinking was made under the old prompt
  * (requestMessages). The whole prompt is rebuilt, so the skills catalog and memory are current
- * again too.
+ * again too, and so are the chat's tools: its own as it saved them, then its profile's MCP
+ * servers' as they are now (currentTools). The chat as it was when all that comes out the same:
+ * its cache and thinking stay.
  */
 export function rebuildSystemPrompt(
 	conv: Conversation,
@@ -387,10 +482,20 @@ export function rebuildSystemPrompt(
 	soul: { text: string; cut: boolean },
 	lastSeq: number | null
 ): Conversation {
+	const newTools = currentTools(conv, profile.slug);
+	const tools = newTools ?? toolsFor(conv);
+	const systemPrompt = buildSystemPrompt(profile, folderContext, soul, tools);
+	const same =
+		!newTools &&
+		systemPrompt === conv.systemPrompt &&
+		folderContext === conv.folderContext &&
+		soul.text === conv.soul;
+	if (same) return conv;
 	const changed = {
-		systemPrompt: buildSystemPrompt(profile, folderContext, soul, toolsFor(conv)),
+		systemPrompt,
 		folderContext,
 		soul: soul.text,
+		tools,
 		promptChangedAtSeq: lastSeq ?? conv.promptChangedAtSeq
 	};
 	getDb().update(conversation).set(changed).where(eq(conversation.id, conv.id)).run();

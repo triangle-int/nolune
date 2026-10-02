@@ -27,11 +27,11 @@ import { NOLUNE_VERSION } from './updates.ts';
 
 /*
  * MCP servers: the tools of other apps and services (GitHub, Notion, Home Assistant, a browser...)
- * that the family connects to nolune. A new chat gets its profile's servers' tools next to
+ * that the family connects to nolune. A chat gets its profile's servers' tools next to
  * run_command, as tools of its own (`mcp__<server>__<tool>`, mcpChatTools), saved with it like
- * run_command, and the runner calls them here (callMcpTool). `nolune mcp`
- * (packages/cli/src/mcp.ts) lists and calls them too, for scripts and for servers connected after
- * a chat started.
+ * run_command and brought up to date when someone reloads its tools (reloadTools in runner.ts), and
+ * the runner calls them here (callMcpTool). `nolune mcp` (packages/cli/src/mcp.ts) lists and calls
+ * them too, for scripts and for servers whose tools a chat doesn't have.
  *
  * Admins connect them on the Connected services page or with `nolune mcp add`. config.json keeps
  * them the way MCP clients write them (`mcpServers`: a command this computer runs, or an address),
@@ -598,7 +598,7 @@ async function acquire(name: string, server: McpServerConfig): Promise<Connectio
 			if (pid) pool.pids.delete(pid);
 			forget(name, connection);
 		};
-		// For new chats' tools: what it has now.
+		// For chats' tools: what it has now.
 		if (pool.hold)
 			describe(client).then(
 				(found) => remember(name, server, found),
@@ -690,7 +690,7 @@ export function holdMcpConnections(): void {
 		}
 	});
 	process.once('sveltekit:shutdown', () => void closeMcpConnections());
-	// Servers whose tools new chats don't know yet, or that changed since: once it has started.
+	// Servers whose tools chats don't know yet, or that changed since: once it has started.
 	setTimeout(() => void refreshMcpTools().catch(() => {}), 5000).unref();
 }
 
@@ -783,7 +783,7 @@ export async function checkMcpServer(
 	const { client } = await connect(name, parsed, signal);
 	try {
 		const found = await describe(client, signal);
-		// Most likely saved next, and its tools go to new chats.
+		// Most likely saved next, and its tools go to chats.
 		remember(name, parsed, found);
 		return found;
 	} catch (err) {
@@ -911,9 +911,10 @@ function toolDefinition(server: string, tool: Remembered['tools'][number]): Anth
 }
 
 /**
- * The tools a new chat in `profile` (a slug) gets from its servers, as nolune saves tools: each
- * server's whole, as it last said they are, while they fit in MAX_CHAT_MCP_TOOLS. In the gateway,
- * servers whose tools aren't known yet are asked, for the chats after.
+ * The tools a chat in `profile` (a slug) gets from its servers, as nolune saves tools: each
+ * server's whole, as it last said they are, while they fit in MAX_CHAT_MCP_TOOLS. A new chat gets
+ * them, and one already going when its tools are reloaded. In the gateway, servers whose tools
+ * aren't known yet are asked, for the chats after.
  */
 export function mcpChatTools(profile: string): Anthropic.Tool[] {
 	const known = remembered();
@@ -948,7 +949,7 @@ export function mcpToolsSection(tools: readonly Anthropic.Tool[], profile: strin
 		return `- ${name}${description ? `: ${description}` : ''}${instructions ? `\n  <instructions>\n${clip(instructions, MAX_PROMPT_INSTRUCTIONS)}\n  </instructions>` : ''}`;
 	});
 	const elsewhere = others.length
-		? `\n\nThe tools of ${others.join(', ')} aren't among yours in this conversation (it was connected later, or there are too many): \`nolune mcp tools <server>\` lists them, \`nolune mcp tools <server> <tool>\` shows what one takes, and \`nolune mcp call <server> <tool> '<json>'\` calls it.`
+		? `\n\nThe tools of ${others.join(', ')} aren't among yours in this conversation (nolune doesn't know them yet, or there are too many): \`nolune mcp tools <server>\` lists them, \`nolune mcp tools <server> <tool>\` shows what one takes, and \`nolune mcp call <server> <tool> '<json>'\` calls it.`
 		: '';
 	return `${
 		inChat.length

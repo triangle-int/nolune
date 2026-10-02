@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { paths } from './paths.ts';
+import { paths, profileSkillsDir } from './paths.ts';
 
 export interface Skill {
 	name: string;
@@ -94,12 +94,12 @@ function scanDir(
  * Profile skills override global ones with the same name, and both override the skills that ship
  * with nolune. Sorted by name for a stable prompt.
  */
-export function scanSkills(profileSkillsDir: string): { skills: Skill[]; warnings: string[] } {
+export function scanSkills(skillsDir: string): { skills: Skill[]; warnings: string[] } {
 	const warnings: string[] = [];
 	const profileSkills: Skill[] = [];
 	const globalSkills: Skill[] = [];
 	const builtinSkills: Skill[] = [];
-	scanDir(profileSkillsDir, 'profile', profileSkills, warnings);
+	scanDir(skillsDir, 'profile', profileSkills, warnings);
 	scanDir(paths.globalSkills, 'global', globalSkills, warnings);
 	scanDir(paths.builtinSkills, 'builtin', builtinSkills, warnings);
 
@@ -125,16 +125,49 @@ export function scanSkills(profileSkillsDir: string): { skills: Skill[]; warning
 	return { skills, warnings };
 }
 
+/** A skill as a chat's catalog lists it. */
+export type CatalogSkill = Pick<Skill, 'name' | 'description' | 'location'>;
+
 function escapeXml(text: string): string {
 	return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function renderSkill(s: Skill): string {
+function unescapeXml(text: string): string {
+	return text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+function renderSkill(s: CatalogSkill): string {
 	return `  <skill>\n    <name>${escapeXml(s.name)}</name>\n    <description>${escapeXml(s.description)}</description>\n    <location>${escapeXml(s.location)}</location>\n  </skill>`;
 }
 
-export function renderSkillsCatalog(skills: Skill[]): string {
+export function renderSkillsCatalog(skills: readonly CatalogSkill[]): string {
 	return `<available_skills>\n${skills.map(renderSkill).join('\n')}\n</available_skills>`;
+}
+
+/** The skills a chat in the profile gets: those it has on, as the catalog lists them. */
+export function catalogSkills(profile: {
+	slug: string;
+	disabledSkills: readonly string[];
+}): CatalogSkill[] {
+	return listProfileSkills(profileSkillsDir(profile.slug), profile.disabledSkills)
+		.skills.filter((s) => s.enabled)
+		.map(({ name, description, location }) => ({ name, description, location }));
+}
+
+/**
+ * The skills a system prompt's catalog lists (renderSkillsCatalog), for chats from before they
+ * were saved with the chat. Null for a prompt without a catalog nolune can read.
+ */
+export function skillsInPrompt(prompt: string): CatalogSkill[] | null {
+	const catalog = /<available_skills>\n([\s\S]*?)\n<\/available_skills>/.exec(prompt);
+	if (!catalog) return prompt.includes('There are no skills yet.') ? [] : null;
+	const entry =
+		/<skill>\n {4}<name>(.*)<\/name>\n {4}<description>([\s\S]*?)<\/description>\n {4}<location>(.*)<\/location>\n {2}<\/skill>/g;
+	return [...catalog[1].matchAll(entry)].map(([, name, description, location]) => ({
+		name: unescapeXml(name),
+		description: unescapeXml(description),
+		location: unescapeXml(location)
+	}));
 }
 
 /**
@@ -151,7 +184,7 @@ export interface ProfileSkill extends Skill {
 	tokens: number;
 }
 
-/** Every skill the profile can see, with whether it's on for new chats. */
+/** Every skill the profile can see, with whether it's on in its chats. */
 export function listProfileSkills(
 	skillsDir: string,
 	disabledSkills: readonly string[]

@@ -162,12 +162,14 @@ export {
 	ModelSwitchError,
 	setEffort,
 	setHidden,
+	type Changes,
 	type Conversation,
 	type DisplayAttachment,
 	type DisplayBlock,
 	type DisplayMessage,
 	type DisplayPicture,
 	type DisplayResult,
+	type ToolChanges,
 	type Usage
 } from './conversations.ts';
 export {
@@ -200,9 +202,11 @@ export {
 	type MediaRow
 } from './media.ts';
 export {
+	ReloadError,
 	changeCommandMode,
 	changeEffort,
 	changeModel,
+	chatToolChanges,
 	getSnapshot,
 	isRunning,
 	kick,
@@ -210,6 +214,7 @@ export {
 	onRunningChange,
 	recoverAfterRestart,
 	refreshMemoryLooks,
+	reloadTools,
 	renameConversation,
 	runningConversationIds,
 	sendMessage,

@@ -44,12 +44,16 @@ the server says about itself.
 
 ## How the agent uses it
 
-Each new chat gets the tools of its profile's servers next to nolune's own, named
+Each chat gets the tools of its profile's servers next to nolune's own, named
 `mcp__<server>__<tool>`, and its instructions say what each server is for. The agent calls them
 like any tool, on every model, the plans included, and pictures a tool returns are shown to it.
 
-A chat keeps the tools it started with, so its prompt cache stays warm: a server you connect or
-change reaches the chats started after. Older chats can still reach it from a command:
+A chat keeps the tools it has, so its prompt cache stays warm: a server you connect, change or
+disconnect reaches new chats. A chat already going shows a line above its composer saying what
+changed, with **Reload tools** (also in the chat's menu): press it, and the chat gets the servers'
+tools and the profile's skills as they are now. Its next reply reads the whole chat again, so it
+costs more than usual on a long chat. The agent can also reach a server's tools from a command,
+in scripts and automations:
 
 ```sh
 nolune mcp tools github

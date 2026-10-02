@@ -12,9 +12,9 @@ import { mcpToolsSection } from './mcp.ts';
 import { cardRules, cardsSection } from './memory-cards.ts';
 import { PERSON_NOTE_GUIDE, categoryGuide } from './memory-categories.ts';
 import { peopleGuide } from './memory-people.ts';
-import { profileDir, profileMemoryDir, profileSkillsDir } from './paths.ts';
+import { profileDir, profileMemoryDir } from './paths.ts';
 import type { Profile } from './profiles.ts';
-import { listProfileSkills, renderSkillsCatalog } from './skills.ts';
+import { catalogSkills, renderSkillsCatalog } from './skills.ts';
 import { MAX_SOUL_CHARS, readSoul } from './soul.ts';
 import {
 	MAX_TIMEOUT_SECONDS,
@@ -62,10 +62,7 @@ ${core.text}
 		: 'It is empty so far.';
 	const people = peopleGuide(profile);
 	const cards = cardsSection(profile.id);
-	const skills = listProfileSkills(
-		profileSkillsDir(profile.slug),
-		profile.disabledSkills
-	).skills.filter((s) => s.enabled);
+	const skills = catalogSkills(profile);
 	const skillsSection = skills.length
 		? `When a task matches a skill's description, read its SKILL.md with \`cat\` before doing anything else, and follow it. Relative paths in a skill are relative to that skill's folder.
 

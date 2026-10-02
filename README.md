@@ -52,7 +52,7 @@ background. Members can also manage the profile and its membership.
   it a form to fill in, ask it to find the photos from your last trip, or which pharmacies are open
   on Sunday. Searching needs no key, up to a daily limit.
 - **Your other apps, connected.** Admins connect MCP servers, like a calendar, GitHub, Notion or
-  the smart home, and new chats get their tools next to nolune's own, on every model. Keep one to
+  the smart home, and chats get their tools next to nolune's own, on every model. Keep one to
   the profiles it belongs to, like someone's own email in their profile.
 - **Help between conversations.** Ask for a recurring task in ordinary language. Automations run
   in the background and bring results to the notification bell, where you can continue the work

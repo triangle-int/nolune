@@ -277,6 +277,19 @@ export const de: Messages = {
 		fromNolune: (to: string) => `Von nolune an ${to}`,
 		finishedInBackground: (title: string) => `Im Hintergrund fertig · ${title}`,
 		inBackground: 'Arbeitet im Hintergrund',
+		tools: {
+			reload: 'Werkzeuge neu laden',
+			reloadHint:
+				'Gibt diesem Chat die Fähigkeiten und verbundenen Dienste des Profils, wie sie jetzt sind. Seine nächste Antwort liest den ganzen Chat noch einmal und kostet daher mehr als sonst.',
+			reloaded: 'Dieser Chat hat jetzt die neuesten Fähigkeiten und Werkzeuge.',
+			upToDate: 'Dieser Chat hat schon die neuesten Fähigkeiten und Werkzeuge.',
+			newSkills: (names: string) => `Neue Fähigkeiten: ${names}`,
+			changedSkills: (names: string) => `Aktualisierte Fähigkeiten: ${names}`,
+			removedSkills: (names: string) => `Nicht mehr verfügbare Fähigkeiten: ${names}`,
+			newServices: (names: string) => `Verbunden: ${names}`,
+			changedServices: (names: string) => `Werkzeuge aktualisiert: ${names}`,
+			removedServices: (names: string) => `Getrennt: ${names}`
+		},
 		aCommand: 'Ein Befehl',
 		subagent: (name: string) => `Subagent ${name}`,
 		stopping: 'wird gestoppt',
@@ -787,7 +800,7 @@ export const de: Messages = {
 	skills: {
 		title: 'Fähigkeiten',
 		intro:
-			'Fähigkeiten sind Anleitungen, denen nolune bei bestimmten Aufgaben folgt. Es sieht Namen und Beschreibung jeder eingeschalteten Fähigkeit und liest den Rest, wenn eine Aufgabe es erfordert. Wenn du Fähigkeiten ausschaltest, die dieses Profil nicht braucht, bleibt nolune fokussiert. Änderungen gelten für neue Chats.',
+			'Fähigkeiten sind Anleitungen, denen nolune bei bestimmten Aufgaben folgt. Es sieht Namen und Beschreibung jeder eingeschalteten Fähigkeit und liest den Rest, wenn eine Aufgabe es erfordert. Wenn du Fähigkeiten ausschaltest, die dieses Profil nicht braucht, bleibt nolune fokussiert. Änderungen gelten für neue Chats und für einen laufenden Chat, sobald jemand seine Werkzeuge neu lädt.',
 		summary: (on: number, total: number, tokens: string) =>
 			`${on} von ${total} an · etwa ${tokens} Tokens am Anfang jedes neuen Chats`,
 		madeFor: (profile: string) => `Für ${profile}`,
@@ -1286,7 +1299,7 @@ export const de: Messages = {
 	 */
 	services: {
 		title: 'Verbundene Dienste',
-		hint: 'MCP-Server geben dem Agenten die Werkzeuge anderer Apps und Dienste, etwa eines Kalenders, von GitHub, Notion oder dem Smart Home. Neue Chats bekommen ihre Werkzeuge neben seinen eigenen, und der Auto-Modus prüft jeden Aufruf wie einen Befehl. Alle Profile bekommen sie, außer du wählst bestimmte aus.',
+		hint: 'MCP-Server geben dem Agenten die Werkzeuge anderer Apps und Dienste, etwa eines Kalenders, von GitHub, Notion oder dem Smart Home. Neue Chats bekommen ihre Werkzeuge neben seinen eigenen (ein laufender Chat, sobald jemand seine Werkzeuge neu lädt), und der Auto-Modus prüft jeden Aufruf wie einen Befehl. Alle Profile bekommen sie, außer du wählst bestimmte aus.',
 		add: 'Server verbinden',
 		addTitle: 'Einen MCP-Server verbinden',
 		addHint:

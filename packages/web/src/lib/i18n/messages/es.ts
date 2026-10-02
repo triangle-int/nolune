@@ -297,6 +297,19 @@ export const es: Messages = {
 		fromNolune: (to: string) => `De nolune, para ${to}`,
 		finishedInBackground: (title: string) => `Terminado en segundo plano · ${title}`,
 		inBackground: 'Trabajando en segundo plano',
+		tools: {
+			reload: 'Recargar herramientas',
+			reloadHint:
+				'Le da a este chat las habilidades y los servicios conectados del perfil tal como están ahora. Su siguiente respuesta vuelve a leer todo el chat, así que cuesta más de lo habitual.',
+			reloaded: 'Este chat tiene ahora las habilidades y herramientas más recientes.',
+			upToDate: 'Este chat ya tenía las habilidades y herramientas más recientes.',
+			newSkills: (names: string) => `Habilidades nuevas: ${names}`,
+			changedSkills: (names: string) => `Habilidades actualizadas: ${names}`,
+			removedSkills: (names: string) => `Habilidades que ya no están disponibles: ${names}`,
+			newServices: (names: string) => `Conectado: ${names}`,
+			changedServices: (names: string) => `Herramientas actualizadas: ${names}`,
+			removedServices: (names: string) => `Desconectado: ${names}`
+		},
 		aCommand: 'Un comando',
 		subagent: (name: string) => `Subagente ${name}`,
 		stopping: 'deteniéndose',
@@ -808,7 +821,7 @@ export const es: Messages = {
 	skills: {
 		title: 'Habilidades',
 		intro:
-			'Las habilidades son instrucciones que nolune sigue para tareas concretas. Ve el nombre y la descripción de cada habilidad activada y lee el resto cuando una tarea lo necesita. Desactivar las que este perfil no necesita ayuda a nolune a centrarse. Los cambios se aplican a los chats nuevos.',
+			'Las habilidades son instrucciones que nolune sigue para tareas concretas. Ve el nombre y la descripción de cada habilidad activada y lee el resto cuando una tarea lo necesita. Desactivar las que este perfil no necesita ayuda a nolune a centrarse. Los cambios se aplican a los chats nuevos, y a uno en curso cuando alguien recarga sus herramientas.',
 		summary: (on: number, total: number, tokens: string) =>
 			`${on} de ${total} activadas · unos ${tokens} tokens al inicio de cada chat nuevo`,
 		madeFor: (profile: string) => `Hechas para ${profile}`,
@@ -1297,7 +1310,7 @@ export const es: Messages = {
 	 */
 	services: {
 		title: 'Servicios conectados',
-		hint: 'Los servidores MCP le dan al agente las herramientas de otras apps y servicios, como un calendario, GitHub, Notion o la casa inteligente. Los chats nuevos reciben sus herramientas junto a las suyas, y el modo automático revisa cada llamada como un comando. Todos los perfiles los tienen, salvo que elijas algunos.',
+		hint: 'Los servidores MCP le dan al agente las herramientas de otras apps y servicios, como un calendario, GitHub, Notion o la casa inteligente. Los chats nuevos reciben sus herramientas junto a las suyas (uno en curso, cuando alguien recarga sus herramientas), y el modo automático revisa cada llamada como un comando. Todos los perfiles los tienen, salvo que elijas algunos.',
 		add: 'Conectar un servidor',
 		addTitle: 'Conectar un servidor MCP',
 		addHint:

@@ -18,7 +18,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Providers          | Anthropic, OpenAI, xAI and OpenRouter (API keys), custom providers (your own model servers), and two plans, someone's subscription instead of a key (see [Plans](#plans)): `claude-plan`, a Pro or Max plan in Claude Code, which nolune runs on this machine, and `chatgpt-plan`, a ChatGPT Plus or Pro plan, through Sign in with ChatGPT. Keys, custom providers and presets are global, managed by the admin with the CLI or the `/admin` page (Models & keys). A preset has a name (default `<model> (<provider>)`), a provider, a model and an optional window override. One preset is the default (the oldest until an admin picks one): new chats and automations without one use it. See [Model providers](#model-providers). |
 | Preset switching   | Allowed at any time, from the model chip in a chat's composer (or `nolune agent run <id> --preset` for a subagent). The next model call uses the new model, and another provider gets the history translated. See [Switching models](#switching-models).                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Reasoning          | Chosen per conversation (`low` / `medium` / `high` / `xhigh` / `max`, default `medium`). It can be changed later, but on Claude that rebuilds the conversation's cache once, so the chat asks first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards, and no update notices are added,** with one exception: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn (one cache miss). If skills change in another conversation, this conversation only sees it by running commands. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                                                   |
+| System prompt      | Built once when the conversation is created: instructions, the profile's soul, the skills catalog and, for a chat in a folder, the folder's instructions and file paths. **It is not changed afterwards,** with two exceptions, each one cache miss: when the chat moves to another folder, or its folder or the soul changes, it is built again at the start of the next turn; and when someone presses **Reload tools** in the chat, which gives it the profile's skills and MCP servers' tools as they are now. Of memory, only `core` and the note names are in it: chats outside folders share a prompt.                                                                                                                          |
 | Memory             | Short Markdown notes per profile, in fixed categories (a note each, or one per person or project), that the agent searches, reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory). Each member also has a card, a note about them that goes with them into all their profiles, copied whole into the prompt like core; only what they say about themselves goes on it. See [Cards](#cards).                      |
 | Soul               | Who nolune is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `nolune soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -27,7 +27,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Web search         | `nolune web search` and `nolune web read`, through Firecrawl's SDK, which the built-in `web` skill explains. Without a key they use Firecrawl's free tier, limited per IP address a day; a Firecrawl key in Models & keys lifts that. No tool: the agent runs them like any other command. See [The web](#the-web).                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| MCP servers        | Other apps' and services' tools, from the MCP servers an admin connects: a command this computer runs or an address, kept in config.json the way MCP clients write them. A new chat gets its profile's servers' tools next to `run_command` (`mcp__<server>__<tool>`), saved with it like `run_command`; auto mode checks every call. A server can be kept to some profiles. See [MCP servers](#mcp-servers).                                                                                                                                                                                                                                                                                                                          |
+| MCP servers        | Other apps' and services' tools, from the MCP servers an admin connects: a command this computer runs or an address, kept in config.json the way MCP clients write them. A chat gets its profile's servers' tools next to `run_command` (`mcp__<server>__<tool>`), saved with it like `run_command`; a chat already going gets changes when someone reloads its tools (one cache miss). Auto mode checks every call. A server can be kept to some profiles. See [MCP servers](#mcp-servers).                                                                                                                                                                                                                                           |
 | Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ## Files on disk
@@ -40,7 +40,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
                               command mode and the preset that checks commands (mode 600)
   chatgpt.json                the ChatGPT sign-in for the ChatGPT plan: this computer's host id,
                               each account's registration and the signed-in one's tokens (mode 600)
-  mcp-tools.json              what each MCP server last said its tools are, for new chats' tools
+  mcp-tools.json              what each MCP server last said its tools are, for chats' tools
   latest-release.json         nolune's newest release, as the gateway last heard from GitHub, and
                               when (Distribution); the macOS app's menu reads it too
   nolune.db                      SQLite: users, sessions, profiles, presets, folders, conversations,
@@ -82,7 +82,9 @@ gets the one its slug picks; see [Assistant avatars](#assistant-avatars).
 Every skill is on in every profile until someone turns it off, on the profile's Skills page or with
 `nolune skill disable`. The profile stores the names it turned off (`profile.disabled_skills`), so skills
 added later start out on. Skills that are off are left out of the catalog when a conversation is
-created; conversations already running keep the catalog they started with.
+created. A conversation already going keeps the catalog it has until its prompt is built again: for
+a folder or soul change, or when someone presses **Reload tools** (see
+[Reloading tools](#reloading-tools)).
 
 ## Prompt caching
 
@@ -94,9 +96,10 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   cost it a cache miss and, on Opus 5.5 and Fable 5.1, invalidate the thinking in its history (a
   400 on accounts created since 2026-08-31). So a new version of nolune that changes a tool only
   reaches new chats. Chats from before tools were saved send the first `run_command`
-  (`RUN_COMMAND_TOOL_V1`, which must never change); new ones get the one with `run_in_background`,
-  and the tools of their profile's MCP servers as they were when the chat started (see
-  [MCP servers](#mcp-servers)).
+  (`RUN_COMMAND_TOOL_V1`, which must never change); new ones get the one with `run_in_background`.
+  After nolune's own come the tools of the profile's MCP servers, as they were when the prompt was
+  last built: a chat gets newer ones when someone reloads its tools, which costs the cache miss and
+  the thinking the rule otherwise saves (see [Reloading tools](#reloading-tools)).
 - Each assistant response is stored as the exact `content` JSON the API returned, thinking blocks and
   their signatures included, and is sent back unchanged to the model that wrote it. nolune's own rows
   are stored in its own format and turned into the provider's the same way on every call (see
@@ -108,8 +111,9 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   per conversation (`conversation.cache_ttl`): an hour for chats, where people answer minutes
   apart, and 5 minutes for subagents, whose steps follow each other within seconds, so the
   cheaper 5-minute write (1.25x the input price, against 2x for an hour) is enough.
-- Tool definitions, cache TTL and system prompt are fixed per conversation (the prompt is built
-  again only when the chat's folder changes; see [Folders](#folders)), and the model changes only
+- Tool definitions, cache TTL and system prompt are fixed per conversation (the prompt and tools
+  are built again only when the chat's folder, the soul or its MCP servers' tools change; see
+  [Folders](#folders) and [MCP servers](#mcp-servers)), and the model changes only
   when someone switches it (see [Switching models](#switching-models)). Thinking uses
   `adaptive` with `display: "summarized"`, the same for every conversation. The only per-conversation
   knob is `effort`.
@@ -1437,12 +1441,13 @@ automations, it's a CLI command and a built-in skill (`subagents`), not a tool.
 ## MCP servers
 
 Other apps' and services' tools (a calendar, GitHub, Notion, the smart home), from the MCP servers
-an admin connects. A new chat gets its profile's servers' tools as tools of its own, next to
+an admin connects. A chat gets its profile's servers' tools as tools of its own, next to
 `run_command`, and the runner calls them on the servers.
 
-- **Saved with the chat, like `run_command`.** A chat's tools are fixed when it's created (see
+- **Saved with the chat, like `run_command`.** A chat's tools are saved with it (see
   [Prompt caching](#prompt-caching)): a server connected or changed later reaches new chats, and a
-  chat's cache and thinking stay as they are. The cost is in every request: a server's tool
+  chat already going when someone reloads its tools, or its prompt is built again for a folder or
+  soul change (see [Reloading tools](#reloading-tools)). The cost is in every request: a server's tool
   definitions (a big one has dozens) go with each call of each chat that has them. A chat gets at
   most 120 tools of servers (`MAX_CHAT_MCP_TOOLS`; OpenAI takes 128 in a request), each server's
   whole or not at all.
@@ -1458,7 +1463,7 @@ an admin connects. A new chat gets its profile's servers' tools as tools of its 
   adding or checking it, `nolune mcp tools`, each connection the gateway opens, and at the
   gateway's start for servers it doesn't know yet or knew with other settings. A new chat in a
   profile with a server it doesn't know yet starts without that server's tools, and the gateway
-  asks the server for the next one.
+  asks the server for the chats after (or a reload).
 - **In the prompt**, built from the chat's saved tools (also when it's built again for a new
   folder or soul, so it never names tools the chat doesn't have): a `# Connected services`
   section after the skills, saying the `mcp__` tools act outside the computer, often in someone's
@@ -1508,6 +1513,28 @@ an admin connects. A new chat gets its profile's servers' tools as tools of its 
 - **Profiles.** A chat gets only its profile's servers' tools, and `nolune mcp` in the agent's
   commands (`NOLUNE_PROFILE`) reaches only those. As everywhere on the computer, that organizes
   rather than isolates: the agent runs as the same account.
+
+### Reloading tools
+
+A chat's tools and prompt stay as they are while it goes on (see [Prompt caching](#prompt-caching)),
+so skills and MCP servers added, changed, turned off or disconnected later reach it only when
+someone asks: **Reload tools**, in the chat's menu, and in a line above the composer that says what
+changed ("Connected: github · New skills: tax-forms") whenever the chat is behind.
+
+- **What changed** (`toolChanges`): the profile's skills (`catalogSkills`) against the ones the
+  chat's prompt lists (`skillsInPrompt` reads the catalog back), and its servers' tools
+  (`currentTools`: the chat's own tools, then `mcpChatTools`) against the ones it saved, by server.
+  The chat gets it with its snapshot, and again when a turn ends (the agent may have made a skill),
+  as a `tools` event.
+- **Reloading** (`reloadTools`) builds the prompt again with `rebuildSystemPrompt`, as a folder
+  change does: nolune's own tools stay as the chat saved them, the servers' are as they are now,
+  and the replies before are marked (`promptChangedAtSeq`) so their thinking is left out. The next
+  request reads the whole chat again once, without the cache. When the prompt and tools would come
+  out the same, nothing is saved and the cache stays.
+- **Not while it works**, nor when the chat stopped in the middle of a step: the model's thinking
+  must go back with the step's results. The button is off then, and the endpoint says why.
+- A folder or soul change builds the prompt again anyway, so it brings the tools and skills along
+  at no further cost.
 
 ## Pictures and files
 
@@ -2209,7 +2236,9 @@ signing.
 - Auto mode: house rules an admin writes for the check (Claude Code's environment, block and allow
   slots), a probe that warns the agent about prompt injection in what its commands print, and a
   look at everything a subagent did when it hands back its result.
-- MCP servers: signing in through a browser (OAuth), which many hosted servers need; choosing
+- MCP servers: adding a server's tools to chats already going without a cache miss (Claude's
+  mid-conversation tool changes, where the model takes them); signing in through a browser
+  (OAuth), which many hosted servers need; choosing
   which of a server's tools chats get, and for big servers, sending a chat only the ones it looks
   up (a tool search) rather than every definition in every request; their resources and prompts,
   not only tools; and a server asking things back (sampling, elicitation).

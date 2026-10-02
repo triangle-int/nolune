@@ -203,6 +203,19 @@ export const en = {
 		fromNolune: (to: string) => `From nolune, to ${to}`,
 		finishedInBackground: (title: string) => `Finished in the background · ${title}`,
 		inBackground: 'Working in the background',
+		tools: {
+			reload: 'Reload tools',
+			reloadHint:
+				'Gives this chat the profile’s skills and connected services as they are now. Its next reply reads the whole chat again, so it costs more than usual.',
+			reloaded: 'This chat has the latest skills and tools now.',
+			upToDate: 'This chat already has the latest skills and tools.',
+			newSkills: (names: string) => `New skills: ${names}`,
+			changedSkills: (names: string) => `Updated skills: ${names}`,
+			removedSkills: (names: string) => `Skills no longer available: ${names}`,
+			newServices: (names: string) => `Connected: ${names}`,
+			changedServices: (names: string) => `Tools updated: ${names}`,
+			removedServices: (names: string) => `Disconnected: ${names}`
+		},
 		aCommand: 'A command',
 		subagent: (name: string) => `Subagent ${name}`,
 		stopping: 'stopping',
@@ -730,7 +743,7 @@ export const en = {
 	skills: {
 		title: 'Skills',
 		intro:
-			"Skills are instructions nolune follows for specific tasks. It sees the name and description of every skill that's on, and reads the rest when a task calls for it. Turning off skills this profile doesn't need keeps nolune focused. Changes apply to new chats.",
+			"Skills are instructions nolune follows for specific tasks. It sees the name and description of every skill that's on, and reads the rest when a task calls for it. Turning off skills this profile doesn't need keeps nolune focused. Changes apply to new chats, and to a chat already going when someone reloads its tools.",
 		summary: (on: number, total: number, tokens: string) =>
 			`${on} of ${total} on · about ${tokens} tokens at the start of every new chat`,
 		madeFor: (profile: string) => `Made for ${profile}`,
@@ -1218,7 +1231,7 @@ export const en = {
 	 */
 	services: {
 		title: 'Connected services',
-		hint: 'MCP servers give the agent the tools of other apps and services, like a calendar, GitHub, Notion or the smart home. New chats get their tools next to its own, and auto mode checks each call like a command. Every profile gets them, unless you choose some.',
+		hint: 'MCP servers give the agent the tools of other apps and services, like a calendar, GitHub, Notion or the smart home. New chats get their tools next to its own (a chat already going, once someone reloads its tools), and auto mode checks each call like a command. Every profile gets them, unless you choose some.',
 		add: 'Connect a server',
 		addTitle: 'Connect an MCP server',
 		addHint:

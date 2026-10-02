@@ -123,11 +123,11 @@ TOKENS|auto]`: change what's given; a new model is checked like add's. Chats alr
 - `nolune skill new <name> [--description D] [--profile SLUG | --global]`
 - `nolune skill list [--profile SLUG]`
 - `nolune skill enable <name>... [--profile SLUG]`
-- `nolune skill disable <name>... [--profile SLUG]`: leave out of the profile's new chats
+- `nolune skill disable <name>... [--profile SLUG]`: leave out of the profile's chats
 
 ## MCP servers
 
-Other apps' and services' tools, which the agent uses through `nolune mcp`. See
+Other apps' and services' tools, which chats get next to nolune's own. See
 [Connected services](/docs/guides/connected-services/).
 
 - `nolune mcp add <name> <url> [--transport http|sse] [--header "Name: value"]... [--description D]

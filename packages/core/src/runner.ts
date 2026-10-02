@@ -48,11 +48,13 @@ import {
 	setProviderSession,
 	setTitle,
 	toDisplay,
+	toolChanges,
 	toolsFor,
 	touchConversation,
 	type Conversation,
 	type DisplayMessage,
-	type MessageRow
+	type MessageRow,
+	type ToolChanges
 } from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
@@ -136,6 +138,8 @@ export type LiveEvent =
 	| { type: 'title'; title: string }
 	| { type: 'model'; model: ChatModel }
 	| { type: 'commands'; commands: ChatCommands }
+	/** What reloading its tools would change now (chatToolChanges): null when nothing. */
+	| { type: 'tools'; changes: ToolChanges | null }
 	| { type: 'background'; background: BackgroundItem[] }
 	/** What the note-taker saved from the chat (memory-changes.ts), all of it. */
 	| { type: 'memory'; memory: DisplayMemoryLook[] }
@@ -209,6 +213,8 @@ export interface Snapshot {
 	/** Null once the conversation was deleted. */
 	model: ChatModel | null;
 	commands: ChatCommands;
+	/** What reloading its tools would change: skills and MCP servers since its prompt was built. */
+	toolChanges: ToolChanges | null;
 	running: boolean;
 	error: string | null;
 	messages: DisplayMessage[];
@@ -353,6 +359,7 @@ export function getSnapshot(conversationId: string): Snapshot {
 		title: conv?.title ?? '',
 		model: conv ? chatModel(conv) : null,
 		commands: chatCommands(conv),
+		toolChanges: chatToolChanges(conversationId),
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
@@ -993,8 +1000,9 @@ function queueBackgroundResult(
 /**
  * The chat with a system prompt that has its folder and the profile's soul as they are now. When
  * the chat moved to another folder, its folder's instructions or files changed, or the soul
- * changed, the prompt is built again, which costs one prompt cache miss. Only between turns: in
- * the middle of one, the model is still working under the prompt it started with, and its latest
+ * changed, the prompt is built again, which costs one prompt cache miss; its skills and MCP
+ * servers' tools are brought up to date with it, at no further cost. Only between turns: in the
+ * middle of one, the model is still working under the prompt it started with, and its latest
  * thinking must go back with the tool results.
  */
 export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conversation {
@@ -1010,6 +1018,51 @@ export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conv
 		.join(' and ');
 	console.log(`[nolune] ${conv.id.slice(0, 8)} ${what} changed, system prompt built again`);
 	return rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
+}
+
+/** Why a chat's tools can't be reloaded right now. */
+export class ReloadError extends Error {}
+
+/**
+ * What reloading the chat's tools would change (toolChanges): new, changed or removed skills and
+ * MCP servers. Null when it has them as they are now, or is gone.
+ */
+export function chatToolChanges(conversationId: string): ToolChanges | null {
+	const conv = getConversation(conversationId);
+	const owner = conv && getProfile(conv.profileId);
+	return conv && owner ? toolChanges(conv, owner) : null;
+}
+
+/**
+ * Reload tools: builds the chat's system prompt again (rebuildSystemPrompt), so it gets the
+ * profile's skills and MCP servers' tools as they are now, for everyone who has it open. Someone
+ * asks for it: the next request reads the whole chat again once, without the prompt cache, and
+ * the thinking from before is left out. Nothing happens when the prompt and tools would come out
+ * the same. Returns what changed, or null. Throws ReloadError while the chat is working, or when
+ * it stopped in the middle of a step (the model's thinking must go back with the step's results).
+ */
+export function reloadTools(conversationId: string): ToolChanges | null {
+	const conv = getConversation(conversationId);
+	const owner = conv && getProfile(conv.profileId);
+	if (!conv || !owner) throw new ReloadError('This chat no longer exists.');
+	if (isRunning(conversationId)) {
+		throw new ReloadError('nolune is working in this chat. Reload its tools once it’s done.');
+	}
+	const rows = committedRows(conversationId);
+	const lastReply = rows.findLast((row) => row.role === 'assistant');
+	if (lastReply && rowCalls(lastReply).length) {
+		throw new ReloadError(
+			'This chat stopped in the middle of a step. Send a message first, then reload its tools.'
+		);
+	}
+	const changes = toolChanges(conv, owner);
+	const context = folderContextFor(owner, conv.folderId);
+	const soul = readSoul(owner.slug);
+	const rebuilt = rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
+	emit(conversationId, { type: 'tools', changes: null });
+	if (rebuilt === conv) return null;
+	console.log(`[nolune] ${conversationId.slice(0, 8)} tools reloaded, system prompt built again`);
+	return changes;
 }
 
 /**
@@ -1436,6 +1489,11 @@ async function loop(conversationId: string): Promise<void> {
 		st.live = [];
 		st.toolOutput = null;
 		emit(conversationId, { type: 'status', running: false, error: st.error });
+		// The agent may have made a skill, or someone connected a server meanwhile: those who
+		// have the chat open see it can reload its tools.
+		if (st.emitter.listenerCount('event')) {
+			emit(conversationId, { type: 'tools', changes: chatToolChanges(conversationId) });
+		}
 		runningChanged(conversationId, false);
 		for (const listener of loopEndListeners) {
 			try {

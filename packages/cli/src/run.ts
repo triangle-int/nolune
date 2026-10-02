@@ -208,7 +208,7 @@ ${PROFILE_HELP}
   nolune skill new <name> [--description D] [--profile SLUG | --global]
   nolune skill list [--profile SLUG]
   nolune skill enable <name>... [--profile SLUG]
-  nolune skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
+  nolune skill disable <name>... [--profile SLUG]  leave out of the profile's chats
 
 ${MCP_HELP}
 
@@ -1037,7 +1037,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Created ${location}`);
 				if (slug && getProfileBySlug(slug)?.disabledSkills.includes(name)) {
 					io.log(
-						`"${name}" is turned off in this profile, so new chats won't list it. Turn it on with \`nolune skill enable ${name}\`.`
+						`"${name}" is turned off in this profile, so its chats won't list it. Turn it on with \`nolune skill enable ${name}\`.`
 					);
 				}
 			} else if (action === 'list') {

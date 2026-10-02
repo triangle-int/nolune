@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMessage, streamTurn } from './anthropic.ts';
 import { saveCommandMode } from './command-safety.ts';
 import {
+	appendRow,
+	commitQueuedRows,
 	committedRows,
 	createConversation,
 	getConversation,
@@ -18,7 +20,15 @@ import {
 	type McpServerConfig
 } from './mcp.ts';
 import { TOOLS } from './run-command.ts';
-import { kick, onLoopEnd } from './runner.ts';
+import {
+	ReloadError,
+	chatToolChanges,
+	kick,
+	onLoopEnd,
+	reloadTools,
+	withCurrentContext
+} from './runner.ts';
+import { writeSoul } from './soul.ts';
 import { makeFamily, makePreset, runCommandsUnchecked } from './test/fixtures.ts';
 
 /*
@@ -154,23 +164,145 @@ describe('a new chat', () => {
 		expect(chat.systemPrompt).not.toContain('elsewhere');
 	});
 
-	it('keeps the tools it started with, and is told of servers whose tools it lacks', async () => {
+	it('is told of servers whose tools it lacks', async () => {
+		const family = await connected();
+		saveMcpServer('later', fake());
+		const chat = chatAsking(family);
+
+		expect(chat.tools?.some((t) => t.name === 'mcp__fake__echo')).toBe(true);
+		expect(chat.tools?.some((t) => t.name.startsWith('mcp__later__'))).toBe(false);
+		expect(chat.systemPrompt).toContain(
+			"The tools of later aren't among yours in this conversation (nolune doesn't know them yet, or there are too many): `nolune mcp tools <server>` lists them"
+		);
+	});
+});
+
+describe('a chat already going', () => {
+	/** Anna says something in the chat, which the model answers without a command. */
+	function exchange(conversationId: string, family: ReturnType<typeof makeFamily>) {
+		say(conversationId, family, 'Hi');
+		return appendRow({
+			conversationId,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([{ type: 'text', text: 'Hello!' }])
+		});
+	}
+
+	function say(conversationId: string, family: ReturnType<typeof makeFamily>, text: string) {
+		insertQueued({ conversationId, senderId: family.user.id, senderName: 'Anna', text });
+		commitQueuedRows(conversationId);
+	}
+
+	it('keeps its tools until someone reloads them, then has the servers’ as they are now', async () => {
 		const family = makeFamily();
-		const before = chatAsking(family);
-		expect(before.tools).toBe(TOOLS);
-		expect(before.systemPrompt).not.toContain('Connected services');
+		const chat = chatAsking(family);
+		expect(chat.tools).toBe(TOOLS);
+		const answered = exchange(chat.id, family);
+
+		saveMcpServer('fake', fake({ description: 'For tests' }));
+		await refreshMcpTools();
+		say(chat.id, family, 'And now?');
+		const stored = getConversation(chat.id)!;
+		expect(withCurrentContext(stored, committedRows(chat.id))).toBe(stored);
+		expect(chatToolChanges(chat.id)).toEqual({
+			skills: null,
+			services: { added: ['fake'], changed: [], removed: [] }
+		});
+
+		expect(reloadTools(chat.id)).toEqual({
+			skills: null,
+			services: { added: ['fake'], changed: [], removed: [] }
+		});
+		const reloaded = getConversation(chat.id)!;
+		expect(reloaded.tools?.map((t) => t.name).slice(0, 3)).toEqual([
+			'run_command',
+			'mcp__fake__echo',
+			'mcp__fake__picture'
+		]);
+		expect(reloaded.tools?.[0]).toEqual(TOOLS[0]);
+		expect(reloaded.systemPrompt).toContain('- fake: For tests');
+		// Its earlier thinking was made under the old prompt and tools.
+		expect(reloaded.promptChangedAtSeq).toBe(answered.seq);
+		expect(chatToolChanges(chat.id)).toBeNull();
+
+		// Up to date: reloading again changes nothing, so the cache stays.
+		expect(reloadTools(chat.id)).toBeNull();
+		expect(getConversation(chat.id)).toEqual(reloaded);
+	});
+
+	it('says what a reload brings, and loses the tools of a server disconnected since', async () => {
+		const family = await connected();
+		const chat = chatAsking(family);
+		exchange(chat.id, family);
+		// Stopped in the middle of a step: the model's thinking must go back with its results.
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([call('m1', 'mcp__fake__echo', { text: 'x' })])
+		});
+
+		removeMcpServer('fake');
+		expect(chatToolChanges(chat.id)).toEqual({
+			skills: null,
+			services: { added: [], changed: [], removed: ['fake'] }
+		});
+		expect(() => reloadTools(chat.id)).toThrow(ReloadError);
+		expect(getConversation(chat.id)?.tools).toEqual(chat.tools);
+
+		const done = appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([{ type: 'text', text: 'Done.' }])
+		});
+		expect(reloadTools(chat.id)?.services?.removed).toEqual(['fake']);
+		const reloaded = getConversation(chat.id)!;
+		expect(reloaded.tools).toEqual(TOOLS);
+		expect(reloaded.systemPrompt).not.toContain('Connected services');
+		expect(reloaded.promptChangedAtSeq).toBe(done.seq);
+	});
+
+	it('gets them along when its prompt is built again for a new soul', async () => {
+		const family = makeFamily();
+		const chat = chatAsking(family);
+		exchange(chat.id, family);
+		saveMcpServer('fake', fake());
+		await refreshMcpTools();
+
+		writeSoul(family.profile.slug, 'You are calm.');
+		say(chat.id, family, 'And now?');
+		const rebuilt = withCurrentContext(getConversation(chat.id)!, committedRows(chat.id));
+		expect(rebuilt.tools?.some((t) => t.name === 'mcp__fake__echo')).toBe(true);
+		expect(rebuilt.systemPrompt).toContain('# Connected services');
+	});
+
+	it('sends the reloaded tools and prompt with its next request, not while it works', async () => {
+		const family = makeFamily();
+		const chat = chatAsking(family, said('Hi!'));
+		await run(chat.id);
 
 		saveMcpServer('fake', fake());
 		await refreshMcpTools();
-		saveMcpServer('later', fake());
-		const after = chatAsking(family);
+		reloadTools(chat.id);
+		insertQueued({
+			conversationId: chat.id,
+			senderId: family.user.id,
+			senderName: 'Anna',
+			text: 'Echo something'
+		});
+		vi.mocked(streamTurn).mockImplementationOnce(async () => {
+			expect(() => reloadTools(chat.id)).toThrow('nolune is working in this chat');
+			return said('Done.');
+		});
+		await run(chat.id);
 
-		expect(getConversation(before.id)?.tools).toEqual(TOOLS);
-		expect(after.tools?.some((t) => t.name === 'mcp__fake__echo')).toBe(true);
-		expect(after.tools?.some((t) => t.name.startsWith('mcp__later__'))).toBe(false);
-		expect(after.systemPrompt).toContain(
-			"The tools of later aren't among yours in this conversation (it was connected later, or there are too many): `nolune mcp tools <server>` lists them"
-		);
+		const request = vi.mocked(streamTurn).mock.calls[1][0];
+		expect(request.tools.map((t) => t.name)).toContain('mcp__fake__echo');
+		expect(request.system).toContain('# Connected services');
+		// The reply from before goes back without its thinking.
+		expect(request.messages[1]).toMatchObject({ role: 'assistant', beforePromptChange: true });
 	});
 });
 
