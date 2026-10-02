@@ -361,7 +361,7 @@ read nolune's format.
 
 `claude-plan` and `chatgpt-plan` run chats on someone's own subscription instead of an API key.
 (A third, `nolune-plan`, a subscription to nolune itself that covers pictures and embeddings too,
-is in [The nolune plan](#the-nolune-plan): built, and not open yet.) They get there differently:
+is in [The nolune plan](#the-nolune-plan).) They get there differently:
 
 - **The Claude plan** runs Anthropic's own agent. Anthropic doesn't let other apps sign in to
   Claude accounts, so nolune doesn't: Claude Code, installed on this computer and unmodified, signs
@@ -2134,15 +2134,15 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
 
 ## The nolune plan
 
-_Built, not open yet._ nolune's API (`packages/api`) signs people in, links gateways, keeps the
+_Open since 0.5.0._ nolune's API (`packages/api`) signs people in, links gateways, keeps the
 limits, passes chats and embeddings on to OpenRouter, and sells the plan through Stripe (its
 account page and webhook); nolune's side links to it and runs chats, memory search and their
 errors on it, and makes pictures on it. The API runs next to the relay (`compose.api.yaml`), at
-`api.nolune.dev`, on Stripe's test mode, for the addresses in `ALLOWED_EMAILS`. Still to come:
-Stripe's live mode, and automations that wait out a limit. Until the plan is open to everyone
-(`NOLUNE_PLAN_OPEN`, in `nolune-plan-open.ts`), the web UI offers it only when
-`NOLUNE_PLAN_API_URL` points nolune at an API (`nolunePlanOffered`), the CLI always has it, and
-nolune.dev's Pricing shows it only on previews.
+`api.nolune.dev`, on Stripe's live mode with Managed Payments. Still to come: automations that
+wait out a limit. One switch opens it (`NOLUNE_PLAN_OPEN`, in `nolune-plan-open.ts`): closed, the
+web UI offers the plan only when `NOLUNE_PLAN_API_URL` points nolune at an API
+(`nolunePlanOffered`), the CLI still has it, nolune.dev's Pricing shows only on previews, and the
+API lets in only the addresses in `ALLOWED_EMAILS`.
 
 The two plans run chats on a subscription someone already has, and nothing else: pictures still
 need an OpenAI key, and search by meaning an OpenAI or OpenRouter one. The nolune plan is a
@@ -2434,7 +2434,11 @@ Triangle Interactive, LLC sells the plan, through Stripe.
   does one for a subscription that has run out since. `checkout.session.completed` (or
   `async_payment_succeeded`, for a payment that comes later) adds a pack's credits.
   `customer.subscription.deleted`, sent when a cancelled subscription runs out, ends the plan
-  unless another subscription holds it. Each event is checked by its signature, and each grant is
+  unless another subscription holds it. `charge.refunded` for a payment refunded in full (from
+  the Dashboard, or by Stripe itself, which under Managed Payments may refund within 60 days)
+  takes back what's left of what it paid for, found by its payment intent (the invoice's payment,
+  or the pack's Checkout Session): spent credits stay spent, and those carried over from an
+  earlier period stay. A refund of part of a payment takes nothing and is logged. Each event is checked by its signature, and each grant is
   keyed by what paid for it (the invoice, the Checkout Session), so an event Stripe sends twice
   grants once. The account sells Gensprite too, and the endpoint hears its events as well: an
   event is nolune's when its subscription or Checkout says whose it is (`userId`, which Checkout
@@ -2686,7 +2690,9 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   as any app's notifications pass through Apple; neither keeps it. The privacy policy, at
   `nolune.dev/privacy` (`site/src/routes/privacy`), covers nolune, the apps, the relay, the
   nolune plan's API and the site; the first screen links it, as the App Store asks. Keep it to what
-  the code does.
+  the code does. The plan's terms, at `nolune.dev/terms`, say what a subscription gives, how it
+  renews, ends and is refunded, and how it may be used; Checkout, the customer portal and the
+  account page link them.
 
 ## Not done yet
 
@@ -2724,6 +2730,5 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   which has no relay to send them.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).
-- The nolune plan (see [The nolune plan](#the-nolune-plan)): Stripe's live mode, and automations
-  that wait out a limit rather than fail; then opening it (emptying `ALLOWED_EMAILS`, and
-  `NOLUNE_PLAN_OPEN` in `nolune-plan-open.ts`), which also shows Pricing on nolune.dev.
+- The nolune plan (see [The nolune plan](#the-nolune-plan)): automations that wait out a limit
+  rather than fail, and a failed payment shown in Models & keys.

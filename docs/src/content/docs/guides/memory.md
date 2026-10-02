@@ -44,9 +44,9 @@ Profiles still keep their circles apart: nothing moves from one profile to anoth
 Each message comes with the facts from memory that match it, and nolune searches for more when a
 request needs them (`nolune memory search wifi`).
 
-With an OpenAI or OpenRouter key, it also finds facts by meaning ("where's the other key for the
-car?" finds the spare key, a question in Russian finds notes in English): each fact is embedded
-once with that provider's `text-embedding-3-small`. An admin can turn that off, or use a model of
+With an OpenAI or OpenRouter key, or on the nolune plan, it also finds facts by meaning ("where's
+the other key for the car?" finds the spare key, a question in Russian finds notes in English):
+each fact is embedded once with that provider's `text-embedding-3-small`. An admin can turn that off, or use a model of
 one of your servers instead (Ollama, LM Studio, oMLX on your computer), under Memory search in
 Models & keys or with `nolune config set embeddings custom-openai/local/nomic-embed-text`.
 

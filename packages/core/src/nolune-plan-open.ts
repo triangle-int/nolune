@@ -4,7 +4,8 @@
  */
 
 /**
- * Until it is, the web UI offers the plan only when NOLUNE_PLAN_API_URL points nolune at an API (a
- * local one, in development), the CLI always has it, and nolune.dev shows it only on its previews.
+ * Open since 0.5.0. Were it closed again, the web UI would offer the plan only when
+ * NOLUNE_PLAN_API_URL points nolune at an API (a local one, in development), the CLI would still
+ * have it, and nolune.dev would show it only on its previews.
  */
-export const NOLUNE_PLAN_OPEN: boolean = false;
+export const NOLUNE_PLAN_OPEN: boolean = true;

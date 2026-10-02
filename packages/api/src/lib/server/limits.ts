@@ -332,6 +332,30 @@ export function endPlan(account: Account): Account {
 	};
 }
 
+/**
+ * A payment refunded in full: what's left of the credits it paid for goes (a period's, by its
+ * invoice, or a pack's, by its Checkout Session). What was spent of them stays spent, what went
+ * over stays owed, and credits carried over from an earlier period stay: they were paid for then.
+ * A refund already taken back changes nothing.
+ */
+export function takeBack(account: Account, source: string): Account {
+	let taken = 0;
+	let plan = false;
+	const credits = account.credits.map((credit) => {
+		if (credit.source !== source || credit.left <= 0) return credit;
+		taken += credit.left;
+		plan ||= credit.kind === 'plan';
+		return { ...credit, left: 0 };
+	});
+	if (!taken) return account;
+	// The month started with less, so what's spent of it still reads right.
+	const limits =
+		plan && account.limits
+			? { ...account.limits, month: Math.max(account.limits.month - taken, 0) }
+			: account.limits;
+	return { ...account, credits, limits };
+}
+
 /** A pack of extra credits. A Checkout Session already granted changes nothing. */
 export function addExtra(
 	account: Account,

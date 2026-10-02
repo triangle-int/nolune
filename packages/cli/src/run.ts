@@ -180,8 +180,9 @@ Plans (chats on your own subscription instead of an API key)
                                              someone signs in again
   nolune chatgpt-plan models                    the models the plan offers, for \`nolune preset add\`
   nolune-plan: a subscription to nolune itself, which covers chats, pictures and memory search
-  with no keys at all, within its 5-hour and weekly limits. Linked with a code you approve on
-  nolune's page, from any device; nolune keeps the link in ~/.nolune/nolune-plan.json.
+  with no keys at all, on the month's credits. Linked with a code you approve on nolune's page,
+  from any device; nolune keeps the link in ~/.nolune/nolune-plan.json. Subscribe at
+  https://api.nolune.dev.
   nolune nolune-plan setup                      link nolune to your plan, where needed
   nolune nolune-plan logout                     unlink; chats on nolune-plan presets stop until it's
                                              linked again

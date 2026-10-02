@@ -1,11 +1,44 @@
 ---
 title: Models and keys
-description: Run chats on an API key (Anthropic, OpenAI, xAI), OpenRouter, a model server of your own, or a Claude or ChatGPT plan.
+description: Run chats on the nolune plan, an API key (Anthropic, OpenAI, xAI), OpenRouter, a model server of your own, or a Claude or ChatGPT plan.
 ---
 
 A profile's welcome asks for a model the first time. As the admin you can add or replace API keys,
 sign in with ChatGPT and add models on the web, under **Models & keys** in your account menu, or
 from the terminal as below. Model presets are shared by all profiles.
+
+## The nolune plan
+
+A subscription to nolune itself: chats, pictures and memory search, with no API keys to get. It's
+$20 a month for $25 of credits while the launch offer lasts, spent at what OpenRouter charges for
+each request; see [Pricing](https://nolune.dev/#pricing) and the
+[terms](https://nolune.dev/terms).
+
+1. Subscribe on [your account page](https://api.nolune.dev/), which signs you in with a code sent
+   to your email.
+2. Link nolune to it: pick **nolune plan** in a new profile's welcome, **Link** on its row in
+   Models & keys, or run `nolune nolune-plan setup`. Each shows a code and a link page; open it on
+   any device, sign in, check that it shows the same code, and link it. A phone works as well as
+   this computer.
+3. Pick a model. The plan offers the models OpenRouter serves that can call tools, with Claude
+   Sonnet 5.5 first; `nolune nolune-plan models` lists them, and
+   `nolune preset add anthropic/claude-sonnet-5.5 --provider nolune-plan` adds one.
+
+Pictures on the [Images](/docs/guides/images/) page and
+[search by meaning](/docs/guides/memory/) then use the plan too, unless you've set a key of your
+own for them. The whole family draws on one plan.
+
+- **Credits.** Each month's start brings new ones, and up to $12.50 of what's left carries over.
+  Automations and other background work can spend a tenth of the month's credits in a day, so one
+  that runs away can't spend the month by itself. How much is used shows in the model menu, under
+  the message box as it runs low, and in Models & keys.
+- **Running out.** Chats on the plan stop, and say when they start again. Packs of $10 of extra
+  credits, which last a year, are on the account page; they're spent once the month's run out, if
+  you turn that on there.
+- **Cancelling.** **Manage** on the account page opens Stripe's billing page, where you cancel or
+  change the card. The plan runs to the end of the month you've paid for.
+- **Unlinking.** **Unlink** in Models & keys, or `nolune nolune-plan logout`. Signing out of
+  nolune's API on the account page ends the link too.
 
 ## API keys
 

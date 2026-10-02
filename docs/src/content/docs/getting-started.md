@@ -20,6 +20,8 @@ page installs nolune from the terminal instead, on macOS or Linux.
 - **macOS or Linux** (the background service needs systemd there) and **Node.js 22.18** or later;
   the Mac app brings its own Node.
 - **A model connection**, any of these:
+  - the [nolune plan](https://nolune.dev/#pricing), a subscription to nolune itself that covers
+    chats, pictures and memory search with no keys;
   - an [Anthropic API key](https://console.anthropic.com/), an
     [OpenAI API key](https://platform.openai.com/api-keys), an
     [xAI API key](https://console.x.ai) or an

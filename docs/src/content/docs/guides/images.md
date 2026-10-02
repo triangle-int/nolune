@@ -14,8 +14,10 @@ describe a picture, there or in any chat.
 
 ## What it needs
 
-An OpenAI key (Models & keys, or `nolune key set openai`). The model is
-`openai/gpt-image-2.5-flare` unless you pick another with `nolune config set image-model`.
+An OpenAI or OpenRouter key (Models & keys, or `nolune key set openai`), or the
+[nolune plan](/docs/guides/models/#the-nolune-plan). Pictures are made with `gpt-image-2.5-flare`
+on the first of them nolune has, keys first, unless you pick another model with
+`nolune config set image-model` (`openrouter/black-forest-labs/flux.2-pro`, say).
 
 ## Your own templates
 
