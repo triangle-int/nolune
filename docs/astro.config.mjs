@@ -45,6 +45,7 @@ export default defineConfig({
 						'guides/automations',
 						'guides/images',
 						'guides/skills',
+						'guides/connected-services',
 						'guides/auto-mode',
 						'guides/models',
 						'guides/remote-access'

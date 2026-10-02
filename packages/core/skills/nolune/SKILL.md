@@ -1,6 +1,6 @@
 ---
 name: nolune
-description: Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates), and whether commands are checked before they run (auto mode). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.
+description: Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, connected services (MCP servers), which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat ("switch to the comet"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates), and whether commands are checked before they run (auto mode). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.
 ---
 
 # Configuring nolune
@@ -11,7 +11,8 @@ itself safely from your own commands.
 
 Other parts of the CLI have their own instructions: automations (`nolune trigger`, `nolune wake`) in the
 `automations` skill, pictures (`nolune generate image`, `nolune view`) in `generate-images` and
-`view-images`, the web (`nolune web`) in `web`, and memory (`nolune memory`) and your soul (`nolune soul`) in your system prompt.
+`view-images`, the web (`nolune web`) in `web`, and memory (`nolune memory`), your soul
+(`nolune soul`) and connected services (`nolune mcp`) in your system prompt.
 
 ## Before you change anything
 
@@ -27,9 +28,10 @@ Other parts of the CLI have their own instructions: automations (`nolune trigger
 - Use `nolune`, not the files. Don't edit `config.json` or `nolune.db` in `$NOLUNE_HOME` by hand, and don't
   print `config.json`: it holds the API keys.
 - API keys, environment variables and the image model apply from the next command or message. The
-  default model and which skills are on apply to new chats: a chat keeps the skills it started
-  with, this one too, and its model until someone picks another in its composer. The address
-  applies after a restart.
+  default model, which skills are on and the connected services apply to new chats: a chat keeps
+  the skills and tools it has, this one too, until someone presses **Reload tools** in it (the
+  chat's menu, or the line above its composer that says what changed), and its model until someone
+  picks another in its composer. The address applies after a restart.
 
 ## Auto mode
 
@@ -149,19 +151,43 @@ nolune env list                     # names only
 nolune env rm HASS_TOKEN
 ```
 
+## Connected services (MCP servers)
+
+An admin can connect apps and services as MCP servers, whose tools new chats then get as tools of
+their own, and a chat already going once someone presses **Reload tools** in it. When one asks you
+to connect one, take what its instructions say: the command
+that starts it, or its address, and the key it needs. `nolune mcp add` connects to it to check it
+and prints its tools, or why it couldn't:
+
+```sh
+nolune mcp add time -- uvx mcp-server-time
+nolune mcp add notes --env NOTES_TOKEN='…' --description "The family's shared notes" -- npx -y <its package>
+nolune mcp add github https://api.githubcopilot.com/mcp/ --header 'Authorization: Bearer ghp_…'
+nolune mcp add-json files '{"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/anna/Documents"]}'
+nolune mcp list                     # the names of their keys, never the keys
+nolune mcp rm github
+```
+
+`--profile <slug>` (as often as needed) keeps a server to those profiles: one that reaches
+someone's own account belongs in their profile. This chat doesn't get a server's tools until
+someone reloads its tools, which reads the whole chat again once; meanwhile `nolune mcp tools`
+and `nolune mcp call` reach them from a command. Servers that only sign in through a web page (OAuth)
+can't be connected yet.
+
 ## Skills
 
 ```sh
 nolune skill list                       # what this profile has, on or off, and what each costs per chat
-nolune skill disable generate-images    # leave it out of this profile's new chats
+nolune skill disable generate-images    # leave it out of this profile's chats
 nolune skill enable generate-images
 nolune skill new <name> --global --description "..."   # for every profile, in ~/.agents/skills
 ```
 
 - `--profile` can be left out: it defaults to this profile. Members do the same on the profile's
   Skills page.
-- Every skill that is on adds its name and description to each new chat. Turn off the ones a
-  profile doesn't use rather than deleting them.
+- Every skill that is on adds its name and description to each new chat, and to a chat already
+  going when someone presses **Reload tools** in it. Turn off the ones a profile doesn't use
+  rather than deleting them.
 - Built-in skills (`builtin` in the list) are replaced when nolune updates. To change one for this
   profile, copy its folder into `$NOLUNE_PROFILE_DIR/skills/` and edit the copy; it takes precedence.
 

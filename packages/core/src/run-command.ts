@@ -212,6 +212,13 @@ class CappedOutput {
 	}
 }
 
+/** Long text kept as a command's output is: its start and its end, without terminal codes. */
+export function capOutput(text: string): string {
+	const output = new CappedOutput();
+	output.push(text);
+	return output.toString();
+}
+
 /** Process groups of commands still running, killed if the gateway exits (e.g. service restart). */
 const runningGroups = new Set<number>();
 let exitHookInstalled = false;

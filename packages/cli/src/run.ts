@@ -82,6 +82,7 @@ import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
 import { fail, type Io } from './io.ts';
 import { planCommand, requireClaudePlan } from './plans.ts';
+import { MCP_HELP, mcpCommand } from './mcp.ts';
 import { MEMORY_HELP, memoryCommand } from './memory.ts';
 import { PROFILE_HELP, profileCommand } from './profile.ts';
 import { RELAY_HELP, RelayUnreachable, connectRelay, enableRelay, relayCommand } from './relay.ts';
@@ -207,7 +208,9 @@ ${PROFILE_HELP}
   nolune skill new <name> [--description D] [--profile SLUG | --global]
   nolune skill list [--profile SLUG]
   nolune skill enable <name>... [--profile SLUG]
-  nolune skill disable <name>... [--profile SLUG]  leave out of the profile's new chats
+  nolune skill disable <name>... [--profile SLUG]  leave out of the profile's chats
+
+${MCP_HELP}
 
 ${TRIGGER_HELP}
 
@@ -1036,7 +1039,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				io.log(`Created ${location}`);
 				if (slug && getProfileBySlug(slug)?.disabledSkills.includes(name)) {
 					io.log(
-						`"${name}" is turned off in this profile, so new chats won't list it. Turn it on with \`nolune skill enable ${name}\`.`
+						`"${name}" is turned off in this profile, so its chats won't list it. Turn it on with \`nolune skill enable ${name}\`.`
 					);
 				}
 			} else if (action === 'list') {
@@ -1076,6 +1079,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 			} else fail('usage: nolune skill new|list|enable|disable');
 			return;
 		}
+
+		case 'mcp':
+			requireInit();
+			return mcpCommand(io, action, rest);
 
 		case 'trigger':
 			requireInit();
