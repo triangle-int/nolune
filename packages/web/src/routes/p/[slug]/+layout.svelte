@@ -8,7 +8,7 @@
 	let sidebarOpen = $state(untrack(() => data.sidebarOpen));
 </script>
 
-<Sidebar.Provider bind:open={sidebarOpen} class="h-dvh min-h-0">
+<Sidebar.Provider bind:open={sidebarOpen} class="h-full min-h-0">
 	{#if data.user}
 		<AppSidebar
 			profile={data.profile}
@@ -18,7 +18,7 @@
 			user={data.user}
 		/>
 	{/if}
-	<main class="flex h-dvh min-w-0 flex-1 flex-col bg-background">
+	<main class="flex h-full min-w-0 flex-1 flex-col bg-background">
 		{@render children()}
 	</main>
 </Sidebar.Provider>

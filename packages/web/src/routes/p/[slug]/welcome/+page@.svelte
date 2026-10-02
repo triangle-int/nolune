@@ -318,7 +318,7 @@
 	class={cn('transition-opacity duration-700', phase === 'steps' && 'opacity-50')}
 />
 
-<div class="relative flex h-dvh flex-col bg-transparent">
+<div class="relative flex h-full flex-col bg-transparent">
 	<header class="relative z-20 flex h-14 shrink-0 items-center justify-end gap-2 px-4">
 		{#if phase !== 'intro' && phase !== 'welcome'}
 			<ol
@@ -510,7 +510,7 @@
 
 	{#if phase === 'intro'}
 		<p
-			class="pointer-events-none fixed inset-x-0 bottom-6 text-center text-xs text-white/40"
+			class="pointer-events-none fixed inset-x-0 bottom-[max(1.5rem,env(safe-area-inset-bottom))] text-center text-xs text-white/40"
 			in:fade={{ delay: 2000, duration: 1200 }}
 			out:fade={{ duration: 300 }}
 		>

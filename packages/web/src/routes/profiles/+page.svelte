@@ -74,7 +74,9 @@
 <div class="flex h-full flex-col">
 	<TopBar />
 	<main class="min-h-0 flex-1 overflow-y-auto">
-		<div class="mx-auto max-w-2xl space-y-10 px-4 py-8 sm:py-12">
+		<div
+			class="mx-auto max-w-2xl space-y-10 px-4 pt-8 pb-[max(2rem,env(safe-area-inset-bottom))] sm:py-12"
+		>
 			{#if first}
 				<header class="space-y-4">
 					<span class="flex gap-1.5" aria-hidden="true">

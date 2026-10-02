@@ -77,7 +77,15 @@
 <ModeWatcher />
 
 <Tooltip.Provider delayDuration={300}>
-	<div class="h-dvh">
+	<!--
+		Clear of what an iPhone draws over the page (app.html): below the status bar and, in
+		landscape, beside the notch, with the page's color around it. The bottom is each page's own:
+		the sidebar, the composer and the end of what scrolls pad themselves above the home
+		indicator, so the page still runs under it.
+	-->
+	<div
+		class="h-dvh pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]"
+	>
 		{@render children()}
 	</div>
 </Tooltip.Provider>

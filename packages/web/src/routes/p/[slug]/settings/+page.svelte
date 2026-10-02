@@ -83,7 +83,9 @@
 </PageHeader>
 
 <div class="min-h-0 flex-1 overflow-y-auto">
-	<div class="mx-auto max-w-xl space-y-10 px-4 py-6 sm:py-10">
+	<div
+		class="mx-auto max-w-xl space-y-10 px-4 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:py-10"
+	>
 		{#if form?.message}
 			<p class="rounded-2xl bg-muted px-4 py-3 text-sm">{form.message}</p>
 		{/if}

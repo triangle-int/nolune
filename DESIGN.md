@@ -1511,6 +1511,13 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   settings. Colors are CSS variables in `packages/web/src/routes/layout.css`, with a dark theme
   (`mode-watcher`: system, light or dark). The fonts, Figtree and Fira Mono, are bundled from
   Fontsource and served by the app, so they don't depend on the OS or a font CDN.
+- **A phone's edges.** The page fills the screen (`viewport-fit=cover` in `app.html`), so the
+  `env(safe-area-inset-*)` paddings work, in Safari and from the Home Screen alike. The root
+  (`routes/+layout.svelte`) keeps everything below the status bar and, in landscape, beside the
+  notch, with the page's color around it, as Safari does on its own. The bottom is each part's: the
+  sidebar, the composer, a sheet's buttons and the end of what scrolls pad themselves above the home
+  indicator, so the page still runs under it. In the iOS app all of these are zero, since the app
+  keeps the page inside the safe area itself.
 - **Replies** are built by `buildTranscript` (`packages/web/src/lib/transcript.ts`): text blocks are shown as
   Markdown (`marked` + DOMPurify), and every run of thinking and commands between two texts is one
   collapsible group, "Worked for 12s" when done and a live "Thinking" / current step while running.
