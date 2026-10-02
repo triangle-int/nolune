@@ -162,12 +162,14 @@ export {
 	ModelSwitchError,
 	setEffort,
 	setHidden,
+	type Changes,
 	type Conversation,
 	type DisplayAttachment,
 	type DisplayBlock,
 	type DisplayMessage,
 	type DisplayPicture,
 	type DisplayResult,
+	type ToolChanges,
 	type Usage
 } from './conversations.ts';
 export {
@@ -201,9 +203,11 @@ export {
 } from './media.ts';
 export {
 	CompactionError,
+	ReloadError,
 	changeCommandMode,
 	changeEffort,
 	changeModel,
+	chatToolChanges,
 	compactConversation,
 	getSnapshot,
 	isRunning,
@@ -212,6 +216,7 @@ export {
 	onRunningChange,
 	recoverAfterRestart,
 	refreshMemoryLooks,
+	reloadTools,
 	renameConversation,
 	runningConversationIds,
 	sendMessage,
@@ -285,6 +290,36 @@ export {
 	type ProfileSkill,
 	type Skill
 } from './skills.ts';
+export {
+	MAX_CHAT_MCP_TOOLS,
+	MCP_TRANSPORTS,
+	McpServerError,
+	callMcpTool,
+	checkMcpServer,
+	closeMcpConnections,
+	describeFromServer,
+	findMcpServer,
+	findMcpTool,
+	holdMcpConnections,
+	isMcpAddress,
+	joinCommandLine,
+	listMcpServers,
+	listMcpTools,
+	mcpChatTools,
+	mcpResultText,
+	mcpServerNameProblem,
+	mcpToolName,
+	mcpToolServer,
+	parseMcpServer,
+	refreshMcpTools,
+	removeMcpServer,
+	saveMcpServer,
+	splitCommandLine,
+	type McpServerConfig,
+	type McpServerStatus,
+	type McpServerTools,
+	type McpTransport
+} from './mcp.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export {
 	MAX_ACTIVE_SUBAGENTS,

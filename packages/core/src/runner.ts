@@ -49,11 +49,13 @@ import {
 	setProviderSession,
 	setTitle,
 	toDisplay,
+	toolChanges,
 	toolsFor,
 	touchConversation,
 	type Conversation,
 	type DisplayMessage,
-	type MessageRow
+	type MessageRow,
+	type ToolChanges
 } from './conversations.ts';
 import { getDb } from './db/index.ts';
 import { profile } from './db/schema.ts';
@@ -87,6 +89,7 @@ import {
 	checkCommand,
 	commandMode,
 	refusedText,
+	type CheckAction,
 	type CommandMode
 } from './command-safety.ts';
 import { folderContextFor } from './folders.ts';
@@ -99,6 +102,7 @@ import {
 	mediaByMessage,
 	type PreparedMedia
 } from './media.ts';
+import { McpServerError, callMcpTool, findMcpTool, mcpResultText, mcpToolServer } from './mcp.ts';
 import { memoryLooks, type DisplayMemoryLook } from './memory-changes.ts';
 import { profileCards } from './memory-cards.ts';
 import { memberWords } from './memory-people.ts';
@@ -108,11 +112,11 @@ import { hasFileStore, resolveFiles } from './provider-files.ts';
 import { getProfile, noticeProfileChanges } from './profiles.ts';
 import {
 	RUN_COMMAND_TOOL,
+	capOutput,
 	commandEnv,
 	parseRunCommandInput,
 	resolveCwd,
 	runCommand,
-	type RunCommandInput,
 	type RunCommandResult
 } from './run-command.ts';
 import { SubagentError, activeSubagents, listSubagents } from './subagents.ts';
@@ -138,6 +142,8 @@ export type LiveEvent =
 	| { type: 'title'; title: string }
 	| { type: 'model'; model: ChatModel }
 	| { type: 'commands'; commands: ChatCommands }
+	/** What reloading its tools would change now (chatToolChanges): null when nothing. */
+	| { type: 'tools'; changes: ToolChanges | null }
 	| { type: 'background'; background: BackgroundItem[] }
 	/** What the note-taker saved from the chat (memory-changes.ts), all of it. */
 	| { type: 'memory'; memory: DisplayMemoryLook[] }
@@ -211,6 +217,8 @@ export interface Snapshot {
 	/** Null once the conversation was deleted. */
 	model: ChatModel | null;
 	commands: ChatCommands;
+	/** What reloading its tools would change: skills and MCP servers since its prompt was built. */
+	toolChanges: ToolChanges | null;
 	running: boolean;
 	error: string | null;
 	messages: DisplayMessage[];
@@ -355,6 +363,7 @@ export function getSnapshot(conversationId: string): Snapshot {
 		title: conv?.title ?? '',
 		model: conv ? chatModel(conv) : null,
 		commands: chatCommands(conv),
+		toolChanges: chatToolChanges(conversationId),
 		running: st.running,
 		error: st.error,
 		messages: committedRows(conversationId).map((row) => toDisplay(row, media.get(row.id))),
@@ -725,9 +734,11 @@ async function runToolCall(
 			true
 		);
 	}
-	if (call.name !== RUN_COMMAND_TOOL.name)
+	const mcp = mcpToolServer(call.name) !== null;
+	if (call.name !== RUN_COMMAND_TOOL.name && !mcp)
 		return toolResult(call.id, `Unknown tool "${call.name}".`, true);
 	if (signal.aborted) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
+	if (mcp) return runMcpCall(conv, call, signal, st, images);
 	const input = parseRunCommandInput(call.input);
 	if (typeof input === 'string') return toolResult(call.id, `Invalid input: ${input}`, true);
 
@@ -741,7 +752,14 @@ async function runToolCall(
 		NOLUNE_CONVERSATION_ID: conv.id
 	};
 
-	const blocked = await safetyCheck(conv, call, input, dir, signal, st);
+	const blocked = await safetyCheck(
+		conv,
+		call,
+		{ input, cwd: resolveCwd(input.cwd, dir) },
+		dir,
+		signal,
+		st
+	);
 	if (blocked) return blocked;
 
 	if (input.background) {
@@ -797,6 +815,86 @@ async function runToolCall(
 	}
 }
 
+/**
+ * A call to a tool of an MCP server (`mcp__<server>__<tool>`, mcp.ts), which the chat got when it
+ * was created: checked by auto mode like a command, then called on the server. What it returns is
+ * kept like a command's output, and its pictures are attached as `nolune view`'s are.
+ */
+async function runMcpCall(
+	conv: Conversation,
+	call: ToolCall,
+	signal: AbortSignal,
+	st: State,
+	images: ImageUse
+): Promise<ToolResultBlock> {
+	const slug = profileSlug(conv.profileId);
+	if (!slug) return toolResult(call.id, 'Not run: the profile no longer exists.', true);
+	const args = call.input;
+	if (!args || typeof args !== 'object' || Array.isArray(args)) {
+		return toolResult(call.id, 'Invalid input: the arguments must be an object.', true);
+	}
+	let found: Awaited<ReturnType<typeof findMcpTool>> | null;
+	try {
+		found = await untilAborted(findMcpTool(call.name, { profile: slug, signal }), signal);
+	} catch (err) {
+		return toolResult(call.id, `Not run: ${errorText(err)}`, true);
+	}
+	if (!found) return toolResult(call.id, `Not run. ${stoppedText(st)}`, true);
+	const { server, tool } = found;
+	const hints = tool.annotations ?? {};
+	const blocked = await safetyCheck(
+		conv,
+		call,
+		{
+			tool: {
+				server,
+				tool: tool.name,
+				hints: {
+					readOnly: hints.readOnlyHint,
+					destructive: hints.destructiveHint,
+					openWorld: hints.openWorldHint
+				},
+				arguments: args
+			}
+		},
+		profileDir(slug),
+		signal,
+		st
+	);
+	if (blocked) return blocked;
+
+	const viewDir = createViewDir(images, pictureTypes(conv.provider));
+	try {
+		const result = await callMcpTool(server, tool.name, args as Record<string, unknown>, {
+			profile: slug,
+			signal
+		});
+		const text = capOutput(await mcpResultText(result, viewDir)).trim() || '(no output)';
+		const viewed = await viewedImageBlocks(conv, readViewedImages(viewDir), images);
+		const block = toolResult(call.id, text, result.isError === true, viewed.blocks);
+		if (viewed.attached.length) {
+			viewedMedia.set(block, await copyViewedImages(call.id, viewed.attached));
+		}
+		return block;
+	} catch (err) {
+		if (signal.aborted) return toolResult(call.id, `Not finished. ${stoppedText(st)}`, true);
+		// The server turned the call down (an unknown tool, arguments it doesn't take) or went away.
+		return toolResult(call.id, errorText(err, `${server} ${tool.name}`), true);
+	} finally {
+		rmSync(viewDir, { recursive: true, force: true });
+		commandEnded();
+	}
+}
+
+/** Why a call to a server failed, for the model: nolune's own words, or the server's with whose. */
+function errorText(err: unknown, whose?: string): string {
+	const message = err instanceof Error ? err.message : String(err);
+	if (err instanceof McpServerError || !whose) {
+		return `${message[0]?.toUpperCase() ?? ''}${message.slice(1)}`;
+	}
+	return `${whose}: ${message}`;
+}
+
 /** The promise's value, or null as soon as the signal aborts. */
 function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | null> {
 	if (signal.aborted) return Promise.resolve(null);
@@ -824,7 +922,7 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | 
 async function safetyCheck(
 	conv: Conversation,
 	call: ToolCall,
-	input: RunCommandInput,
+	action: CheckAction,
 	dir: string,
 	signal: AbortSignal,
 	st: State
@@ -842,8 +940,7 @@ async function safetyCheck(
 			conv,
 			rows: committedRows(conv.id),
 			callId: call.id,
-			input,
-			cwd: resolveCwd(input.cwd, dir),
+			...action,
 			profile: { name: getProfile(conv.profileId)?.name ?? '', dir }
 		}),
 		signal
@@ -907,8 +1004,9 @@ function queueBackgroundResult(
 /**
  * The chat with a system prompt that has its folder and the profile's soul as they are now. When
  * the chat moved to another folder, its folder's instructions or files changed, or the soul
- * changed, the prompt is built again, which costs one prompt cache miss. Only between turns: in
- * the middle of one, the model is still working under the prompt it started with, and its latest
+ * changed, the prompt is built again, which costs one prompt cache miss; its skills and MCP
+ * servers' tools are brought up to date with it, at no further cost. Only between turns: in the
+ * middle of one, the model is still working under the prompt it started with, and its latest
  * thinking must go back with the tool results.
  */
 export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conversation {
@@ -924,6 +1022,51 @@ export function withCurrentContext(conv: Conversation, rows: MessageRow[]): Conv
 		.join(' and ');
 	console.log(`[nolune] ${conv.id.slice(0, 8)} ${what} changed, system prompt built again`);
 	return rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
+}
+
+/** Why a chat's tools can't be reloaded right now. */
+export class ReloadError extends Error {}
+
+/**
+ * What reloading the chat's tools would change (toolChanges): new, changed or removed skills and
+ * MCP servers. Null when it has them as they are now, or is gone.
+ */
+export function chatToolChanges(conversationId: string): ToolChanges | null {
+	const conv = getConversation(conversationId);
+	const owner = conv && getProfile(conv.profileId);
+	return conv && owner ? toolChanges(conv, owner) : null;
+}
+
+/**
+ * Reload tools: builds the chat's system prompt again (rebuildSystemPrompt), so it gets the
+ * profile's skills and MCP servers' tools as they are now, for everyone who has it open. Someone
+ * asks for it: the next request reads the whole chat again once, without the prompt cache, and
+ * the thinking from before is left out. Nothing happens when the prompt and tools would come out
+ * the same. Returns what changed, or null. Throws ReloadError while the chat is working, or when
+ * it stopped in the middle of a step (the model's thinking must go back with the step's results).
+ */
+export function reloadTools(conversationId: string): ToolChanges | null {
+	const conv = getConversation(conversationId);
+	const owner = conv && getProfile(conv.profileId);
+	if (!conv || !owner) throw new ReloadError('This chat no longer exists.');
+	if (isRunning(conversationId)) {
+		throw new ReloadError('nolune is working in this chat. Reload its tools once it’s done.');
+	}
+	const rows = committedRows(conversationId);
+	const lastReply = rows.findLast((row) => row.role === 'assistant');
+	if (lastReply && rowCalls(lastReply).length) {
+		throw new ReloadError(
+			'This chat stopped in the middle of a step. Send a message first, then reload its tools.'
+		);
+	}
+	const changes = toolChanges(conv, owner);
+	const context = folderContextFor(owner, conv.folderId);
+	const soul = readSoul(owner.slug);
+	const rebuilt = rebuildSystemPrompt(conv, owner, context, soul, lastReply?.seq ?? null);
+	emit(conversationId, { type: 'tools', changes: null });
+	if (rebuilt === conv) return null;
+	console.log(`[nolune] ${conversationId.slice(0, 8)} tools reloaded, system prompt built again`);
+	return changes;
 }
 
 /**
@@ -1450,6 +1593,11 @@ async function loop(conversationId: string): Promise<void> {
 		st.live = [];
 		st.toolOutput = null;
 		emit(conversationId, { type: 'status', running: false, error: st.error });
+		// The agent may have made a skill, or someone connected a server meanwhile: those who
+		// have the chat open see it can reload its tools.
+		if (st.emitter.listenerCount('event')) {
+			emit(conversationId, { type: 'tools', changes: chatToolChanges(conversationId) });
+		}
 		runningChanged(conversationId, false);
 		for (const listener of loopEndListeners) {
 			try {

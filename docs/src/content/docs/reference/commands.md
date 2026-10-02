@@ -123,7 +123,24 @@ TOKENS|auto]`: change what's given; a new model is checked like add's. Chats alr
 - `nolune skill new <name> [--description D] [--profile SLUG | --global]`
 - `nolune skill list [--profile SLUG]`
 - `nolune skill enable <name>... [--profile SLUG]`
-- `nolune skill disable <name>... [--profile SLUG]`: leave out of the profile's new chats
+- `nolune skill disable <name>... [--profile SLUG]`: leave out of the profile's chats
+
+## MCP servers
+
+Other apps' and services' tools, which chats get next to nolune's own. See
+[Connected services](/docs/guides/connected-services/).
+
+- `nolune mcp add <name> <url> [--transport http|sse] [--header "Name: value"]... [--description D]
+[--profile SLUG]...`: connect a server at an address
+- `nolune mcp add <name> [--env NAME=value]... [--cwd DIR] [--description D] [--profile SLUG]... --
+<command> [args...]`: connect one this computer runs. nolune connects to check it; the same name
+  again changes it. `--profile`: only in those profiles (every profile without it)
+- `nolune mcp add-json <name> '<json>'`: the same, as MCP clients' settings write a server
+- `nolune mcp rm <name>`
+- `nolune mcp list`: the servers, and the names of their keys (never the keys)
+- `nolune mcp tools [<server> [<tool>]]`: their tools; with a tool, what it does and takes
+- `nolune mcp call <server> <tool> [<json>|-]`: call a tool with a JSON object of arguments (`-`
+  reads stdin); pictures it returns are attached for the agent
 
 ## Automations
 

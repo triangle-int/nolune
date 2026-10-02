@@ -214,6 +214,7 @@ export const es: Messages = {
 		allProfiles: 'Todos los perfiles',
 		card: 'Tu ficha',
 		modelsAndKeys: 'Modelos y claves',
+		services: 'Servicios conectados',
 		people: 'Personas',
 		logOut: 'Cerrar sesión'
 	},
@@ -296,6 +297,19 @@ export const es: Messages = {
 		fromNolune: (to: string) => `De nolune, para ${to}`,
 		finishedInBackground: (title: string) => `Terminado en segundo plano · ${title}`,
 		inBackground: 'Trabajando en segundo plano',
+		tools: {
+			reload: 'Recargar herramientas',
+			reloadHint:
+				'Le da a este chat las habilidades y los servicios conectados del perfil tal como están ahora. Su siguiente respuesta vuelve a leer todo el chat, así que cuesta más de lo habitual.',
+			reloaded: 'Este chat tiene ahora las habilidades y herramientas más recientes.',
+			upToDate: 'Este chat ya tenía las habilidades y herramientas más recientes.',
+			newSkills: (names: string) => `Habilidades nuevas: ${names}`,
+			changedSkills: (names: string) => `Habilidades actualizadas: ${names}`,
+			removedSkills: (names: string) => `Habilidades que ya no están disponibles: ${names}`,
+			newServices: (names: string) => `Conectado: ${names}`,
+			changedServices: (names: string) => `Herramientas actualizadas: ${names}`,
+			removedServices: (names: string) => `Desconectado: ${names}`
+		},
 		aCommand: 'Un comando',
 		subagent: (name: string) => `Subagente ${name}`,
 		stopping: 'deteniéndose',
@@ -817,7 +831,7 @@ export const es: Messages = {
 	skills: {
 		title: 'Habilidades',
 		intro:
-			'Las habilidades son instrucciones que nolune sigue para tareas concretas. Ve el nombre y la descripción de cada habilidad activada y lee el resto cuando una tarea lo necesita. Desactivar las que este perfil no necesita ayuda a nolune a centrarse. Los cambios se aplican a los chats nuevos.',
+			'Las habilidades son instrucciones que nolune sigue para tareas concretas. Ve el nombre y la descripción de cada habilidad activada y lee el resto cuando una tarea lo necesita. Desactivar las que este perfil no necesita ayuda a nolune a centrarse. Los cambios se aplican a los chats nuevos, y a uno en curso cuando alguien recarga sus herramientas.',
 		summary: (on: number, total: number, tokens: string) =>
 			`${on} de ${total} activadas · unos ${tokens} tokens al inicio de cada chat nuevo`,
 		madeFor: (profile: string) => `Hechas para ${profile}`,
@@ -1314,6 +1328,67 @@ export const es: Messages = {
 			invalid: (max: number) => `Un número entero de minutos, de 1 a ${max}.`,
 			saved: 'Guardado. Se aplica a los chats desde su próxima pausa.'
 		}
+	},
+
+	/**
+	 * Connected services, for admins: MCP servers, other apps' and services' tools, which the agent
+	 * uses with `nolune mcp`.
+	 */
+	services: {
+		title: 'Servicios conectados',
+		hint: 'Los servidores MCP le dan al agente las herramientas de otras apps y servicios, como un calendario, GitHub, Notion o la casa inteligente. Los chats nuevos reciben sus herramientas junto a las suyas (uno en curso, cuando alguien recarga sus herramientas), y el modo automático revisa cada llamada como un comando. Todos los perfiles los tienen, salvo que elijas algunos.',
+		add: 'Conectar un servidor',
+		addTitle: 'Conectar un servidor MCP',
+		addHint:
+			'Sus instrucciones dicen qué indicar: el comando que lo inicia en este ordenador, o su dirección, y la clave que necesita.',
+		name: 'Nombre',
+		namePlaceholder: 'github',
+		nameHint: 'Cómo lo llama el agente: letras minúsculas y dígitos, como github o home-assistant.',
+		kind: 'Cómo lo alcanza nolune',
+		kinds: { stdio: 'Un comando', remote: 'Una dirección' },
+		command: 'Comando',
+		commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
+		commandHint:
+			'Tal como lo escribirías en una terminal. Se ejecuta en este ordenador con el acceso de esta cuenta y encuentra los programas donde los encuentran los comandos del agente.',
+		address: 'Dirección',
+		addressHint: 'Su dirección MCP, que suele terminar en /mcp.',
+		transport: 'Protocolo',
+		transports: { http: 'Streamable HTTP', sse: 'SSE (servidores antiguos)' },
+		env: 'Variables de entorno',
+		envHint: 'Una por línea, como NOMBRE=valor: las claves y tokens que necesita.',
+		headers: 'Cabeceras',
+		headersHint: 'Una por línea, como Nombre: valor, por ejemplo Authorization: Bearer …',
+		ifNeeded: '(si necesita alguna)',
+		secretsKept: (names: string[]) => `Guardadas: ${list(names)}. Déjalo vacío para conservarlas.`,
+		description: 'Para qué sirve',
+		optional: '(opcional)',
+		descriptionPlaceholder: 'Los calendarios de la familia',
+		descriptionHint:
+			'Unas palabras para el agente, para que sepa cuándo usarlo. Si lo dejas vacío, nolune usa lo que el servidor dice de sí mismo.',
+		profiles: 'Perfiles',
+		profilesHint: 'Solo lo tienen los perfiles que elijas. Si no eliges ninguno, lo tienen todos.',
+		everyProfile: 'En todos los perfiles',
+		onlyIn: (names: string[]) => `Solo en ${list(names)}`,
+		keys: (names: string[]) => `con ${list(names)}`,
+		noKeys: 'sin claves',
+		connecting: 'Conectando…',
+		check: 'Comprobar',
+		checking: 'Comprobando…',
+		change: 'Cambiar',
+		works: (n: number, names: string) =>
+			`Funciona: ${n} ${p(n, { one: 'herramienta', other: 'herramientas' })}${names ? ` (${names})` : ''}.`,
+		unchecked: (problem: string) => `Guardado, pero nolune no pudo conectarse. ${problem}`,
+		taken: (name: string) => `Ya hay un servidor llamado ${name}.`,
+		needCommand: 'Indica el comando que lo inicia.',
+		needAddress: 'Indica su dirección, empezando por http:// o https://.',
+		badEnv: (line: string) => `«${line}» no tiene la forma NOMBRE=valor.`,
+		badHeader: (line: string) => `«${line}» no tiene la forma Nombre: valor.`,
+		broken: (problem: string) => `Su configuración en config.json está dañada: ${problem}`,
+		disconnect: 'Desconectar',
+		removeTitle: (name: string) => `¿Desconectar ${name}?`,
+		removeBody:
+			'El agente ya no puede usar sus herramientas, y nolune olvida su configuración y sus claves.',
+		removed: 'Desconectado.'
 	},
 
 	people: {

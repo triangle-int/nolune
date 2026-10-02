@@ -297,7 +297,8 @@ export const conversation = sqliteTable(
 		/**
 		 * Frozen at creation so the prompt cache prefix never changes, except when the chat moves
 		 * to another folder, its folder's instructions or files change, or the profile's soul
-		 * changes: then it is built again at the start of the next turn.
+		 * changes: then it is built again at the start of the next turn. Also when someone reloads
+		 * the chat's tools (reloadTools).
 		 */
 		systemPrompt: text('system_prompt').notNull(),
 		folderId: text('folder_id').references(() => folder.id, { onDelete: 'set null' }),
@@ -313,7 +314,9 @@ export const conversation = sqliteTable(
 		/**
 		 * The tool definitions its requests send, frozen at creation like `systemPrompt`: a thinking
 		 * block is bound to the tools it was made with, so a new version of nolune that changes them
-		 * only reaches new chats. Null: chats from before this was saved (LEGACY_TOOLS).
+		 * only reaches new chats. Its MCP servers' tools come after nolune's, and are brought up to
+		 * date with the prompt (rebuildSystemPrompt: Reload tools, or a folder or soul change). Null:
+		 * chats from before this was saved (LEGACY_TOOLS).
 		 */
 		tools: text('tools', { mode: 'json' }).$type<Anthropic.Tool[]>(),
 		/**

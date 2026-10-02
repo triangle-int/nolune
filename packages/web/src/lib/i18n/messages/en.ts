@@ -120,6 +120,7 @@ export const en = {
 		allProfiles: 'All profiles',
 		card: 'Your card',
 		modelsAndKeys: 'Models & keys',
+		services: 'Connected services',
 		people: 'People',
 		logOut: 'Log out'
 	},
@@ -202,6 +203,19 @@ export const en = {
 		fromNolune: (to: string) => `From nolune, to ${to}`,
 		finishedInBackground: (title: string) => `Finished in the background · ${title}`,
 		inBackground: 'Working in the background',
+		tools: {
+			reload: 'Reload tools',
+			reloadHint:
+				'Gives this chat the profile’s skills and connected services as they are now. Its next reply reads the whole chat again, so it costs more than usual.',
+			reloaded: 'This chat has the latest skills and tools now.',
+			upToDate: 'This chat already has the latest skills and tools.',
+			newSkills: (names: string) => `New skills: ${names}`,
+			changedSkills: (names: string) => `Updated skills: ${names}`,
+			removedSkills: (names: string) => `Skills no longer available: ${names}`,
+			newServices: (names: string) => `Connected: ${names}`,
+			changedServices: (names: string) => `Tools updated: ${names}`,
+			removedServices: (names: string) => `Disconnected: ${names}`
+		},
 		aCommand: 'A command',
 		subagent: (name: string) => `Subagent ${name}`,
 		stopping: 'stopping',
@@ -738,7 +752,7 @@ export const en = {
 	skills: {
 		title: 'Skills',
 		intro:
-			"Skills are instructions nolune follows for specific tasks. It sees the name and description of every skill that's on, and reads the rest when a task calls for it. Turning off skills this profile doesn't need keeps nolune focused. Changes apply to new chats.",
+			"Skills are instructions nolune follows for specific tasks. It sees the name and description of every skill that's on, and reads the rest when a task calls for it. Turning off skills this profile doesn't need keeps nolune focused. Changes apply to new chats, and to a chat already going when someone reloads its tools.",
 		summary: (on: number, total: number, tokens: string) =>
 			`${on} of ${total} on · about ${tokens} tokens at the start of every new chat`,
 		madeFor: (profile: string) => `Made for ${profile}`,
@@ -1234,6 +1248,67 @@ export const en = {
 			invalid: (max: number) => `A whole number of minutes, from 1 to ${max}.`,
 			saved: 'Saved. It applies to chats from their next quiet spell.'
 		}
+	},
+
+	/**
+	 * Connected services, for admins: MCP servers, other apps' and services' tools, which the agent
+	 * uses with `nolune mcp`.
+	 */
+	services: {
+		title: 'Connected services',
+		hint: 'MCP servers give the agent the tools of other apps and services, like a calendar, GitHub, Notion or the smart home. New chats get their tools next to its own (a chat already going, once someone reloads its tools), and auto mode checks each call like a command. Every profile gets them, unless you choose some.',
+		add: 'Connect a server',
+		addTitle: 'Connect an MCP server',
+		addHint:
+			'Its instructions say what to give: the command that starts it on this computer, or its address, and the key it needs.',
+		name: 'Name',
+		namePlaceholder: 'github',
+		nameHint:
+			'What the agent calls it by: lowercase letters and digits, like github or home-assistant.',
+		kind: 'How nolune reaches it',
+		kinds: { stdio: 'A command', remote: 'An address' },
+		command: 'Command',
+		commandPlaceholder: 'npx -y @modelcontextprotocol/server-filesystem ~/Documents',
+		commandHint:
+			"As you'd type it in a terminal. It runs on this computer with this account's access, and finds programs where the agent's commands do.",
+		address: 'Address',
+		addressHint: 'Its MCP address, which often ends in /mcp.',
+		transport: 'Protocol',
+		transports: { http: 'Streamable HTTP', sse: 'SSE (older servers)' },
+		env: 'Environment variables',
+		envHint: 'One per line, as NAME=value: the keys and tokens it needs.',
+		headers: 'Headers',
+		headersHint: 'One per line, as Name: value, like Authorization: Bearer …',
+		ifNeeded: '(if it needs any)',
+		secretsKept: (names: string[]) => `Saved: ${list(names)}. Leave empty to keep them.`,
+		description: 'What it’s for',
+		optional: '(optional)',
+		descriptionPlaceholder: 'The family’s calendars',
+		descriptionHint:
+			'A few words for the agent, so it knows when to use it. Left empty, nolune uses what the server says about itself.',
+		profiles: 'Profiles',
+		profilesHint: 'Only the profiles you choose get it. With none chosen, every profile does.',
+		everyProfile: 'In every profile',
+		onlyIn: (names: string[]) => `Only in ${list(names)}`,
+		keys: (names: string[]) => `with ${list(names)}`,
+		noKeys: 'no keys',
+		connecting: 'Connecting…',
+		check: 'Check',
+		checking: 'Checking…',
+		change: 'Change',
+		works: (n: number, names: string) =>
+			`It works: ${n} ${p(n, { one: 'tool', other: 'tools' })}${names ? ` (${names})` : ''}.`,
+		unchecked: (problem: string) => `Saved, but nolune couldn't connect to it. ${problem}`,
+		taken: (name: string) => `There's already a server called ${name}.`,
+		needCommand: 'Give the command that starts it.',
+		needAddress: 'Give its address, starting with http:// or https://.',
+		badEnv: (line: string) => `“${line}” isn't NAME=value.`,
+		badHeader: (line: string) => `“${line}” isn't Name: value.`,
+		broken: (problem: string) => `Its settings in config.json are broken: ${problem}`,
+		disconnect: 'Disconnect',
+		removeTitle: (name: string) => `Disconnect ${name}?`,
+		removeBody: "The agent can't use its tools any more, and nolune forgets its settings and keys.",
+		removed: 'Disconnected.'
 	},
 
 	/** Everyone with an account, for admins: adding people, invite links, passwords. */

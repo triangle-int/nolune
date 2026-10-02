@@ -286,23 +286,42 @@ interface Failure {
 }
 
 /** The tool's input schema as the zod shape the SDK takes. nolune's tools use plain fields only. */
+/** A property that's only a type of value and a description, as run_command's all are. */
+function isPlain(
+	property: Record<string, unknown>
+): property is { type: string; description?: string } {
+	return (
+		['string', 'integer', 'number', 'boolean'].includes(property.type as string) &&
+		Object.keys(property).every((key) => key === 'type' || key === 'description')
+	);
+}
+
 function zodShape(z: Zod['z'], schema: Anthropic.Tool['input_schema']): Record<string, ZodType> {
 	const required = new Set(schema.required ?? []);
 	const shape: Record<string, ZodType> = {};
-	const properties = (schema.properties ?? {}) as Record<
-		string,
-		{ type?: string; description?: string }
-	>;
+	const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
 	for (const [key, property] of Object.entries(properties)) {
-		let field: ZodType =
-			property.type === 'integer'
-				? z.number().int()
-				: property.type === 'number'
-					? z.number()
-					: property.type === 'boolean'
-						? z.boolean()
-						: z.string();
-		if (property.description) field = field.describe(property.description);
+		let field: ZodType;
+		if (isPlain(property)) {
+			// As before MCP servers' tools: chats' sessions keep the tools Claude Code saw.
+			field =
+				property.type === 'integer'
+					? z.number().int()
+					: property.type === 'number'
+						? z.number()
+						: property.type === 'boolean'
+							? z.boolean()
+							: z.string();
+			if (property.description) field = field.describe(property.description);
+		} else {
+			// An MCP server's lists, objects, choices...: as its schema says, else any value.
+			try {
+				field = z.fromJSONSchema(property as Parameters<Zod['z']['fromJSONSchema']>[0]);
+			} catch {
+				field = z.any();
+				if (typeof property.description === 'string') field = field.describe(property.description);
+			}
+		}
 		shape[key] = required.has(key) ? field : field.optional();
 	}
 	return shape;

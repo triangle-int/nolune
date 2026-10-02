@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUpload, prepareMessage } from './attachments.ts';
 import { checkClaudePlan, claudePlanStatus } from './claude-plan.ts';
@@ -21,6 +22,7 @@ import {
 	setProviderSession
 } from './conversations.ts';
 import { viewImage } from './images.ts';
+import { closeMcpConnections, refreshMcpTools, saveMcpServer } from './mcp.ts';
 import { listModels } from './models.ts';
 import { addPreset } from './presets.ts';
 import { RUN_COMMAND_TOOL, runCommand } from './run-command.ts';
@@ -354,6 +356,59 @@ describe.skipIf(!claude)('chats on the Claude plan', { timeout: 60_000 }, () => 
 			sentSeq: 1,
 			provider: 'claude-plan'
 		});
+	});
+
+	it("gives Claude Code the chat's MCP tools as their schemas say, and runs their calls", async () => {
+		const fake = fileURLToPath(new URL('./test/mcp-server.ts', import.meta.url));
+		// Auto mode checks every call to a server's tool, on the chat's model: mcp-chat.test.ts.
+		updateConfig((c) => {
+			c.commandMode = 'unrestricted';
+		});
+		saveMcpServer('fake', { type: 'stdio', command: process.execPath, args: [fake] });
+		await refreshMcpTools();
+		try {
+			const { user, chat } = planChat();
+			scripted(
+				{
+					stop: 'tool_use',
+					content: [
+						{
+							type: 'tool_use',
+							id: 'toolu_1',
+							name: 'mcp__nolune__mcp__fake__tag',
+							input: { tags: ['a', 'b'], color: 'red' }
+						}
+					]
+				},
+				{ stop: 'end_turn', content: [{ type: 'text', text: 'Tagged.' }] }
+			);
+
+			const ended = loopEnd(chat.id);
+			await sendMessage(chat.id, { id: user.id, name: 'Anna' }, 'Tag them');
+			await ended;
+
+			expect(getSnapshot(chat.id).error).toBeNull();
+			const tools = (chatCalls()[0].json?.tools ?? []) as unknown as {
+				name: string;
+				input_schema: { properties: Record<string, Record<string, unknown>> };
+			}[];
+			const tag = tools.find((t) => t.name === 'mcp__nolune__mcp__fake__tag');
+			expect(tag?.input_schema.properties.tags).toMatchObject({
+				type: 'array',
+				items: { type: 'string' }
+			});
+			expect(tag?.input_schema.properties.color).toMatchObject({ enum: ['red', 'blue'] });
+			expect(tag?.input_schema.properties.where).toMatchObject({ type: 'object' });
+			// run_command's, as Claude Code saw it before MCP servers.
+			const command = tools.find((t) => t.name === 'mcp__nolune__run_command');
+			expect(command?.input_schema.properties.timeout_seconds).toMatchObject({ type: 'integer' });
+			expect(rowsOf(chat.id)[2]).toEqual({
+				kind: 'tool_results',
+				content: [{ type: 'tool_result', callId: 'toolu_1', content: 'red: a, b', isError: false }]
+			});
+		} finally {
+			await closeMcpConnections();
+		}
 	});
 
 	it("resumes the chat's session with only the new messages", async () => {
