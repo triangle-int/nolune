@@ -2198,8 +2198,10 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   at a time, which every page that starts one follows. Unlike the ChatGPT plan's sign-in, nothing
   comes back to `127.0.0.1`, so it works the same from a phone through the relay. It's started
   from `nolune nolune-plan setup` (which prints the page and the code), from the plan's row in
-  Models & keys (which shows them and asks until it's linked), or from the welcome's model step,
-  where the plan comes first, across the top, and is the one picked when no key is set.
+  Models & keys (which shows them and asks until it's linked), or from the welcome's model step.
+  There the plan is the first screen on its own, one large choice, with "Other providers" under it
+  opening the rest (the Claude and ChatGPT plans and the API keys). A key that's set already opens
+  them straight away, picked, since it's the likely choice.
 - **Linked, with no plan yet.** Someone can link an account they haven't subscribed with. Models &
   keys and the welcome then say so and offer Subscribe, which opens the account page in a new tab
   (`nolunePlanAccountUrl`); the welcome waits there, asking every 4 seconds, and carries on to the

@@ -3,6 +3,7 @@
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
 	import CheckIcon from '@lucide/svelte/icons/check';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
 	import MoonStarIcon from '@lucide/svelte/icons/moon-star';
@@ -29,8 +30,8 @@
 	const { m } = getI18n();
 
 	type Choice = 'nolune-plan' | 'claude-plan' | 'chatgpt-plan' | ModelKeyProvider;
-	const CHOICES: { id: Choice; icon: typeof KeyRoundIcon }[] = [
-		...(untrack(() => nolunePlan) ? [{ id: 'nolune-plan' as const, icon: MoonStarIcon }] : []),
+	/** Everything but the nolune plan, which has a screen of its own when it's offered. */
+	const CHOICES: { id: Exclude<Choice, 'nolune-plan'>; icon: typeof KeyRoundIcon }[] = [
 		{ id: 'claude-plan', icon: SparklesIcon },
 		{ id: 'chatgpt-plan', icon: MessageCircleIcon },
 		{ id: 'anthropic', icon: KeyRoundIcon },
@@ -45,6 +46,11 @@
 	let choice = $state<Choice>(
 		untrack(() => keys.find((k) => k.set)?.provider ?? (nolunePlan ? 'nolune-plan' : 'claude-plan'))
 	);
+	/**
+	 * With the nolune plan offered, the step first asks between it and "Other providers", which
+	 * open the rest. A key that's set already opens them straight away: it's the likely pick.
+	 */
+	let others = $state(untrack(() => !nolunePlan || choice !== 'nolune-plan'));
 	let view = $state<'choose' | 'key' | 'plan' | 'chatgpt' | 'nolune' | 'models'>('choose');
 	let busy = $state(false);
 	let problem = $state<string | null>(null);
@@ -63,6 +69,16 @@
 	function pick(id: Choice) {
 		choice = id;
 		problem = null;
+	}
+
+	function showOthers() {
+		others = true;
+		pick(keys.find((k) => k.set)?.provider ?? 'claude-plan');
+	}
+
+	function hideOthers() {
+		others = false;
+		pick('nolune-plan');
 	}
 
 	async function listModels() {
@@ -367,43 +383,88 @@
 			<p class="text-muted-foreground">{m.welcome.model.subtitle}</p>
 		</div>
 		<input type="hidden" name="plan" value={choice} />
-		<!-- The nolune plan across the top, the two other plans side by side, the API keys under them. -->
-		<div class="grid gap-3 sm:grid-cols-6" role="radiogroup" aria-label={m.welcome.model.title}>
-			{#each CHOICES as { id, icon: Icon } (id)}
-				{@const picked = choice === id}
+		{#if !others}
+			<!-- The nolune plan, which needs nothing else, and the rest one step further. -->
+			<div class="space-y-3">
 				<button
-					type="button"
-					role="radio"
-					aria-checked={picked}
-					onclick={() => pick(id)}
-					class={cn(
-						'relative flex flex-col gap-3 rounded-3xl border bg-card p-5 text-left transition duration-200 outline-none hover:border-foreground/25 focus-visible:ring-3 focus-visible:ring-ring/30 motion-safe:hover:-translate-y-0.5',
-						id === 'nolune-plan'
-							? 'sm:col-span-6'
-							: id === 'claude-plan' || id === 'chatgpt-plan'
-								? 'sm:col-span-3'
-								: 'sm:col-span-2',
-						picked && 'border-foreground/60 shadow-lg ring-3 ring-foreground/10'
-					)}
+					type="submit"
+					disabled={busy}
+					class="relative flex w-full flex-col items-start gap-5 rounded-3xl border border-foreground/60 bg-card p-7 text-left shadow-lg ring-3 ring-foreground/10 transition duration-200 outline-none hover:border-foreground focus-visible:ring-ring/30 disabled:opacity-80 motion-safe:hover:-translate-y-0.5 sm:p-9"
 				>
-					<Icon class="size-6" />
-					<span class="space-y-0.5">
-						<span class="block font-medium">{m.welcome.model.choices[id].title}</span>
-						<span class="block text-sm text-muted-foreground">
-							{m.welcome.model.choices[id].about}
+					<span
+						class="flex size-14 items-center justify-center rounded-2xl bg-foreground text-background"
+					>
+						<MoonStarIcon class="size-7" />
+					</span>
+					<span class="space-y-1.5 pr-8">
+						<span class="block text-2xl font-semibold tracking-tight">
+							{m.welcome.model.choices['nolune-plan'].title}
+						</span>
+						<span class="block text-muted-foreground">
+							{m.welcome.model.choices['nolune-plan'].about}
 						</span>
 					</span>
-					{#if picked}
-						<span
-							class="absolute top-4 right-4 flex size-6 items-center justify-center rounded-full bg-foreground text-background"
-						>
-							<CheckIcon class="size-3.5" />
-						</span>
-					{/if}
+					<span
+						class="absolute top-6 right-6 flex size-7 items-center justify-center rounded-full bg-foreground text-background"
+					>
+						<CheckIcon class="size-4" />
+					</span>
 				</button>
-			{/each}
-		</div>
-		<div class="flex justify-center">
+				<button
+					type="button"
+					onclick={showOthers}
+					class="flex w-full items-center gap-4 rounded-3xl border bg-card p-5 text-left transition duration-200 outline-none hover:border-foreground/25 focus-visible:ring-3 focus-visible:ring-ring/30"
+				>
+					<KeyRoundIcon class="size-6 shrink-0 text-muted-foreground" />
+					<span class="min-w-0 flex-1 space-y-0.5">
+						<span class="block font-medium">{m.welcome.model.others.title}</span>
+						<span class="block text-sm text-muted-foreground">
+							{m.welcome.model.others.about}
+						</span>
+					</span>
+					<ChevronRightIcon class="size-5 shrink-0 text-muted-foreground" />
+				</button>
+			</div>
+		{:else}
+			<!-- The two plans side by side, the API keys under them. -->
+			<div class="grid gap-3 sm:grid-cols-6" role="radiogroup" aria-label={m.welcome.model.title}>
+				{#each CHOICES as { id, icon: Icon } (id)}
+					{@const picked = choice === id}
+					<button
+						type="button"
+						role="radio"
+						aria-checked={picked}
+						onclick={() => pick(id)}
+						class={cn(
+							'relative flex flex-col gap-3 rounded-3xl border bg-card p-5 text-left transition duration-200 outline-none hover:border-foreground/25 focus-visible:ring-3 focus-visible:ring-ring/30 motion-safe:hover:-translate-y-0.5',
+							id === 'claude-plan' || id === 'chatgpt-plan' ? 'sm:col-span-3' : 'sm:col-span-2',
+							picked && 'border-foreground/60 shadow-lg ring-3 ring-foreground/10'
+						)}
+					>
+						<Icon class="size-6" />
+						<span class="space-y-0.5">
+							<span class="block font-medium">{m.welcome.model.choices[id].title}</span>
+							<span class="block text-sm text-muted-foreground">
+								{m.welcome.model.choices[id].about}
+							</span>
+						</span>
+						{#if picked}
+							<span
+								class="absolute top-4 right-4 flex size-6 items-center justify-center rounded-full bg-foreground text-background"
+							>
+								<CheckIcon class="size-3.5" />
+							</span>
+						{/if}
+					</button>
+				{/each}
+			</div>
+		{/if}
+		<div class="flex justify-center gap-2">
+			{#if others && nolunePlan}
+				<Button type="button" variant="ghost" size="lg" class="h-11" onclick={hideOthers}>
+					{m.welcome.back}
+				</Button>
+			{/if}
 			<Button type="submit" size="lg" class="h-11 min-w-44 px-8" disabled={busy}>
 				{busy ? m.welcome.model.checkingPlan : m.common.continue}
 			</Button>

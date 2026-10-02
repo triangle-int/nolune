@@ -1000,6 +1000,11 @@ export const es: Messages = {
 				},
 				xai: { title: 'Clave de API de xAI', about: 'Modelos Grok, pago por uso' }
 			},
+			/** With the nolune plan offered, the rest of the choices are one step further. */
+			others: {
+				title: 'Otros proveedores',
+				about: 'Un plan de Claude o ChatGPT que ya tengas, o tu propia clave de API'
+			},
 			checkingPlan: 'Comprobando el inicio de sesión…',
 			pasteKey: (label: string) => `Pega tu clave de ${label}`,
 			checkKey: 'Comprobar la clave',

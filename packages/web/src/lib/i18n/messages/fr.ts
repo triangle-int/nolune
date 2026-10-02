@@ -1003,6 +1003,11 @@ export const fr: Messages = {
 				},
 				xai: { title: 'Clé d’API xAI', about: 'Modèles Grok, payés à l’usage' }
 			},
+			/** With the nolune plan offered, the rest of the choices are one step further. */
+			others: {
+				title: 'Autres fournisseurs',
+				about: 'Un abonnement Claude ou ChatGPT que vous avez déjà, ou votre propre clé d’API'
+			},
 			checkingPlan: 'Vérification de la connexion…',
 			pasteKey: (label: string) => `Collez votre clé ${label}`,
 			checkKey: 'Vérifier la clé',

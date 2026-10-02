@@ -47,7 +47,7 @@ export const load: PageServerLoad = ({ locals, params }) => {
 		person: user.name,
 		needsModel,
 		isAdmin,
-		// The nolune plan, first among the choices once it's offered.
+		// The nolune plan, the first screen of the step once it's offered.
 		nolunePlan: needsModel && isAdmin && nolunePlanOffered(),
 		keys:
 			needsModel && isAdmin

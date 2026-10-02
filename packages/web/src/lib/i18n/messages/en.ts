@@ -931,6 +931,11 @@ export const en = {
 				},
 				xai: { title: 'xAI API key', about: 'Grok models, paid as you go' }
 			},
+			/** With the nolune plan offered, the rest of the choices are one step further. */
+			others: {
+				title: 'Other providers',
+				about: 'A Claude or ChatGPT plan you already have, or your own API key'
+			},
 			checkingPlan: 'Checking the sign-in…',
 			pasteKey: (label: string) => `Paste your ${label} key`,
 			checkKey: 'Check the key',

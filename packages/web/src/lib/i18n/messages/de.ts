@@ -986,6 +986,11 @@ export const de: Messages = {
 				},
 				xai: { title: 'xAI-API-Schlüssel', about: 'Grok-Modelle, nach Verbrauch bezahlt' }
 			},
+			/** With the nolune plan offered, the rest of the choices are one step further. */
+			others: {
+				title: 'Andere Anbieter',
+				about: 'Ein Claude- oder ChatGPT-Abo, das du schon hast, oder dein eigener API-Schlüssel'
+			},
 			checkingPlan: 'Anmeldung wird geprüft…',
 			pasteKey: (label: string) => `Füge deinen ${label}-Schlüssel ein`,
 			checkKey: 'Schlüssel prüfen',

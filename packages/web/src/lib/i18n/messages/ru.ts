@@ -1064,6 +1064,11 @@ export const ru: Messages = {
 				},
 				xai: { title: 'API-ключ xAI', about: 'Модели Grok, оплата по мере использования' }
 			},
+			/** With the nolune plan offered, the rest of the choices are one step further. */
+			others: {
+				title: 'Другие провайдеры',
+				about: 'Подписка Claude или ChatGPT, которая у вас уже есть, или свой API-ключ'
+			},
 			checkingPlan: 'Проверяю вход…',
 			pasteKey: (label: string) => `Вставьте ключ ${label}`,
 			checkKey: 'Проверить ключ',
