@@ -330,6 +330,8 @@ export const de: Messages = {
 			`Seit dem vorigen Schritt ${ttl === '5m' ? 'sind über 5 Minuten' : 'ist über eine Stunde'} vergangen, daher war der zwischengespeicherte Chat abgelaufen und wurde neu verarbeitet (langsamer und teurer).`,
 		cacheBroken:
 			'Kontext, der aus dem Cache hätte kommen sollen, wurde neu verarbeitet (langsamer und teurer). Das passiert einmal, wenn das Modell oder die Denktiefe gewechselt, der Chat in einen anderen Ordner verschoben oder sein Ordner geändert wird.',
+		cacheElsewhere:
+			'Kontext, der aus dem Cache hätte kommen sollen, wurde neu verarbeitet (langsamer und teurer). OpenAI hält den Cache auf einem seiner Server, und diese Anfrage ist wahrscheinlich bei einem anderen gelandet: Welcher es wird, kann nolune nicht wählen. Einmal passiert das auch, wenn die Denktiefe gewechselt, der Chat in einen anderen Ordner verschoben oder sein Ordner geändert wird.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} aus dem Cache`,
 		contextUsed: (used: string, window: string) =>

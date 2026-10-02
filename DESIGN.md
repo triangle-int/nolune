@@ -127,9 +127,10 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
   still aren't edited, and a summary is one more row (or the start of one).
 - Every assistant row stores `usage`, and the gateway logs `cache_read` / `cache_write` and the hit
   rate for every call. The chat header shows the hit rate (tooltip: last reply and whole conversation),
-  and a reply is marked as a cache miss when it read less than the previous call read or wrote, with
-  the likely cause: over an hour idle (the TTL) or a changed request such as a new model or
-  reasoning level.
+  and a reply is marked as a cache miss when it read less than the previous call read or wrote (on
+  OpenAI, less than the previous call's whole prompt; see below), with the likely cause: over an
+  hour idle (the TTL), a changed request such as a new model or reasoning level, or on OpenAI with
+  the same model, a server without the chat's cache.
 
 ### On OpenAI
 
@@ -139,6 +140,15 @@ OpenAI's prompt cache is automatic, and the rule above is what keeps it working:
 `cacheTtl` and the cache markers are Anthropic's alone. Usage reports `cached_tokens` (and, on
 newer models, `cache_write_tokens`) inside `input_tokens`; nolune subtracts them, so the chat's
 numbers mean the same for both providers.
+
+OpenAI caches every call's whole prompt whether or not usage reports the write, and the ChatGPT
+plan never reports one. So on OpenAI, with a key or on the plan, a call is expected to read back
+the previous call's whole prompt (`cacheMissTokens` in `usage.ts`, from the previous reply's
+`message.provider`), or a miss right after another would go unmarked. The cache lives on one of
+OpenAI's servers, and `prompt_cache_key` doesn't always keep a chat on it: on the plan, calls
+seconds apart within a turn have read nothing, or exactly the prompt of a call made many calls
+earlier, with the prefix unchanged. With the model unchanged, the chat says so instead of blaming
+a switch.
 
 ### On OpenRouter
 
