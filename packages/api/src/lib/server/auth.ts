@@ -17,6 +17,12 @@ export interface AuthOptions {
 	sendEmail: SendEmail;
 	/** SvelteKit's cookies, in the service; none in tests. */
 	plugins?: BetterAuthPlugin[];
+	/**
+	 * Whether an address may have an account: until the plan is open, only the ones let in
+	 * (`ALLOWED_EMAILS`). Others are sent no code, and no account is made for them however it's
+	 * asked for. Anyone, when not given.
+	 */
+	mayJoin?: (email: string) => boolean;
 }
 
 /**
@@ -24,13 +30,23 @@ export interface AuthOptions {
  * account the first time: there's no password to keep. A gateway is linked with a device code
  * (`/link`), and the session that gives it is its bearer token for `/v1`.
  */
-export function createAuth({ db, secret, baseURL, sendEmail, plugins = [] }: AuthOptions) {
+export function createAuth({
+	db,
+	secret,
+	baseURL,
+	sendEmail,
+	plugins = [],
+	mayJoin = () => true
+}: AuthOptions) {
 	return betterAuth({
 		baseURL,
 		secret,
 		database: drizzleAdapter(db, { provider: 'pg', schema }),
 		// A gateway's session is renewed as it's used, so one that's running stays signed in.
 		session: { expiresIn: 90 * DAY, updateAge: DAY },
+		databaseHooks: {
+			user: { create: { before: async (user) => (mayJoin(user.email) ? undefined : false) } }
+		},
 		rateLimit: {
 			customRules: {
 				'/email-otp/send-verification-otp': { window: 60, max: 3 },
@@ -44,6 +60,7 @@ export function createAuth({ db, secret, baseURL, sendEmail, plugins = [] }: Aut
 				expiresIn: 5 * 60,
 				allowedAttempts: 5,
 				async sendVerificationOTP({ email, otp }) {
+					if (!mayJoin(email)) return;
 					await sendEmail(signInCodeEmail(email, otp));
 				}
 			}),
@@ -57,6 +74,18 @@ export function createAuth({ db, secret, baseURL, sendEmail, plugins = [] }: Aut
 			...plugins
 		]
 	});
+}
+
+/** Who may sign in: the addresses listed, or anyone when there's no list. */
+export function allowed(list: string | undefined): (email: string) => boolean {
+	const addresses = new Set(
+		(list ?? '')
+			.split(/[\s,]+/)
+			.map((address) => address.toLowerCase())
+			.filter(Boolean)
+	);
+	if (!addresses.size) return () => true;
+	return (email) => addresses.has(email.trim().toLowerCase());
 }
 
 export type Auth = ReturnType<typeof createAuth>;

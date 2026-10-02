@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { createAuth, GATEWAY_CLIENT } from './auth.ts';
+import { allowed, createAuth, GATEWAY_CLIENT } from './auth.ts';
 import type { Email } from './email.ts';
+import { eq } from 'drizzle-orm';
+import { user } from './schema.ts';
 import { testDb } from './test/db.ts';
 
 const BASE = 'http://localhost:5790';
 
-async function setupAuth() {
+async function setupAuth(mayJoin?: (email: string) => boolean) {
 	const sent: Email[] = [];
+	const db = await testDb();
 	const auth = createAuth({
-		db: await testDb(),
+		db,
 		secret: 'a test secret that is long enough to sign with',
 		baseURL: BASE,
-		sendEmail: async (email) => void sent.push(email)
+		sendEmail: async (email) => void sent.push(email),
+		mayJoin
 	});
 	const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
 		auth.handler(
@@ -21,7 +25,7 @@ async function setupAuth() {
 				body: JSON.stringify(body)
 			})
 		);
-	return { auth, sent, post };
+	return { auth, db, sent, post };
 }
 
 /** Signs in with the code the email carried, and returns the session's cookie. */
@@ -44,6 +48,22 @@ describe('accounts', () => {
 		expect(s.sent[0].subject).toMatch(/^\d{6} is your nolune code$/);
 		const session = await s.auth.api.getSession({ headers: new Headers({ cookie }) });
 		expect(session?.user.email).toBe('anna@example.com');
+	});
+
+	it('lets in only the addresses allowed, before the plan opens', async () => {
+		const s = await setupAuth(allowed('anna@example.com, ben@example.com'));
+		const email = 'mallory@example.com';
+		await s.post('/email-otp/send-verification-otp', { email, type: 'sign-in' });
+		expect(s.sent).toHaveLength(0);
+		// A code made some other way makes no account either.
+		const otp = await s.auth.api.createVerificationOTP({ body: { email, type: 'sign-in' } });
+		const response = await s.post('/sign-in/email-otp', { email, otp });
+		expect(response.status).not.toBe(200);
+		expect(await s.db.select().from(user).where(eq(user.email, email))).toHaveLength(0);
+
+		await signIn(s, 'Anna@Example.com'.toLowerCase());
+		expect(allowed('')('anyone@example.com')).toBe(true);
+		expect(allowed(' ANNA@example.com ')('anna@example.com')).toBe(true);
 	});
 
 	it('refuses a wrong code', async () => {

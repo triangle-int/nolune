@@ -30,7 +30,13 @@ export const actions: Actions = {
 				message: 'Too many codes asked for. Try again in a few minutes.'
 			});
 		}
-		const { auth, sendEmail } = await getService();
+		const { auth, sendEmail, mayJoin } = await getService();
+		if (!mayJoin(address)) {
+			return fail(403, {
+				email: address,
+				message: "The nolune plan isn't open yet: only invited addresses can sign in for now."
+			});
+		}
 		// The code is made here and sent by this action rather than better-auth's own, which logs a
 		// failure to send and says it went: the page should say when it didn't.
 		const otp = await auth.api.createVerificationOTP({ body: { email: address, type: 'sign-in' } });

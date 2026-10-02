@@ -2,7 +2,7 @@ import { env } from '$env/dynamic/private';
 import { getRequestEvent } from '$app/server';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
 import Stripe from 'stripe';
-import { createAuth, type Auth } from './auth.ts';
+import { allowed, createAuth, type Auth } from './auth.ts';
 import { Billing } from './billing.ts';
 import { connect, type Db } from './db.ts';
 import { emailSender, type SendEmail } from './email.ts';
@@ -25,6 +25,8 @@ import { Proxy } from './proxy.ts';
  *   STRIPE_PORTAL_CONFIGURATION  nolune's customer portal (bpc_…): cancelling, cards, invoices
  *   STRIPE_PLAN_PRICE, STRIPE_PACK_PRICE  other lookup keys for the plan's price and the pack's
  *   STRIPE_API_URL      another address for Stripe's API (stripe-mock, or a stand-in by hand)
+ *   ALLOWED_EMAILS      until the plan opens, the only addresses that may sign in (commas or
+ *                       spaces between them); anyone, when it isn't set
  */
 
 export interface Service {
@@ -33,6 +35,8 @@ export interface Service {
 	openrouter: OpenRouter;
 	proxy: Proxy;
 	sendEmail: SendEmail;
+	/** Whether an address may sign in (`ALLOWED_EMAILS`). */
+	mayJoin: (email: string) => boolean;
 	/** With Stripe's keys: Checkout, the portal and Stripe's events. */
 	billing: { billing: Billing; stripe: Stripe; webhookSecret: string } | null;
 }
@@ -60,12 +64,14 @@ async function start(): Promise<Service> {
 		apiKey: env.ORIGIN?.startsWith('https://') ? required('RESEND_API_KEY') : env.RESEND_API_KEY,
 		from: env.EMAIL_FROM || 'nolune <account@mail.nolune.dev>'
 	});
+	const mayJoin = allowed(env.ALLOWED_EMAILS);
 	const auth = createAuth({
 		db,
 		secret: required('BETTER_AUTH_SECRET'),
 		baseURL: env.ORIGIN || 'http://localhost:5173',
 		sendEmail,
-		plugins: [sveltekitCookies(getRequestEvent)]
+		plugins: [sveltekitCookies(getRequestEvent)],
+		mayJoin
 	});
 	const openrouter = new OpenRouter({
 		apiKey: required('OPENROUTER_API_KEY'),
@@ -77,7 +83,8 @@ async function start(): Promise<Service> {
 		openrouter,
 		proxy: new Proxy({ db, openrouter }),
 		billing: billing(db),
-		sendEmail
+		sendEmail,
+		mayJoin
 	};
 }
 

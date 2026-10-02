@@ -2189,6 +2189,10 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   better-auth's apply to requests through its handler, not to the calls form actions make).
   The page makes the code (better-auth's `createVerificationOTP`) and sends it itself, so it can
   say when Resend refused it: better-auth's own sending logs a failure and says the code went.
+- **Until the plan opens**, only the addresses in `ALLOWED_EMAILS` can sign in: Stripe's test mode
+  takes test cards, so anyone else could get a plan for nothing and spend nolune's OpenRouter
+  credit. Others are sent no code, by the page or by better-auth's own endpoint, and no account is
+  made for them however it's asked for (a hook on making users). Without the list, anyone can.
 - **Linking a gateway** is a device code (OAuth's device authorization grant, better-auth's
   plugin): nolune (`nolune-plan.ts`) asks `POST /api/auth/device/code` as client `nolune` and shows
   the 8-letter code, read in fours (`FXGY-BXJD`), with the API's link page
