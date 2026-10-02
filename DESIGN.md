@@ -2690,7 +2690,9 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   as any app's notifications pass through Apple; neither keeps it. The privacy policy, at
   `nolune.dev/privacy` (`site/src/routes/privacy`), covers nolune, the apps, the relay, the
   nolune plan's API and the site; the first screen links it, as the App Store asks. Keep it to what
-  the code does.
+  the code does. The plan's terms, at `nolune.dev/terms`, say what a subscription gives, how it
+  renews, ends and is refunded, and how it may be used; Checkout, the customer portal and the
+  account page link them.
 
 ## Not done yet
 
