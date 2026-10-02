@@ -197,13 +197,18 @@ export async function requireNolunePlan(io: Io, guide = false): Promise<void> {
 		fail(status.problem ?? "nolune isn't linked to a nolune plan.");
 	io.log(`nolune plan: ${status.signedIn}`);
 	if (status.usage) {
-		const { window, week, credits } = status.usage;
-		const share = (spent: number, limit: number) =>
-			limit > 0 ? `${Math.min(100, Math.round((spent / limit) * 100))}%` : 'none';
+		const { window, week, month, credits } = status.usage;
+		const share = (limit: { spent: number; limit: number }) =>
+			limit.limit > 0 ? `${Math.min(100, Math.round((limit.spent / limit.limit) * 100))}%` : 'none';
 		const dollars = (micros: number) => `$${(micros / 1_000_000).toFixed(2)}`;
-		io.log(
-			`  5 hours: ${share(window.spent, window.limit)} · week: ${share(week.spent, week.limit)} · credits left: ${dollars(credits.plan)}${credits.extra > 0 ? ` + ${dollars(credits.extra)} extra` : ''}`
-		);
+		// The 5-hour window and the week only on a plan that has them.
+		const used = [
+			window && `5 hours: ${share(window)}`,
+			week && `week: ${share(week)}`,
+			month && `month: ${share(month)}`
+		].filter(Boolean);
+		const extra = credits.extra > 0 ? ` + ${dollars(credits.extra)} extra` : '';
+		io.log(`  ${[...used, `credits left: ${dollars(credits.plan)}${extra}`].join(' · ')}`);
 	}
 }
 

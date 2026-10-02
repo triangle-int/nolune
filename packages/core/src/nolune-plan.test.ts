@@ -13,6 +13,7 @@ import {
 	nolunePlanStatus,
 	nolunePlanUsage,
 	onNolunePlanUsage,
+	planRefusal,
 	signOutNolunePlan,
 	startNolunePlanSignIn
 } from './nolune-plan.ts';
@@ -59,8 +60,9 @@ let pictures: Answer[] = [];
 
 const TOKEN = 'session-token-1';
 const USAGE = {
-	window: { spent: 0, limit: 1_800_000, resetsAt: null },
-	week: { spent: 0, limit: 8_750_000, resetsAt: Date.UTC(2026, 9, 8) },
+	window: null,
+	week: null,
+	month: { spent: 0, limit: 25_000_000, resetsAt: Date.UTC(2026, 9, 31) },
 	credits: { plan: 25_000_000, extra: 0, renewsAt: Date.UTC(2026, 9, 31) }
 };
 const IMAGE_MODELS = [
@@ -408,6 +410,16 @@ describe('chats on the nolune plan', () => {
 		expect(await nolunePlanStatus({ check: true })).toMatchObject({ noPlan: false, usage: USAGE });
 		expect(heard).toHaveBeenCalledTimes(2);
 		off();
+	});
+
+	it('says when background work may go on again, apart from people’s chats', () => {
+		const at = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+		expect(planRefusal(429, { code: 'background_limit', resets_at: at })).toMatchObject({
+			kind: 'background_limit',
+			message: expect.stringMatching(
+				/^Automations and other background work have spent what they may today on the nolune plan, to keep the rest of its credits for people's chats\. They start again (at|on) /
+			)
+		});
 	});
 
 	it('says when a limit starts again, in words', async () => {

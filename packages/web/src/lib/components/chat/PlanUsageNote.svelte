@@ -1,36 +1,37 @@
 <script lang="ts">
 	import type { NolunePlanUsage } from '@nolune/core';
 	import { getI18n } from '$lib/i18n';
-	import { usedPercent, whenAgain } from '$lib/usage-format';
+	import { planLimits, usedPercent, whenItResets } from '$lib/usage-format';
 	import { cn } from '$lib/utils';
 
 	/**
-	 * Under the composer, from 80% of a nolune plan's limit: the fuller of the two, as a short bar,
-	 * and when it starts again. Nothing below that.
+	 * Under the composer, from 80% of a nolune plan's limit: the fullest, as a short bar, and when it
+	 * starts again. Nothing below that.
 	 */
 	let { usage }: { usage: NolunePlanUsage } = $props();
 	const { m, intl } = getI18n();
 
 	const worst = $derived.by(() => {
-		const rows = [
-			{ label: m.planUsage.window, ...usage.window },
-			{ label: m.planUsage.week, ...usage.week }
-		].map((row) => ({ ...row, percent: usedPercent(row.spent, row.limit) }));
-		return rows.reduce((a, b) => (b.percent > a.percent ? b : a));
+		const rows = planLimits(usage).map((row) => ({
+			...row,
+			label: m.planUsage[row.key],
+			percent: usedPercent(row.spent, row.limit)
+		}));
+		return rows.length ? rows.reduce((a, b) => (b.percent > a.percent ? b : a)) : null;
 	});
-	/** "5 hours: 85% used · resets 17:44", or "5 hours: limit reached · resets 17:44". */
+	/** "This month: 85% used · renews 1 Nov", or "5 hours: limit reached · resets 17:44". */
 	const text = $derived.by(() => {
+		if (!worst) return '';
 		const said =
 			worst.percent >= 100
 				? m.planUsage.reached(worst.label)
 				: `${worst.label}: ${m.planUsage.used(worst.percent)}`;
-		return worst.resetsAt
-			? `${said} · ${m.planUsage.resets(whenAgain(worst.resetsAt, intl))}`
-			: said;
+		const again = whenItResets(worst, intl, m.planUsage);
+		return again ? `${said} · ${again}` : said;
 	});
 </script>
 
-{#if worst.percent >= 80}
+{#if worst && worst.percent >= 80}
 	<div
 		class="mx-auto mt-2 flex max-w-md items-center justify-center gap-2 text-xs"
 		role="status"

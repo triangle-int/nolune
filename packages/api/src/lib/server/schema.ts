@@ -107,14 +107,21 @@ export const plan = pgTable('plan', {
 	userId: text('user_id')
 		.primaryKey()
 		.references(() => user.id, { onDelete: 'cascade' }),
-	windowLimit: micros('window_limit').notNull(),
-	weekLimit: micros('week_limit').notNull(),
+	/** The 5-hour and weekly limits, on a tier that has them. */
+	windowLimit: micros('window_limit'),
+	weekLimit: micros('week_limit'),
+	/** What the period started with; null when no plan is going (it ended, or packs came first). */
+	monthLimit: micros('month_limit'),
+	/** What background work may spend in a day. */
+	backgroundLimit: micros('background_limit').default(0).notNull(),
 	startedAt: at('started_at').notNull(),
 	renewsAt: at('renews_at'),
 	windowOpenedAt: at('window_opened_at'),
 	windowSpent: micros('window_spent').default(0).notNull(),
 	weekStartedAt: at('week_started_at'),
 	weekSpent: micros('week_spent').default(0).notNull(),
+	backgroundOpenedAt: at('background_opened_at'),
+	backgroundSpent: micros('background_spent').default(0).notNull(),
 	extraPastLimits: boolean('extra_past_limits').default(false).notNull(),
 	createdAt: createdAt(),
 	updatedAt: updatedAt()

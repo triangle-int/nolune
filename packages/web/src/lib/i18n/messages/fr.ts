@@ -99,9 +99,12 @@ export const fr: Messages = {
 		title: 'Abonnement nolune',
 		window: '5 heures',
 		week: 'Cette semaine',
+		/** The period's credits: what's been spent of them, and when they come again. */
+		month: 'Ce mois-ci',
 		credits: 'Crédits restants',
 		extra: (amount: string) => `+ ${amount} en plus`,
 		used: (percent: number) => `${percent} % utilisé`,
+		renews: (when: string) => `renouvelé le ${when}`,
 		resets: (when: string) => `reprise : ${when}`,
 		reached: (limit: string) => `${limit} : limite atteinte`
 	},

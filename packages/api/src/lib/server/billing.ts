@@ -32,8 +32,9 @@ const LIVE = new Set<string>(['active', 'trialing', 'past_due', 'unpaid']);
 export interface PlanOffer {
 	kind: 'plan';
 	credits: number;
-	window: number;
-	week: number;
+	/** The 5-hour and weekly limits, when the tier has them (`limit_5h_cents`, `limit_week_cents`). */
+	window: number | null;
+	week: number | null;
 	carryOver: number;
 	/** The launch offer: more credits than the price, for a while (`offer: launch`). */
 	launch: boolean;
@@ -59,14 +60,11 @@ export function offerOf(product: {
 	const credits = micros('credits_cents');
 	if (credits === null) return null;
 	if (metadata.kind === 'plan') {
-		const window = micros('limit_5h_cents');
-		const week = micros('limit_week_cents');
-		if (window === null || week === null) return null;
 		return {
 			kind: 'plan',
 			credits,
-			window,
-			week,
+			window: micros('limit_5h_cents'),
+			week: micros('limit_week_cents'),
 			carryOver: micros('rollover_cap_cents') ?? 0,
 			launch: metadata.offer === 'launch'
 		};

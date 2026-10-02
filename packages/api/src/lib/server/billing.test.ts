@@ -18,8 +18,6 @@ const family = {
 	metadata: {
 		credits_cents: '2500',
 		kind: 'plan',
-		limit_5h_cents: '180',
-		limit_week_cents: '875',
 		nolune_product_id: 'plan-family',
 		offer: 'launch',
 		rollover_cap_cents: '1250'
@@ -198,17 +196,22 @@ describe('what a product grants', () => {
 		expect(offerOf(family)).toEqual({
 			kind: 'plan',
 			credits: 25_000_000,
-			window: 1_800_000,
-			week: 8_750_000,
+			window: null,
+			week: null,
 			carryOver: 12_500_000,
 			launch: true
 		});
+		// A tier may have a 5-hour and a weekly limit too.
+		const windowed = {
+			metadata: { ...family.metadata, limit_5h_cents: '180', limit_week_cents: '875' }
+		};
+		expect(offerOf(windowed)).toMatchObject({ window: 1_800_000, week: 8_750_000 });
 		expect(offerOf(pack)).toEqual({ kind: 'pack', credits: 10_000_000, expiresInDays: 365 });
 	});
 
 	it("isn't one of nolune's without its amounts", () => {
 		expect(offerOf({ metadata: {} })).toBeNull();
-		expect(offerOf({ metadata: { kind: 'plan', credits_cents: '2500' } })).toBeNull();
+		expect(offerOf({ metadata: { kind: 'plan' } })).toBeNull();
 		expect(offerOf({ metadata: { kind: 'gensprite', credits_cents: '2500' } })).toBeNull();
 		expect(offerOf({ metadata: { kind: 'pack', credits_cents: 'lots' } })).toBeNull();
 	});
@@ -289,7 +292,7 @@ describe('buying', () => {
 		});
 		expect(sessions.at(-1)?.params).not.toHaveProperty('subscription_data');
 		expect(sessions.at(-1)?.params).not.toHaveProperty('managed_payments');
-		expect((await readAccount(db, person.id))?.limits.week).toBe(8_750_000);
+		expect((await readAccount(db, person.id))?.limits?.month).toBe(25_000_000);
 	});
 
 	it("says how a subscription stands, and opens Stripe's portal", async () => {
@@ -349,11 +352,12 @@ describe("Stripe's events", () => {
 		await billing.handle(invoicePaid('in_1', 'sub_1'));
 		const started = await readAccount(db, person.id);
 		expect(started).toEqual({
-			limits: { window: 1_800_000, week: 8_750_000 },
+			limits: { window: null, week: null, month: 25_000_000, background: 2_500_000 },
 			startedAt: t0,
 			renewsAt: seconds(periodEnd) * 1000,
 			window: null,
 			week: null,
+			background: null,
 			credits: [{ source: 'in_1', kind: 'plan', left: 25_000_000, expiresAt: null }],
 			extraPastLimits: false
 		});
@@ -417,7 +421,7 @@ describe("Stripe's events", () => {
 				userId: person.id
 			})
 		);
-		expect((await readAccount(db, person.id))?.limits.week).toBe(8_750_000);
+		expect((await readAccount(db, person.id))?.limits?.month).toBe(25_000_000);
 	});
 
 	it('pass over what the account sells besides nolune, without asking Stripe or warning', async () => {
@@ -486,7 +490,7 @@ describe("Stripe's events", () => {
 			})
 		);
 		expect(await readAccount(db, person.id)).toMatchObject({
-			limits: { window: 0, week: 0 },
+			limits: null,
 			renewsAt: null,
 			credits: [{ source: 'cs_2', kind: 'extra', left: 10_000_000 }]
 		});
@@ -501,7 +505,7 @@ describe("Stripe's events", () => {
 		});
 		await billing.handle(invoicePaid('in_3', 'sub_2'));
 		expect(await readAccount(db, person.id)).toMatchObject({
-			limits: { window: 1_800_000, week: 8_750_000 },
+			limits: { window: null, week: null, month: 25_000_000 },
 			startedAt: t0 + 40 * DAY,
 			credits: [
 				{ source: 'cs_2', kind: 'extra' },
@@ -538,7 +542,7 @@ describe("Stripe's events", () => {
 				metadata: {}
 			})
 		);
-		expect((await readAccount(db, person.id))?.limits.week).toBe(8_750_000);
+		expect((await readAccount(db, person.id))?.limits?.month).toBe(25_000_000);
 	});
 
 	it('keep a pack paid for with no plan, for when there is one', async () => {
@@ -547,7 +551,7 @@ describe("Stripe's events", () => {
 		stripe.lineItems.set('cs_1', [{ price: packPrice, quantity: 2 }]);
 		await billing.handle(checkoutCompleted('cs_1'));
 		expect(await readAccount(db, person.id)).toMatchObject({
-			limits: { window: 0, week: 0 },
+			limits: null,
 			credits: [{ source: 'cs_1', kind: 'extra', left: 20_000_000 }]
 		});
 	});

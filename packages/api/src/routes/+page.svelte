@@ -18,10 +18,27 @@
 	const share = (spent: number, limit: number) =>
 		limit > 0 ? Math.min(100, Math.round((spent / limit) * 100)) : 0;
 	/** "40% · again Thu 18:40", made here: Svelte trims the space at the start of an {#if}. */
-	const detail = (limit: { spent: number; limit: number; resetsAt: number | null }) =>
-		[`${share(limit.spent, limit.limit)}%`, limit.resetsAt && `again ${when(limit.resetsAt)}`]
-			.filter(Boolean)
-			.join(' · ');
+	const detail = (limit: { spent: number; limit: number; again: string | null }) =>
+		[`${share(limit.spent, limit.limit)}%`, limit.again].filter(Boolean).join(' · ');
+
+	/** The month's credits, and the 5-hour and weekly limits on a plan that has them. */
+	const limits = $derived.by(() => {
+		const u = data.usage;
+		if (!u) return [];
+		return [
+			u.window && {
+				label: '5 hours',
+				...u.window,
+				again: u.window.resetsAt ? `again ${when(u.window.resetsAt)}` : null
+			},
+			u.week && { label: 'This week', ...u.week, again: `again ${when(u.week.resetsAt)}` },
+			{
+				label: 'This month',
+				...u.month,
+				again: u.month.resetsAt ? `renews ${day(u.month.resetsAt)}` : null
+			}
+		].filter((limit) => !!limit);
+	});
 
 	/** Back from Checkout: what was paid for shows up once Stripe's event has. */
 	let gaveUp = $state(false);
@@ -77,7 +94,7 @@
 {#if data.usage}
 	{@const u = data.usage}
 	<dl class="flex flex-col gap-4">
-		{#each [{ label: '5 hours', ...u.window }, { label: 'This week', ...u.week }] as limit (limit.label)}
+		{#each limits as limit (limit.label)}
 			<div class="flex flex-col gap-1.5">
 				<div class="flex justify-between text-sm">
 					<dt class="font-medium">{limit.label}</dt>

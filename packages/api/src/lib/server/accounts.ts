@@ -19,7 +19,15 @@ const date = (ms: number | null) => (ms === null ? null : new Date(ms));
 
 function toAccount(row: PlanRow, credits: CreditRow[]): Account {
 	return {
-		limits: { window: row.windowLimit, week: row.weekLimit },
+		limits:
+			row.monthLimit === null
+				? null
+				: {
+						window: row.windowLimit,
+						week: row.weekLimit,
+						month: row.monthLimit,
+						background: row.backgroundLimit
+					},
 		startedAt: row.startedAt.getTime(),
 		renewsAt: ms(row.renewsAt),
 		window: row.windowOpenedAt
@@ -27,6 +35,9 @@ function toAccount(row: PlanRow, credits: CreditRow[]): Account {
 			: null,
 		week: row.weekStartedAt
 			? { startedAt: row.weekStartedAt.getTime(), spent: row.weekSpent }
+			: null,
+		background: row.backgroundOpenedAt
+			? { openedAt: row.backgroundOpenedAt.getTime(), spent: row.backgroundSpent }
 			: null,
 		credits: credits.map((c): Credit => ({
 			source: c.source,
@@ -47,14 +58,18 @@ async function load(db: Db | Tx, userId: string): Promise<Account | null> {
 
 async function save(tx: Tx, userId: string, account: Account): Promise<void> {
 	const row = {
-		windowLimit: account.limits.window,
-		weekLimit: account.limits.week,
+		windowLimit: account.limits?.window ?? null,
+		weekLimit: account.limits?.week ?? null,
+		monthLimit: account.limits?.month ?? null,
+		backgroundLimit: account.limits?.background ?? 0,
 		startedAt: new Date(account.startedAt),
 		renewsAt: date(account.renewsAt),
 		windowOpenedAt: date(account.window?.openedAt ?? null),
 		windowSpent: account.window?.spent ?? 0,
 		weekStartedAt: date(account.week?.startedAt ?? null),
 		weekSpent: account.week?.spent ?? 0,
+		backgroundOpenedAt: date(account.background?.openedAt ?? null),
+		backgroundSpent: account.background?.spent ?? 0,
 		extraPastLimits: account.extraPastLimits
 	};
 	await tx

@@ -110,9 +110,12 @@ export const es: Messages = {
 		title: 'Plan de nolune',
 		window: '5 horas',
 		week: 'Esta semana',
+		/** The period's credits: what's been spent of them, and when they come again. */
+		month: 'Este mes',
 		credits: 'Créditos restantes',
 		extra: (amount: string) => `+ ${amount} extra`,
 		used: (percent: number) => `${percent} % usado`,
+		renews: (when: string) => `se renueva el ${when}`,
 		resets: (when: string) => `reinicio: ${when}`,
 		reached: (limit: string) => `${limit}: límite alcanzado`
 	},

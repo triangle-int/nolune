@@ -1,23 +1,27 @@
 <script lang="ts">
 	import type { NolunePlanUsage } from '@nolune/core';
 	import { getI18n } from '$lib/i18n';
-	import { dollars, usedPercent, whenAgain } from '$lib/usage-format';
+	import {
+		dollars,
+		planLimits,
+		usedPercent,
+		whenItResets,
+		type PlanLimit
+	} from '$lib/usage-format';
 	import { cn } from '$lib/utils';
 
-	/** The nolune plan's 5-hour and weekly limits as bars, and the credits left. */
+	/** The nolune plan's limits as bars (the month's credits, and its windows when it has them), and the credits left. */
 	let { usage, class: className }: { usage: NolunePlanUsage; class?: string } = $props();
 	const { m, intl } = getI18n();
 
-	/** "60% used · resets 17:44". */
-	function detail(percent: number, resetsAt: number | null): string {
+	/** "60% used · resets 17:44", or "30% used · renews 1 Nov". */
+	function detail(row: PlanLimit, percent: number): string {
 		const used = m.planUsage.used(percent);
-		return resetsAt ? `${used} · ${m.planUsage.resets(whenAgain(resetsAt, intl))}` : used;
+		const again = whenItResets(row, intl, m.planUsage);
+		return again ? `${used} · ${again}` : used;
 	}
 
-	const rows = $derived([
-		{ label: m.planUsage.window, ...usage.window },
-		{ label: m.planUsage.week, ...usage.week }
-	]);
+	const rows = $derived(planLimits(usage).map((row) => ({ ...row, label: m.planUsage[row.key] })));
 </script>
 
 <div class={cn('space-y-3', className)}>
@@ -27,7 +31,7 @@
 			<div class="flex items-baseline justify-between gap-3 text-xs">
 				<span class="font-medium text-foreground">{row.label}</span>
 				<span class="text-muted-foreground tabular-nums">
-					{detail(percent, row.resetsAt)}
+					{detail(row, percent)}
 				</span>
 			</div>
 			<div

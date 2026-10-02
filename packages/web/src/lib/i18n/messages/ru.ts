@@ -158,9 +158,12 @@ export const ru: Messages = {
 		title: 'Подписка nolune',
 		window: '5 часов',
 		week: 'Эта неделя',
+		/** The period's credits: what's been spent of them, and when they come again. */
+		month: 'Этот месяц',
 		credits: 'Осталось кредитов',
 		extra: (amount: string) => `+ ${amount} докупленных`,
 		used: (percent: number) => `использовано ${percent}%`,
+		renews: (when: string) => `обновится ${when}`,
 		resets: (when: string) => `сброс: ${when}`,
 		reached: (limit: string) => `${limit}: лимит исчерпан`
 	},

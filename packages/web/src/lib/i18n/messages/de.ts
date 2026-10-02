@@ -88,9 +88,12 @@ export const de: Messages = {
 		title: 'nolune-Abo',
 		window: '5 Stunden',
 		week: 'Diese Woche',
+		/** The period's credits: what's been spent of them, and when they come again. */
+		month: 'Dieser Monat',
 		credits: 'Guthaben übrig',
 		extra: (amount: string) => `+ ${amount} zusätzlich`,
 		used: (percent: number) => `${percent} % genutzt`,
+		renews: (when: string) => `neu am ${when}`,
 		resets: (when: string) => `wieder ab ${when}`,
 		reached: (limit: string) => `${limit}: Limit erreicht`
 	},

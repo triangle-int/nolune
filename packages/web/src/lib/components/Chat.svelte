@@ -67,7 +67,7 @@
 	import ModelMenu, { shortModelName } from './chat/ModelMenu.svelte';
 	import PlanUsageNote from './chat/PlanUsageNote.svelte';
 	import { planUsage } from '$lib/plan-usage.svelte';
-	import { usedPercent } from '$lib/usage-format';
+	import { planLimits, usedPercent } from '$lib/usage-format';
 	import RenameChatDialog from './chat/RenameChatDialog.svelte';
 	import TypingIndicator from './chat/TypingIndicator.svelte';
 	import PageHeader from './PageHeader.svelte';
@@ -203,12 +203,7 @@
 	const planNear = $derived.by(() => {
 		const usage = planUsage.current?.usage;
 		if (!usage) return false;
-		return (
-			Math.max(
-				usedPercent(usage.window.spent, usage.window.limit),
-				usedPercent(usage.week.spent, usage.week.limit)
-			) >= 80
-		);
+		return planLimits(usage).some((limit) => usedPercent(limit.spent, limit.limit) >= 80);
 	});
 	$effect(() => {
 		if (model.provider === 'nolune-plan' && !planUsage.current) void planUsage.refresh();

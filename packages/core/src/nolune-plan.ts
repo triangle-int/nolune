@@ -132,6 +132,11 @@ export function planRefusal(status: number, error: unknown): PlanError | null {
 				`The nolune plan's weekly limit is reached. Chats start again ${again ?? 'next week'}.`,
 				code
 			);
+		case 'background_limit':
+			return new PlanError(
+				`Automations and other background work have spent what they may today on the nolune plan, to keep the rest of its credits for people's chats. They start again ${again ?? 'within a day'}.`,
+				code
+			);
 		case 'background_share':
 			return new PlanError(
 				`Background work has used its share of the nolune plan's limits, to keep the rest for people's chats. It starts again ${again ?? 'when the limit does'}.`,
@@ -556,10 +561,15 @@ export async function signOutNolunePlan(): Promise<boolean> {
 
 // --- the link, as Models & keys and `nolune nolune-plan status` show it ---
 
-/** How much of each limit is used, as nolune's API says it (`x-nolune-usage`): millionths of a dollar. */
+/**
+ * How much of each limit is used, as nolune's API says it (`x-nolune-usage`): millionths of a
+ * dollar. The 5-hour window and the week only on a plan that has them; the month always.
+ */
 export interface NolunePlanUsage {
-	window: { spent: number; limit: number; resetsAt: number | null };
-	week: { spent: number; limit: number; resetsAt: number };
+	window: { spent: number; limit: number; resetsAt: number | null } | null;
+	week: { spent: number; limit: number; resetsAt: number } | null;
+	/** The period's credits: what it started with, and what's been spent of it. */
+	month: { spent: number; limit: number; resetsAt: number | null };
 	credits: { plan: number; extra: number; renewsAt: number | null };
 }
 

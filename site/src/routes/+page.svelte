@@ -334,7 +334,7 @@
 						</p>
 						<ul>
 							<li><CheckIcon size={18} />Chats on Claude, GPT and other models</li>
-							<li><CheckIcon size={18} />Limits that start again every 5 hours and every week</li>
+							<li><CheckIcon size={18} />No hourly or weekly limits, just the month's credits</li>
 							<li><CheckIcon size={18} />More credits in $10 packs, when you need them</li>
 							<li><CheckIcon size={18} />Cancel any time on your account page</li>
 						</ul>

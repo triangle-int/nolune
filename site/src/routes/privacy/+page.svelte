@@ -115,8 +115,8 @@
 				IP address, and which browser or program it is, while that session lasts;
 			</li>
 			<li>
-				your plan: its limits, how much has been spent in the current 5 hours and week, the credits
-				left, which payment each came from and when they run out, and when the plan renews;
+				your plan: what its credits were this month and what's left of them, which payment each came
+				from and when they run out, what background work spent today, and when the plan renews;
 			</li>
 			<li>and which customer you are at Stripe.</li>
 		</ul>

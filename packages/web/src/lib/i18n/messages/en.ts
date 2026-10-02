@@ -18,9 +18,12 @@ export const en = {
 		title: 'nolune plan',
 		window: '5 hours',
 		week: 'This week',
+		/** The period's credits: what's been spent of them, and when they come again. */
+		month: 'This month',
 		credits: 'Credits left',
 		extra: (amount: string) => `+ ${amount} extra`,
 		used: (percent: number) => `${percent}% used`,
+		renews: (when: string) => `renews ${when}`,
 		resets: (when: string) => `resets ${when}`,
 		reached: (limit: string) => `${limit}: limit reached`
 	},

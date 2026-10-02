@@ -2275,10 +2275,13 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
 
 ### Credits and limits
 
-The plan is credits, not unlimited use. The agent works in the background too (automations,
-subagents, the note-taker, titles, auto mode's checks), and one busy day or one automation in a
-loop would otherwise spend the month. As on Claude's plans, a 5-hour limit and a weekly one keep it
-spread out. The rules are `limits.ts` (in `packages/api/src/lib/server`): pure functions over an
+The plan is credits, not unlimited use, and the month's credits are the one limit people meet:
+they're paid for already, so a family spends them as it likes. The agent works in the background
+too (automations, subagents, the note-taker, titles, auto mode's checks), and one automation in a
+loop would otherwise spend the month overnight, so background work may spend a tenth of the
+credits a day. A tier may also have a 5-hour limit and a weekly one, as Claude's plans do; Family
+has neither: on a plan that's paid in credits at cost, a window would only stop people while
+they still had credits left. The rules are `limits.ts` (in `packages/api/src/lib/server`): pure functions over an
 account's state (`admit` before a request, `charge` after it, `grantPeriod` and `addExtra` from
 Stripe's events), which the API runs inside one Postgres transaction each (`accounts.ts`, which
 locks the person's row first, so requests that end together each add what they spent).
@@ -2292,21 +2295,25 @@ locks the person's row first, so requests that end together each add what they s
   OpenRouter's record of the generation (`GET /generation?id=`), asked 5 s, 20 s, 1 min and 3 min
   later: it isn't there at once, and was in about 25 s when tried. Pictures are charged the same
   way, from their reply's usage (or their generation, by the `x-generation-id` header), and count
-  against the 5-hour and weekly limits like chats: a FLUX.2 klein picture costs $0.015, one of
+  against the month and the limits like chats: a FLUX.2 klein picture costs $0.015, one of
   `gpt-image-2.5-flare`'s at low quality about the same.
-- **Three limits**, each a share of the plan's credits, set on the plan's product in Stripe (see
-  [Payments](#payments)). The one plan to start with, Family, is $20 a month for $25 of credits:
+- **The limits.** The month's credits and what carries over are set on the plan's product in
+  Stripe (see [Payments](#payments)), and so are a tier's windows, when it has them
+  (`limit_5h_cents`, `limit_week_cents`; null in `Limits` without). Background work's day is a
+  tenth of the period's credits (`BACKGROUND_DAY_SHARE`). The one plan to start with, Family, is
+  $20 a month for $25 of credits:
 
-  | Limit   | Family | Starts again                                                |
-  | ------- | ------ | ----------------------------------------------------------- |
-  | 5 hours | $1.80  | 5 hours after the request that opened the window            |
-  | Week    | $8.75  | each week, on the day and at the hour the plan started      |
-  | Month   | $25    | with each payment; up to $12.50 of what's left carries over |
+  | Limit      | Family    | Starts again                                                  |
+  | ---------- | --------- | ------------------------------------------------------------- |
+  | Month      | $25       | with each payment; up to $12.50 of what's left carries over   |
+  | Background | $2.50/day | a day after the background request that opened the day        |
+  | 5 hours    | none      | (on a tier with one) 5 hours after the request that opened it |
+  | Week       | none      | (on a tier with one) each week, on the plan's day and hour    |
 
-- **How they're sized.** A month holds about 4.3 weeks, and 4.3 weeks' limits come to about 1.5
-  times the credits, so ordinary use never meets the weekly limit and only a burst does. About
-  five full 5-hour windows make a week, so that window catches a busy afternoon, not an ordinary
-  day.
+- **Why a tenth.** An automation in a loop then takes ten days to spend what a family has, and the
+  bell has said so long before; the people in the family meet no limit but the month. Background
+  work that's busy on purpose (a big import, a long research run) waits a day rather than failing:
+  the refusal says when it may go on (`background_limit`).
 - **Windows, not sliding sums.** A window opens with the first request after the last one closed,
   so nolune can say exactly when it starts again ("again at 18:40"). A sliding sum is fairer by a
   few minutes but can't.
@@ -2317,13 +2324,14 @@ locks the person's row first, so requests that end together each add what they s
 - **A turn may finish.** An agent turn is many requests, and stopping one between a reply and its
   commands' results leaves the chat on an error. Requests that go on with a turn that started
   within the limit (the reply's commands' results, auto mode's check of a command it's about to
-  run), which the gateway marks `X-Nolune-Turn: continue`, may go over by 10% of the 5-hour limit;
-  new turns wait. A client that marks every request gains only that 10%.
-- **Background gets less.** Hidden conversations (automations' and subagents' runs) and the short
-  exchanges nobody waits on (titles, the note-taker, suggestions) are marked
-  `X-Nolune-Use: background` and stop at 80% of the 5-hour and weekly limits, so the people in the
-  family always have the rest for their chats. It's the family's own budget, so the gateway has no
-  reason to mark them wrong.
+  run), which the gateway marks `X-Nolune-Turn: continue`, may go over by 10% of the 5-hour limit,
+  or on a plan without one, of the day's background limit; new turns wait. A client that marks
+  every request gains only that 10%.
+- **Background gets a day's share.** Hidden conversations (automations' and subagents' runs) and
+  the short exchanges nobody waits on (titles, the note-taker, suggestions) are marked
+  `X-Nolune-Use: background` and spend at most the day's background limit, so the people in the
+  family always have the rest of the month for their chats; on a tier with windows, they also stop
+  at 80% of each. It's the family's own budget, so the gateway has no reason to mark them wrong.
 - **Embeddings count only against the month.** They cost next to nothing, and search by meaning
   shouldn't stop with a window: recall would get worse just when someone is told to wait.
 - **Extra credits** are bought on their own, on top of a plan, kept for a year, and spent only past
@@ -2339,16 +2347,17 @@ locks the person's row first, so requests that end together each add what they s
   retry after 5 s). The token works outside nolune too,
   and the plan's credits cost less than OpenRouter's (see [Payments](#payments)), which makes them
   worth reselling: one subscription per account and per card (Radar's card fingerprint), and the
-  windows keep what one subscription can pass on to what it was given.
+  month's credits keep what one subscription can pass on to what it was given.
 
 ### What the family sees
 
 - **Over a limit**, the API answers `429` with OpenAI's error shape, the limit and when it starts
-  again: `{ "error": { "code": "five_hour_limit", "message": …, "resets_at": … } }` (or
-  `weekly_limit`, `background_share`, `credits_spent`). It adds `x-should-retry: false`, since the
-  SDKs retry a 429 themselves and don't wait out a `Retry-After` of hours. nolune makes it a
-  `PlanError` with that `kind`, in words, as the ChatGPT plan's usage limit is said: "The nolune
-  plan's 5-hour limit is reached. Chats start again at 18:40."
+  again: `{ "error": { "code": "credits_spent", "message": …, "resets_at": … } }` (or
+  `background_limit`, and on a tier with windows `five_hour_limit`, `weekly_limit`,
+  `background_share`). It adds `x-should-retry: false`, since the SDKs retry a 429 themselves and
+  don't wait out a `Retry-After` of hours. nolune makes it a `PlanError` with that `kind`, in
+  words, as the ChatGPT plan's usage limit is said: "The nolune plan's credits are spent until
+  the next payment, 1 November."
 - **Other errors.** OpenRouter's go on as they came (a request it can't take, a model that's down,
   input its moderation flagged), except a `401` or `402`, which are about nolune's own key or
   credits: those are logged for the operator and the family gets a `503` (`upstream_unavailable`).
@@ -2361,11 +2370,12 @@ locks the person's row first, so requests that end together each add what they s
   about once), and when it's read and unknown or ten minutes old (`nolunePlanUsage` in
   `nolune-plan.ts`). When it moves, `/api/events` tells every open page (the whole family draws on
   the plan), which asks `/api/nolune-plan/usage` again (`plan-usage.svelte.ts`). It shows as bars,
-  the 5-hour window and the week with how much is used and when each starts again, in this
-  browser's time, and the credits left (`PlanUsageBars`): in the model menu of a chat on the plan,
-  and in the plan's row in Models & keys. From 80% of either limit, the line under the composer
-  (nolune's disclaimer otherwise) says the fuller one with a short bar, amber, then red once it's
-  reached: "nolune plan ▬ 5 hours: 85% used · resets 17:44" (`PlanUsageNote`).
+  the month (how much of the period's credits is spent, and when it renews) and on a tier with
+  them the 5-hour window and the week, in this browser's time, and the credits left
+  (`PlanUsageBars`, over `planLimits`): in the model menu of a chat on the plan, and in the plan's
+  row in Models & keys. From 80% of a limit, the line under the composer (nolune's disclaimer
+  otherwise) says the fullest with a short bar, amber, then red once it's reached: "nolune plan
+  ▬ This month: 85% used · renews 1 Nov" (`PlanUsageNote`).
 - **Automations** refused by a limit don't fail: the run waits and starts again when the limit
   does, and the bell says so once. A subagent refused by one ends with the error, which its parent
   hears from `nolune agent watch`.
@@ -2376,7 +2386,7 @@ locks the person's row first, so requests that end together each add what they s
 
 - **Who sees the chats.** With a key, requests go from this computer to the provider; on the plan
   they pass through nolune's API, which could read them, as the relay could (see
-  [The relay](#the-relay)). It logs only what it bills (time, model, tokens, cost, the account),
+  [The relay](#the-relay)). It keeps only what each request cost, added to the plan's totals,
   never what was said; OpenRouter and the model's maker see requests as they do with an OpenRouter
   key. The welcome and Models & keys say so where the plan is offered.
 - **Regions.** The API serves only the countries its upstreams serve, and refuses others with a
@@ -2390,8 +2400,9 @@ Triangle Interactive, LLC sells the plan, through Stripe.
 - **The catalog.** Two products, in the same Stripe account as Gensprite's and named the same way:
   `nolune Family` ($20 a month, its price's lookup key `nolune-plan-family`) and
   `nolune extra credits` ($10 once, `nolune-pack-10`). What each grants is in its metadata, in
-  cents: `credits_cents` (2500 and 1000), the plan's `limit_5h_cents`, `limit_week_cents` and
-  `rollover_cap_cents`, the pack's `expires_in_days`, and `offer: launch` while the launch offer
+  cents: `credits_cents` (2500 and 1000), the plan's `rollover_cap_cents` (and on a tier with
+  windows, `limit_5h_cents` and `limit_week_cents`), the pack's `expires_in_days`, and
+  `offer: launch` while the launch offer
   lasts (below). The API reads them from the product of what
   was paid, so another tier is another product rather than new code. Checkout finds prices by their
   lookup keys.
@@ -2435,9 +2446,9 @@ Triangle Interactive, LLC sells the plan, through Stripe.
 - **A failed payment** leaves the plan what's left of its credits but gives it no new ones while
   Stripe retries. The account page says so (the subscription is `past_due`), and Manage changes
   the card; Models & keys doesn't yet.
-- **The API keeps its own ledger.** Stripe knows money, not windows: the 5-hour and weekly limits
-  are checked before every request, so the API keeps the credits, the windows and each request's
-  cost itself, and Stripe never sees tokens. Stripe's LLM token billing (a private preview in 2026,
+- **The API keeps its own ledger.** Stripe knows money, not limits: the credits and background
+  work's day are checked before every request, so the API keeps them and what each request cost
+  itself, and Stripe never sees tokens. Stripe's LLM token billing (a private preview in 2026,
   which meters tokens through OpenRouter with a markup) bills use afterwards, which a prepaid plan
   doesn't need.
 - **Sales tax and VAT.** The EU and the UK tax digital services sold to people there from the

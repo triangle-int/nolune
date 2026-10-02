@@ -70,6 +70,8 @@ export function notSignedIn(): Response {
 const REFUSALS: Record<Extract<Admission, { ok: false }>['code'], string> = {
 	five_hour_limit: "nolune's 5-hour limit is reached.",
 	weekly_limit: "nolune's weekly limit is reached.",
+	background_limit:
+		"Background work has spent what it may today; the rest of the plan's credits are kept for people.",
 	background_share:
 		"Background work has used its share of nolune's limits; the rest is kept for people.",
 	credits_spent: "The nolune plan's credits are spent."

@@ -1,18 +1,25 @@
 /*
  * The nolune plan's credits and limits (DESIGN.md, The nolune plan): whether a request may go,
  * and what it spent once it's done. Pure functions over one account's state, so the API runs them
- * inside one SQLite transaction per request, and tests run them with a clock of their own.
+ * inside one Postgres transaction per request, and tests run them with a clock of their own.
  *
  * Money is in millionths of a dollar: a request can cost $0.0004, which cents can't hold.
  */
 
 export const HOUR = 60 * 60 * 1000;
-/** The short window: it opens with a request and closes 5 hours later. */
+/** The short window, on a plan that has one: it opens with a request and closes 5 hours later. */
 export const WINDOW = 5 * HOUR;
-export const WEEK = 7 * 24 * HOUR;
-/** How far a turn that's going may go past a limit, as a share of the 5-hour limit. */
+/** Background work's window: it opens with a background request and closes a day later. */
+export const DAY = 24 * HOUR;
+export const WEEK = 7 * DAY;
+/**
+ * How far a turn that's going may go past a limit, as a share of the 5-hour limit, or of the day's
+ * background limit on a plan with no 5-hour one.
+ */
 export const OVERDRAFT_SHARE = 0.1;
-/** Where background work stops, as a share of the 5-hour and weekly limits. */
+/** What background work may spend in a day, as a share of a period's credits. */
+export const BACKGROUND_DAY_SHARE = 0.1;
+/** Where background work stops, as a share of the 5-hour and weekly limits, when a plan has them. */
 export const BACKGROUND_SHARE = 0.8;
 
 /** Dollars (OpenRouter's `usage.cost`) in millionths, rounded up but not by a float's dust. */
@@ -20,11 +27,20 @@ export function micros(dollars: number): number {
 	return Math.ceil(Number((dollars * 1_000_000).toFixed(3)));
 }
 
+/** What a plan may spend in each window. The month's credits are the only limit people meet. */
 export interface Limits {
-	/** What a 5-hour window may spend. */
-	window: number;
-	week: number;
+	/** What a 5-hour window may spend, on a plan that has one (none, to start with). */
+	window: number | null;
+	/** What a week may spend, on a plan that has one (none, to start with). */
+	week: number | null;
+	/** What the period started with: its credits, and what carried over. */
+	month: number;
+	/** What background work may spend in a day, so an automation in a loop can't spend the month. */
+	background: number;
 }
+
+/** The limits a tier sets (its product's metadata in Stripe); the rest come from its credits. */
+export type TierLimits = Pick<Limits, 'window' | 'week'>;
 
 /** Credits from one grant: a period's, what carried over from the last one, or a pack. */
 export interface Credit {
@@ -41,7 +57,8 @@ export interface Credit {
 }
 
 export interface Account {
-	limits: Limits;
+	/** None when there's no plan going: one that ended, or packs bought before one. */
+	limits: Limits | null;
 	/** When the plan started: each week starts again on that day, at that hour. */
 	startedAt: number;
 	/** When the next period's credits come, while the subscription goes on. */
@@ -50,6 +67,8 @@ export interface Account {
 	window: { openedAt: number; spent: number } | null;
 	/** What a week spent, and which week (when it started). */
 	week: { startedAt: number; spent: number } | null;
+	/** Background work's day, from the background request that opened it. */
+	background: { openedAt: number; spent: number } | null;
 	credits: Credit[];
 	/** Whether an admin lets people go on with extra credits past a limit. */
 	extraPastLimits: boolean;
@@ -67,7 +86,8 @@ export interface Request {
 	inputCost?: number;
 }
 
-export type Refusal = 'five_hour_limit' | 'weekly_limit' | 'background_share' | 'credits_spent';
+export type Refusal =
+	'five_hour_limit' | 'weekly_limit' | 'background_limit' | 'background_share' | 'credits_spent';
 
 export type Admission =
 	{ ok: true; paidBy: Credit['kind'] } | { ok: false; code: Refusal; resetsAt: number | null };
@@ -80,6 +100,11 @@ export function weekStart(account: Account, at: number): number {
 function openWindow(account: Account, at: number): Account['window'] {
 	const window = account.window;
 	return window && at < window.openedAt + WINDOW ? window : null;
+}
+
+function openBackground(account: Account, at: number): Account['background'] {
+	const day = account.background;
+	return day && at < day.openedAt + DAY ? day : null;
 }
 
 function weekSpent(account: Account, at: number): number {
@@ -123,7 +148,10 @@ function planRefusal(
 	now: number
 ): { code: Refusal; resetsAt: number | null } | null {
 	const { limits } = account;
-	const over = request.continuing ? Math.floor(limits.window * OVERDRAFT_SHARE) : 0;
+	if (!limits) return { code: 'credits_spent', resetsAt: null };
+	const over = request.continuing
+		? Math.floor((limits.window ?? limits.background) * OVERDRAFT_SHARE)
+		: 0;
 	const input = request.inputCost ?? 0;
 	// A request fits what's left under a limit when something is, and its input fits in that.
 	const fits = (left: number) => left + over > 0 && input <= left + over;
@@ -136,20 +164,29 @@ function planRefusal(
 
 	const weekEnds = weekStart(account, now) + WEEK;
 	const weekSpentNow = weekSpent(account, now);
-	if (!fits(limits.week - weekSpentNow)) return { code: 'weekly_limit', resetsAt: weekEnds };
+	if (limits.week !== null && !fits(limits.week - weekSpentNow)) {
+		return { code: 'weekly_limit', resetsAt: weekEnds };
+	}
 
 	const window = openWindow(account, now);
 	const windowEnds = window ? window.openedAt + WINDOW : null;
 	const windowSpent = window?.spent ?? 0;
-	if (!fits(limits.window - windowSpent)) return { code: 'five_hour_limit', resetsAt: windowEnds };
+	if (limits.window !== null && !fits(limits.window - windowSpent)) {
+		return { code: 'five_hour_limit', resetsAt: windowEnds };
+	}
 
-	// Background work leaves people the last fifth of each limit.
 	if (request.use === 'background') {
+		// A day's share of the credits, so an automation in a loop can't spend the month.
+		const day = openBackground(account, now);
+		if (!fits(limits.background - (day?.spent ?? 0))) {
+			return { code: 'background_limit', resetsAt: day ? day.openedAt + DAY : null };
+		}
+		// And on a plan with windows, the last fifth of each is left to people.
 		const share = (limit: number) => Math.floor(limit * BACKGROUND_SHARE);
-		if (!fits(share(limits.week) - weekSpentNow)) {
+		if (limits.week !== null && !fits(share(limits.week) - weekSpentNow)) {
 			return { code: 'background_share', resetsAt: weekEnds };
 		}
-		if (!fits(share(limits.window) - windowSpent)) {
+		if (limits.window !== null && !fits(share(limits.window) - windowSpent)) {
 			return { code: 'background_share', resetsAt: windowEnds };
 		}
 	}
@@ -174,11 +211,16 @@ export function charge(account: Account, { request, paidBy, at, cost }: Charge):
 	const window = openWindow(account, at) ?? { openedAt: at, spent: 0 };
 	const startedAt = weekStart(account, at);
 	const week = account.week?.startedAt === startedAt ? account.week : { startedAt, spent: 0 };
+	const day =
+		request.use === 'background'
+			? (openBackground(account, at) ?? { openedAt: at, spent: 0 })
+			: null;
 	return {
 		...account,
 		credits,
 		window: { ...window, spent: window.spent + cost },
-		week: { ...week, spent: week.spent + cost }
+		week: { ...week, spent: week.spent + cost },
+		background: day ? { ...day, spent: day.spent + cost } : account.background
 	};
 }
 
@@ -210,8 +252,8 @@ export interface PeriodGrant {
 	credits: number;
 	/** The most of what's left that carries over. */
 	carryOver: number;
-	/** The tier's limits, which come with each period, so a new tier takes effect with it. */
-	limits: Limits;
+	/** The tier's windows, which come with each period, so a new tier takes effect with it. */
+	limits: TierLimits;
 	renewsAt: number | null;
 }
 
@@ -238,17 +280,23 @@ export function grantPeriod(account: Account, grant: PeriodGrant, now: number): 
 			expiresAt: null
 		});
 	}
-	return { ...account, limits: grant.limits, renewsAt: grant.renewsAt, credits };
+	const limits: Limits = {
+		...grant.limits,
+		month: Math.max(grant.credits + Math.min(left, 0), 0) + carried,
+		background: Math.floor(grant.credits * BACKGROUND_DAY_SHARE)
+	};
+	return { ...account, limits, renewsAt: grant.renewsAt, credits };
 }
 
 /** A new plan: its weeks start now, and its first period is granted. */
 export function startPlan(grant: PeriodGrant, now: number, previous?: Account): Account {
 	const account: Account = {
-		limits: grant.limits,
+		limits: null,
 		startedAt: now,
 		renewsAt: grant.renewsAt,
 		window: null,
 		week: null,
+		background: null,
 		credits: previous?.credits.filter((credit) => credit.kind === 'extra') ?? [],
 		extraPastLimits: previous?.extraPastLimits ?? false
 	};
@@ -256,18 +304,19 @@ export function startPlan(grant: PeriodGrant, now: number, previous?: Account): 
 }
 
 /** Whether someone has a plan going: one that ended keeps its packs, for the next one, and no limits. */
-export function hasPlan(account: Account | null): account is Account {
-	return !!account && account.limits.week > 0;
+export function hasPlan(account: Account | null): account is Account & { limits: Limits } {
+	return !!account && account.limits !== null;
 }
 
 /** Someone with no plan, yet: no limits to spend within, for packs bought before one (or without). */
 export function noPlan(now: number): Account {
 	return {
-		limits: { window: 0, week: 0 },
+		limits: null,
 		startedAt: now,
 		renewsAt: null,
 		window: null,
 		week: null,
+		background: null,
 		credits: [],
 		extraPastLimits: false
 	};
@@ -277,7 +326,7 @@ export function noPlan(now: number): Account {
 export function endPlan(account: Account): Account {
 	return {
 		...account,
-		limits: { window: 0, week: 0 },
+		limits: null,
 		renewsAt: null,
 		credits: account.credits.filter((credit) => credit.kind === 'extra')
 	};
@@ -296,28 +345,43 @@ export function addExtra(
 	};
 }
 
-/** How much of each limit is used and when it starts again: every response says it (`x-nolune-usage`). */
+/**
+ * How much of each limit is used and when it starts again: every response says it
+ * (`x-nolune-usage`). The 5-hour window and the week only on a plan that has them.
+ */
 export interface Usage {
-	window: { spent: number; limit: number; resetsAt: number | null };
-	week: { spent: number; limit: number; resetsAt: number };
+	window: { spent: number; limit: number; resetsAt: number | null } | null;
+	week: { spent: number; limit: number; resetsAt: number } | null;
+	/** The period's credits: what it started with, and what's been spent of it. */
+	month: { spent: number; limit: number; resetsAt: number | null };
 	credits: { plan: number; extra: number; renewsAt: number | null };
 }
 
 export function usage(account: Account, now: number): Usage {
+	const limits = account.limits;
 	const window = openWindow(account, now);
+	const plan = creditsLeft(account, 'plan', now);
+	const month = limits?.month ?? 0;
 	return {
-		window: {
-			spent: window?.spent ?? 0,
-			limit: account.limits.window,
-			resetsAt: window ? window.openedAt + WINDOW : null
-		},
-		week: {
-			spent: weekSpent(account, now),
-			limit: account.limits.week,
-			resetsAt: weekStart(account, now) + WEEK
-		},
+		window:
+			limits?.window != null
+				? {
+						spent: window?.spent ?? 0,
+						limit: limits.window,
+						resetsAt: window ? window.openedAt + WINDOW : null
+					}
+				: null,
+		week:
+			limits?.week != null
+				? {
+						spent: weekSpent(account, now),
+						limit: limits.week,
+						resetsAt: weekStart(account, now) + WEEK
+					}
+				: null,
+		month: { spent: Math.max(month - plan, 0), limit: month, resetsAt: account.renewsAt },
 		credits: {
-			plan: creditsLeft(account, 'plan', now),
+			plan,
 			extra: creditsLeft(account, 'extra', now),
 			renewsAt: account.renewsAt
 		}
