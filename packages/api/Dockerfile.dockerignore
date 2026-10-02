@@ -1,0 +1,13 @@
+# The image is built from the repository's root, and needs only the API and the workspace's files.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!packages/api
+packages/api/node_modules
+packages/api/build
+packages/api/.svelte-kit
+packages/api/.env
+packages/api/.env.*
+packages/api/**/*.test.ts
+packages/api/src/lib/server/test

@@ -1879,8 +1879,9 @@ A family shouldn't need a tunnel, an open port or a domain to open nolune away f
 _Built, not open yet._ nolune's API (`packages/api`) signs people in, links gateways, keeps the
 limits, passes chats and embeddings on to OpenRouter, and sells the plan through Stripe (its
 account page and webhook); nolune's side links to it and runs chats, memory search and their
-errors on it, and makes pictures on it. Still to come: deploying the API (and Stripe's live mode),
-and automations that wait out a limit. Until the API
+errors on it, and makes pictures on it. The API is packaged to run next to the relay
+(`compose.api.yaml`), and has run there end to end in containers, but isn't on a server yet. Still
+to come: putting it on one (and Stripe's live mode), and automations that wait out a limit. Until the API
 is open to everyone, the web UI offers the plan only when `NOLUNE_PLAN_API_URL` points nolune at
 one (`nolunePlanOffered`); the CLI always has it.
 
@@ -1904,16 +1905,28 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   container of its own, with Postgres in another. They do different jobs: the relay passes bytes
   and keeps a JSON file, the API keeps money, which wants a database's transactions, and Postgres
   rather than SQLite so more than one process can serve it. The OpenRouter key and Stripe's secret
-  stay
-  out of the process every family's traffic goes through, and deploying one restarts nothing in
-  the other: a relay restart holds every family's requests for a moment, and the API changes more
-  often. Each also keeps working when the other is down. The gateway reaches the API directly, as
-  it reaches OpenRouter, never through the relay.
+  stay out of the process every family's traffic goes through, and deploying one restarts nothing
+  in the other: a relay restart holds every family's requests for a moment, and the API changes
+  more often. Each also keeps working when the other is down. The gateway reaches the API
+  directly, as it reaches OpenRouter, never through the relay.
+- **How it's run** (`packages/relay/README.md`, "nolune's API next to it"). `compose.api.yaml`,
+  which `.env`'s `COMPOSE_FILE` adds to the relay's `compose.yaml`, so a relay alone stays as it
+  was: the API's image (`packages/api/Dockerfile`, built from the repository's root with only the
+  API's files; the build bundles everything but `pg` and `stripe`), Postgres 17, and a service that
+  dumps the database when it starts and each day after into `backups/`, kept two weeks. The
+  relay's Caddyfile imports `sites/*.caddy`, and `compose.api.yaml` mounts `api.caddy` there: the
+  API's address, with its certificate through Cloudflare's DNS like the relay's, and streams
+  flushed as they come. Its secrets are in `api.env`, read by its container alone; Postgres's
+  password is in `.env`, for both. It migrates its database as it starts, and `/health` answers
+  `ok` while Postgres does, for the container's health check and `check.sh`. Updating it
+  rebuilds and restarts the API only. About 40 MB for the API and 55 MB for Postgres, idle.
 - **Accounts** are better-auth's, with no password: the sign-in page emails a 6-digit code (through
   Resend's API, with plain fetch), good for 5 minutes and 5 tries, and the first sign-in makes the
   account. Since anyone can ask for a code to any address, the page sends at most 3 to an address
   and 10 to a network every 10 minutes, and takes 20 tries at codes from a network (its own limits:
   better-auth's apply to requests through its handler, not to the calls form actions make).
+  The page makes the code (better-auth's `createVerificationOTP`) and sends it itself, so it can
+  say when Resend refused it: better-auth's own sending logs a failure and says the code went.
 - **Linking a gateway** is a device code (OAuth's device authorization grant, better-auth's
   plugin): nolune (`nolune-plan.ts`) asks `POST /api/auth/device/code` as client `nolune` and shows
   the 8-letter code, read in fours (`FXGY-BXJD`), with the API's link page
@@ -2209,8 +2222,8 @@ packages/api    @nolune/api. nolune's API for the nolune plan (see [The nolune
                 webhook), the pages (sign-in, link, the plan), and /v1: usage, models, and
                 chats, pictures and embeddings passed on to OpenRouter (proxy.ts, openrouter.ts, with
                 stream.ts reading a stream's usage as it goes on). Its tests run on
-                PGlite, Postgres in the test's own process. Deployed next to the relay, not part
-                of the npm package.
+                PGlite, Postgres in the test's own process. Run next to the relay
+                (Dockerfile, and compose.api.yaml in packages/relay), not part of the npm package.
 packages/relay  @nolune/relay. The relay server (relay.ts, with its gateways file, store.ts, and its
                 pages), and what the gateway shares with it: the protocol (protocol.ts), a WebSocket
                 as a byte stream (stream.ts) and the headers that go on to the next hop
@@ -2338,6 +2351,6 @@ signing.
 - Push notifications (Web Push) for the bell. Today it only updates while a page is open.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).
-- The nolune plan (see [The nolune plan](#the-nolune-plan)): deploying the API next to the relay,
-  and automations that wait out a limit rather than fail; then opening it (`OPEN` in
+- The nolune plan (see [The nolune plan](#the-nolune-plan)): putting the API on the relay's
+  server, and automations that wait out a limit rather than fail; then opening it (`OPEN` in
   `nolune-plan.ts`).

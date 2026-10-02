@@ -1,5 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { APIError } from 'better-auth/api';
+import { signInCodeEmail } from '$lib/server/email';
 import { codesByEmail, codesByNetwork, signInsByNetwork } from '$lib/server/rate-limit';
 import { getService } from '$lib/server/service';
 import type { Actions, PageServerLoad } from './$types';
@@ -29,8 +30,19 @@ export const actions: Actions = {
 				message: 'Too many codes asked for. Try again in a few minutes.'
 			});
 		}
-		const { auth } = await getService();
-		await auth.api.sendVerificationOTP({ body: { email: address, type: 'sign-in' } });
+		const { auth, sendEmail } = await getService();
+		// The code is made here and sent by this action rather than better-auth's own, which logs a
+		// failure to send and says it went: the page should say when it didn't.
+		const otp = await auth.api.createVerificationOTP({ body: { email: address, type: 'sign-in' } });
+		try {
+			await sendEmail(signInCodeEmail(address, otp));
+		} catch (err) {
+			console.error('[nolune api] a sign-in code could not be sent:', err);
+			return fail(502, {
+				email: address,
+				message: "The code couldn't be sent just now. Try again in a few minutes."
+			});
+		}
 		return { email: address, sent: true };
 	},
 

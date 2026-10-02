@@ -34,6 +34,9 @@ vite.config.ts.timestamp-*
 
 # The relay run from source
 /packages/relay/data
+# nolune's API on the relay's server: its secrets and its database's backups
+/packages/relay/api.env
+/packages/relay/backups
 
 # The macOS app (macos/)
 /macos/.build

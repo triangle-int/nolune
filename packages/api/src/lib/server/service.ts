@@ -5,7 +5,7 @@ import Stripe from 'stripe';
 import { createAuth, type Auth } from './auth.ts';
 import { Billing } from './billing.ts';
 import { connect, type Db } from './db.ts';
-import { emailSender } from './email.ts';
+import { emailSender, type SendEmail } from './email.ts';
 import { OpenRouter } from './openrouter.ts';
 import { Proxy } from './proxy.ts';
 
@@ -15,7 +15,7 @@ import { Proxy } from './proxy.ts';
  *   DATABASE_URL        Postgres
  *   BETTER_AUTH_SECRET  signs sessions; 32 random bytes or more
  *   ORIGIN              where the service is (adapter-node's), http://localhost:5173 in dev
- *   RESEND_API_KEY      sends sign-in codes; without it they're printed
+ *   RESEND_API_KEY      sends sign-in codes; without it (only at an http:// address) they're printed
  *   EMAIL_FROM          who they're from
  *   OPENROUTER_API_KEY  nolune's key at OpenRouter, which every plan's requests go on
  *   OPENROUTER_BASE_URL another address for it (a stand-in, in tests by hand)
@@ -32,6 +32,7 @@ export interface Service {
 	auth: Auth;
 	openrouter: OpenRouter;
 	proxy: Proxy;
+	sendEmail: SendEmail;
 	/** With Stripe's keys: Checkout, the portal and Stripe's events. */
 	billing: { billing: Billing; stripe: Stripe; webhookSecret: string } | null;
 }
@@ -54,21 +55,30 @@ function required(name: string): string {
 
 async function start(): Promise<Service> {
 	const db = await connect(required('DATABASE_URL'));
+	const sendEmail = emailSender({
+		// At a public address, codes printed to the log would reach nobody: it needs Resend.
+		apiKey: env.ORIGIN?.startsWith('https://') ? required('RESEND_API_KEY') : env.RESEND_API_KEY,
+		from: env.EMAIL_FROM || 'nolune <account@nolune.dev>'
+	});
 	const auth = createAuth({
 		db,
 		secret: required('BETTER_AUTH_SECRET'),
 		baseURL: env.ORIGIN || 'http://localhost:5173',
-		sendEmail: emailSender({
-			apiKey: env.RESEND_API_KEY,
-			from: env.EMAIL_FROM || 'nolune <account@nolune.dev>'
-		}),
+		sendEmail,
 		plugins: [sveltekitCookies(getRequestEvent)]
 	});
 	const openrouter = new OpenRouter({
 		apiKey: required('OPENROUTER_API_KEY'),
 		baseURL: env.OPENROUTER_BASE_URL
 	});
-	return { db, auth, openrouter, proxy: new Proxy({ db, openrouter }), billing: billing(db) };
+	return {
+		db,
+		auth,
+		openrouter,
+		proxy: new Proxy({ db, openrouter }),
+		billing: billing(db),
+		sendEmail
+	};
 }
 
 function billing(db: Db): Service['billing'] {

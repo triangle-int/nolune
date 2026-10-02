@@ -28,3 +28,7 @@
 		}
 	}
 }
+
+# Other services on this server, a file each in sites/: nolune's API (api.caddy) when
+# compose.api.yaml runs it. With none, Caddy notes that nothing matched and goes on.
+import sites/*.caddy
