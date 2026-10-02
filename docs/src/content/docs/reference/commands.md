@@ -83,6 +83,15 @@ assume one person's ordinary use: keep busy automations and subagents on an API 
   again
 - `nolune chatgpt-plan models`: the models the plan offers, for `nolune preset add`
 
+nolune-plan: a subscription to nolune itself, which covers chats, pictures and memory search with
+no keys at all, on the month's credits. Linked with a code you approve on nolune's page, from any
+device; nolune keeps the link in `~/.nolune/nolune-plan.json`. Subscribe at
+[api.nolune.dev](https://api.nolune.dev/).
+
+- `nolune nolune-plan setup`: link nolune to your plan, where needed
+- `nolune nolune-plan logout`: unlink; chats on nolune-plan presets stop until it's linked again
+- `nolune nolune-plan models`: the models the plan offers, for `nolune preset add`
+
 ## Users
 
 There's no sign-up page: admins add people here, or on the **People** page in the web UI.
@@ -100,8 +109,8 @@ There's no sign-up page: admins add people here, or on the **People** page in th
 Shared by all profiles.
 
 - `nolune preset add <model> [--provider
-anthropic|openai|openrouter|xai|claude-plan|chatgpt-plan|<custom>] [--name N] [--context-window
-TOKENS]`: the provider checks the model id first (anthropic unless given); OpenAI models other
+anthropic|openai|openrouter|xai|claude-plan|chatgpt-plan|nolune-plan|<custom>] [--name N]
+[--context-window TOKENS]`: the provider checks the model id first (anthropic unless given); OpenAI models other
   than the flagships need `--context-window`. OpenRouter's ids name their maker
   (anthropic/claude-sonnet-5), and the model must be able to call tools. xAI's are Grok's
   (grok-4.7), and it lists them with their windows. A custom provider (by its

@@ -24,9 +24,10 @@ ending in a slash, as every docs page does. Its
 links here skip SvelteKit's router, and the prerender ignores them. Locally, run the docs with
 `pnpm --filter @nolune/docs dev`.
 
-Pricing (`#pricing`, and its link in the header) sells the nolune plan. It shows once the plan is
-open (`NOLUNE_PLAN_OPEN` in `@nolune/core/nolune-plan-open`, the switch the gateway reads too), and
-before that only on Vercel's previews and the dev server (`__PREVIEW__`, set in `vite.config.ts`).
+Pricing (`#pricing`, and its link in the header) sells the nolune plan. It shows while the plan is
+open (`NOLUNE_PLAN_OPEN` in `@nolune/core/nolune-plan-open`, the switch the gateway reads too), as
+it is since 0.5.0; were it closed, only Vercel's previews and the dev server would show it
+(`__PREVIEW__`, set in `vite.config.ts`).
 Its prices and the launch offer are written in the page: change them with Stripe's. Subscribe goes
 to the account page on nolune's API, which signs people in and opens Checkout.
 

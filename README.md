@@ -61,10 +61,11 @@ background. Members can also manage the profile and its membership.
   together. Skills teach the assistant repeatable tasks; each profile chooses which ones to use.
 - **Room to make things.** Image templates help you start with a party invitation, a storybook
   page, a postcard, or a sticker pack. Choose a template or describe an idea, then ask for changes
-  in the chat. Image generation needs an OpenAI API key.
-- **Your choice of models.** Use Anthropic, OpenAI, xAI's Grok, OpenRouter, or your own model server. The project
-  also runs on a Claude plan through Claude Code, or on a ChatGPT plan with Sign in with ChatGPT.
-  Switch models within a conversation while
+  in the chat. Image generation needs an OpenAI or OpenRouter key, or the nolune plan.
+- **Your choice of models.** Subscribe to the [nolune plan](https://nolune.dev/#pricing) for chats,
+  pictures and memory search with no keys at all, or use Anthropic, OpenAI, xAI's Grok,
+  OpenRouter, or your own model server. The project also runs on a Claude plan through Claude
+  Code, or on a ChatGPT plan with Sign in with ChatGPT. Switch models within a conversation while
   keeping its history.
 - **Built for everyday use.** Pick an avatar and personality for each profile. Bring over a summary
   of what another assistant knows about you during onboarding. The interface supports English,
