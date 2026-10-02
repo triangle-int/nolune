@@ -176,8 +176,8 @@ the relay's server.
 
 3. **Stripe.** A webhook endpoint at `https://api.nolune.dev/stripe/webhook`, API version
    `2026-09-30.endive`, with `invoice.paid`, `checkout.session.completed`,
-   `checkout.session.async_payment_succeeded` and `customer.subscription.deleted`; its signing
-   secret is `STRIPE_WEBHOOK_SECRET`. A customer portal configuration of nolune's own
+   `checkout.session.async_payment_succeeded`, `customer.subscription.deleted` and
+   `charge.refunded`; its signing secret is `STRIPE_WEBHOOK_SECRET`. A customer portal configuration of nolune's own
    (cancelling, cards and invoices, no switching) is `STRIPE_PORTAL_CONFIGURATION`. Start with
    test-mode keys and move to live ones when it's all been tried.
 4. **Start it**: `docker compose up -d`, which pulls the API's image. `./check.sh` then says whether

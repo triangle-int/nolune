@@ -1,6 +1,6 @@
 {
 	"name": "nolune",
-	"version": "0.4.2",
+	"version": "0.5.0",
 	"description": "A small agent that lives on your computer and does things for your family, from a shared web chat.",
 	"license": "MIT",
 	"author": "Triangle Interactive, LLC",

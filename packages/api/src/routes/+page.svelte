@@ -143,6 +143,9 @@
 					Buy for {data.offers.pack.price}
 				</button>
 			</form>
+			<p class="text-xs text-muted-foreground">
+				Buying, you agree to <a href="https://nolune.dev/terms" class="underline">the terms</a>.
+			</p>
 		</section>
 	{/if}
 {:else}
@@ -169,6 +172,10 @@
 					Subscribe for {data.offers.plan.price} a month
 				</button>
 			</form>
+			<p class="text-xs text-muted-foreground">
+				It renews each month until you cancel. Subscribing, you agree to
+				<a href="https://nolune.dev/terms" class="underline">the terms</a>.
+			</p>
 		</section>
 	{:else}
 		<p class="rounded-xl bg-muted p-4 text-sm">
