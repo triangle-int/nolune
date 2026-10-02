@@ -1,6 +1,7 @@
 # nolune's API (DESIGN.md, The nolune plan), built from the repository's root:
 #   docker build -f packages/api/Dockerfile -t nolune-api .
-# packages/relay/compose.api.yaml builds it and runs it next to the relay. Only the API's own files
+# GitHub Actions builds it (.github/workflows/api-image.yml) into ghcr.io/triangle-int/nolune-api,
+# which packages/relay/compose.api.yaml runs next to the relay. Only the API's own files
 # go in (Dockerfile.dockerignore), and only what the build doesn't bundle comes out: pg and stripe,
 # with the migrations.
 FROM node:22-alpine AS build

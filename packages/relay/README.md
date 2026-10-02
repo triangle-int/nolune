@@ -112,9 +112,15 @@ first; `docker compose restart caddy` tries at once.
 
 nolune's own server also runs nolune's API (`packages/api`, the nolune plan's sign-in, limits,
 models and payments; DESIGN.md, The nolune plan) behind the same Caddy, at `api.nolune.dev`.
-`compose.api.yaml` adds it to `compose.yaml`: the API (`packages/api/Dockerfile`, built from the
-repository's root), its Postgres, and a service that backs the database up each day. A relay
-alone is just `compose.yaml`, as before.
+`compose.api.yaml` adds it to `compose.yaml`: the API, its Postgres, and a service that backs the
+database up each day. A relay alone is just `compose.yaml`, as before.
+
+The API's image isn't built on the server: building it (`packages/api/Dockerfile`) wants close to
+a gigabyte of memory, and a 1 GB server running the relay has about half that free, so the
+kernel could stop the relay to make room. GitHub Actions builds it on each change
+(`.github/workflows/api-image.yml`) into `ghcr.io/triangle-int/nolune-api`, and the server pulls
+it: `latest` from `main`, a branch's own tag (`claude-nolune-plan-design`), and each commit's
+(`sha-1234567`).
 
 1. **DNS.** An A (and AAAA) record for `api.nolune.dev`, **DNS only** like the others. The
    Cloudflare token edits `nolune.dev` already, which Caddy needs for the API's certificate too
@@ -138,18 +144,22 @@ alone is just `compose.yaml`, as before.
    secret is `STRIPE_WEBHOOK_SECRET`. A customer portal configuration of nolune's own
    (cancelling, cards and invoices, no switching) is `STRIPE_PORTAL_CONFIGURATION`. Start with
    test-mode keys and move to live ones when it's all been tried.
-4. **Start it**: `docker compose up -d --build`. `./check.sh` then says whether
+4. **Start it**: `docker compose up -d`, which pulls the API's image. `./check.sh` then says whether
    `https://api.nolune.dev/health` answers `ok` (the API and its Postgres), and when the last
    backup was.
 
-**Updating it**: `git pull && docker compose up -d --build api` builds the API again and restarts
-only it; the relay and Postgres go on. It brings its database up to date as it starts (the
-migrations in `packages/api/drizzle`). Requests on their way are cut, and a chat stream cut off in
-the few minutes before may go uncharged: what it cost is still being asked of OpenRouter.
+**Updating it**, once GitHub Actions has built the change:
+`docker compose pull api && docker compose up -d api` restarts only the API; the relay and
+Postgres go on. It brings its database up to date as it starts (the migrations in
+`packages/api/drizzle`). Requests on their way are cut, and a chat stream cut off in the few
+minutes before may go uncharged: what it cost is still being asked of OpenRouter. To go back to
+an earlier one, set `API_IMAGE` to its `sha-` tag and `docker compose up -d api`; a version
+whose migrations have run can't always go back, so restore a backup from before it too.
 
 | Variable          | Meaning                                                                       |
 | ----------------- | ----------------------------------------------------------------------------- |
 | `API_HOST`        | The API's address. `api.nolune.dev` by default.                               |
+| `API_IMAGE`       | The API's image. `ghcr.io/triangle-int/nolune-api:latest` by default.         |
 | `API_DB_PASSWORD` | Postgres's password, which the API and the backups use. Required.             |
 | `API_BACKUP_DAYS` | Days of daily backups kept in `backups/`. 14 by default.                      |
 | `COMPOSE_FILE`    | `compose.yaml:compose.api.yaml` runs the API; `docker compose` reads it here. |

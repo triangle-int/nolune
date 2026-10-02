@@ -1912,7 +1912,9 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
 - **How it's run** (`packages/relay/README.md`, "nolune's API next to it"). `compose.api.yaml`,
   which `.env`'s `COMPOSE_FILE` adds to the relay's `compose.yaml`, so a relay alone stays as it
   was: the API's image (`packages/api/Dockerfile`, built from the repository's root with only the
-  API's files; the build bundles everything but `pg` and `stripe`), Postgres 17, and a service that
+  API's files; the build bundles everything but `pg` and `stripe`), which GitHub Actions builds
+  into `ghcr.io/triangle-int/nolune-api` and the server pulls, since the build wants close to a
+  gigabyte of memory and the relay's 1 GB server has about half that free, Postgres 17, and a service that
   dumps the database when it starts and each day after into `backups/`, kept two weeks. The
   relay's Caddyfile imports `sites/*.caddy`, and `compose.api.yaml` mounts `api.caddy` there: the
   API's address, with its certificate through Cloudflare's DNS like the relay's, and streams

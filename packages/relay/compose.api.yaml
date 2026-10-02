@@ -4,9 +4,9 @@
 # secrets are in api.env (api.env.example); API_DB_PASSWORD and API_HOST in .env.
 services:
   api:
-    build:
-      context: ../..
-      dockerfile: packages/api/Dockerfile
+    # Built by GitHub Actions (.github/workflows/api-image.yml) and pulled, never built here:
+    # building it wants close to a gigabyte of memory, which would leave the relay short.
+    image: ${API_IMAGE:-ghcr.io/triangle-int/nolune-api:latest}
     restart: unless-stopped
     env_file: api.env
     environment:
