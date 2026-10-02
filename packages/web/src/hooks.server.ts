@@ -25,8 +25,12 @@ export const init: ServerInit = () => {
 	holdMcpConnections();
 };
 
-/** Webhook URLs and invite links carry their own secret token instead of a login. */
-const PUBLIC_PATHS = ['/login', '/api/auth/', '/api/hooks/', '/invite/'];
+/**
+ * Webhook URLs and invite links carry their own secret token instead of a login, and so does the
+ * page an MCP server's sign-in comes back to (its state), which `nolune mcp login` may have
+ * opened in a browser that isn't signed in to nolune.
+ */
+const PUBLIC_PATHS = ['/login', '/api/auth/', '/api/hooks/', '/invite/', '/mcp/oauth/'];
 
 /**
  * `nolune start` raises adapter-node's body limit so attachments can be uploaded. Every other route

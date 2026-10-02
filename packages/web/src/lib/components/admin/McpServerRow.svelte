@@ -11,8 +11,9 @@
 
 	/**
 	 * A connected MCP server: its name, what it's for, its command or address, the names of its
-	 * keys (never the keys) and the profiles that have it, with buttons to check it, change it and
-	 * disconnect it. One whose settings in config.json are broken can only be disconnected.
+	 * keys (never the keys), whether someone signed in to it and the profiles that have it, with
+	 * buttons to sign in to it or out, check it, change it and disconnect it. One whose settings
+	 * in config.json are broken can only be disconnected.
 	 * `result`: the last save's, check's or removal's, when it's about this one.
 	 */
 	let {
@@ -31,6 +32,8 @@
 	let editing = $state(false);
 	let saving = $state(false);
 	let checking = $state(false);
+	let signingIn = $state(false);
+	let signingOut = $state(false);
 	let removing = $state(false);
 	let kind = $state<McpKind>('stdio');
 	let transport = $state<'http' | 'sse'>('http');
@@ -71,12 +74,29 @@
 				<div class="truncate font-mono text-muted-foreground">{server.target}</div>
 				<!-- Apart from the command, which a long one would cut off. -->
 				<div class="text-muted-foreground">
-					{where} · {server.secrets.length ? t.keys(server.secrets) : t.noKeys}
+					{where}
+					{#if server.secrets.length || !server.signIn}
+						· {server.secrets.length ? t.keys(server.secrets) : t.noKeys}
+					{/if}
+					{#if server.signIn === 'signed-in'}
+						· {t.signedInState}
+					{:else if server.signIn === 'needed'}
+						· <span class="text-warning">{t.needsSignIn}</span>
+					{/if}
 				</div>
 			{/if}
 		</div>
 		<!-- Under the text on phones, so it keeps the width. -->
 		<div class="flex flex-wrap gap-1 max-sm:basis-full max-sm:pl-9">
+			{#if !editing && server.signIn === 'needed'}
+				<!-- Not enhanced: the browser goes on to the service's sign-in page. -->
+				<form method="POST" action="?/signIn" onsubmit={() => (signingIn = true)}>
+					<input type="hidden" name="name" value={server.name} />
+					<Button type="submit" variant="outline" size="sm" disabled={signingIn}>
+						{t.signIn}
+					</Button>
+				</form>
+			{/if}
 			{#if !editing && !server.problem}
 				<form
 					method="POST"
@@ -103,6 +123,30 @@
 				<Button variant="ghost" size="sm" class="text-muted-foreground" onclick={open}>
 					{t.change}
 				</Button>
+			{/if}
+			{#if !editing && server.signIn === 'signed-in'}
+				<form
+					method="POST"
+					action="?/signOut"
+					use:enhance={() => {
+						signingOut = true;
+						return async ({ update }) => {
+							await update({ reset: false });
+							signingOut = false;
+						};
+					}}
+				>
+					<input type="hidden" name="name" value={server.name} />
+					<Button
+						type="submit"
+						variant="ghost"
+						size="sm"
+						class="text-muted-foreground"
+						disabled={signingOut}
+					>
+						{t.signOut}
+					</Button>
+				</form>
 			{/if}
 			<Button
 				variant="ghost"

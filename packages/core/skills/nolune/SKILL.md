@@ -171,8 +171,15 @@ nolune mcp rm github
 `--profile <slug>` (as often as needed) keeps a server to those profiles: one that reaches
 someone's own account belongs in their profile. This chat doesn't get a server's tools until
 someone reloads its tools, which reads the whole chat again once; meanwhile `nolune mcp tools`
-and `nolune mcp call` reach them from a command. Servers that only sign in through a web page (OAuth)
-can't be connected yet.
+and `nolune mcp call` reach them from a command.
+
+A server at an address that asks someone to sign in (OAuth) is added with just its address:
+`nolune mcp list` then says it needs a sign-in. `nolune mcp login <name>` prints the service's
+sign-in page: give that link to the person who asked, to open in their browser (it comes back to
+nolune's web address, within 15 minutes), or tell them an admin can press **Sign in** on the
+Connected services page. Whoever signs in, their account is the one every profile with the server
+uses. `--client-id` and `--client-secret` on `nolune mcp add` are for a service that makes you
+register an app first. `nolune mcp logout <name>` signs out.
 
 ## Skills
 

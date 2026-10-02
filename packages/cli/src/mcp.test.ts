@@ -2,9 +2,16 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { closeMcpConnections, createProfile, initConfig, readConfig } from '@nolune/core';
+import {
+	closeMcpConnections,
+	createProfile,
+	finishMcpSignIn,
+	initConfig,
+	readConfig
+} from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeUser } from '../../core/src/test/fixtures.ts';
+import { startOAuthServer } from '../../core/src/test/oauth-server.ts';
 import { runCli } from './run.ts';
 import { testIo } from './test/io.ts';
 
@@ -185,5 +192,67 @@ describe('nolune mcp', () => {
 		expect((await run(['mcp', 'call', 'gone', 'x'])).err).toMatch(
 			/there's no MCP server called gone/
 		);
+	});
+
+	it('signs in to a server that wants it, and out', async () => {
+		const oauth = await startOAuthServer();
+		try {
+			const added = await run(['mcp', 'add', 'notes', oauth.url]);
+			expect(added.out).toBe(
+				'Added notes. It needs someone to sign in: `nolune mcp login notes`, or Sign in on the Connected services page.\n'
+			);
+			expect((await run(['mcp', 'list'])).out).toBe(
+				`notes\thttp\t${oauth.url}\tno headers\tevery profile\tneeds sign-in (nolune mcp login notes)\n`
+			);
+
+			const login = await run(['mcp', 'login', 'notes']);
+			const page = new URL(/^https?:\/\/\S+$/m.exec(login.out)![0]);
+			expect(page.searchParams.get('redirect_uri')).toBe(
+				'http://localhost:5780/mcp/oauth/callback'
+			);
+			expect(login.out).toContain('It comes back to nolune at http://localhost:5780');
+			// The browser comes back to the gateway's page, which finishes it.
+			const { code, state } = oauth.approve(page);
+			await finishMcpSignIn(state, code);
+			expect((await run(['mcp', 'list'])).out).toContain('\tsigned in\n');
+			expect((await run(['mcp', 'call', 'notes', 'echo', '{"text": "hi"}'])).out).toBe('hi\n');
+
+			expect((await run(['mcp', 'logout', 'notes'])).out).toBe(
+				'Signed out of notes: nolune forgot its tokens.\n'
+			);
+			expect((await run(['mcp', 'list'])).out).toContain('needs sign-in');
+		} finally {
+			await closeMcpConnections();
+			await oauth.close();
+		}
+	});
+
+	it('keeps the app a service had someone register for its sign-in', async () => {
+		const added = await run([
+			'mcp',
+			'add',
+			'notes',
+			'http://127.0.0.1:1/mcp',
+			'--client-id',
+			'family-app',
+			'--client-secret',
+			'shh',
+			'--scope',
+			'notes.read'
+		]);
+		expect(added.code).toBe(0);
+		expect(readConfig().mcpServers?.notes).toEqual({
+			type: 'http',
+			url: 'http://127.0.0.1:1/mcp',
+			oauth: { clientId: 'family-app', clientSecret: 'shh', scope: 'notes.read' }
+		});
+		expect((await run(['mcp', 'list'])).out).not.toContain('shh');
+		const wrong = await run(['mcp', 'add', 'home', '--client-id', 'x', '--', 'home-mcp']);
+		expect(wrong.code).toBe(1);
+		expect(wrong.err).toContain('--client-id, --client-secret and --scope are for signing in');
+		await run(['mcp', 'add', 'home', '--', 'no-such-mcp-server-xyz']);
+		const login = await run(['mcp', 'login', 'home']);
+		expect(login.code).toBe(1);
+		expect(login.err).toContain('home runs on this computer');
 	});
 });

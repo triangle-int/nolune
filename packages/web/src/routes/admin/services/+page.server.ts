@@ -1,4 +1,4 @@
-import { error, fail } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 import {
 	McpServerError,
 	checkMcpServer,
@@ -11,7 +11,9 @@ import {
 	parseMcpServer,
 	removeMcpServer,
 	saveMcpServer,
+	signOutMcpServer,
 	splitCommandLine,
+	startMcpSignIn,
 	type McpServerConfig,
 	type McpServerTools
 } from '@nolune/core';
@@ -19,12 +21,16 @@ import { translations } from '$lib/i18n';
 import { requireAdmin } from '$lib/server/access';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => {
+export const load: PageServerLoad = ({ locals, url }) => {
 	requireAdmin(locals);
+	const signedIn = url.searchParams.get('signedIn');
+	const tools = url.searchParams.get('tools');
 	return {
 		// Each server's command or address and the names of its keys, never the keys.
 		servers: listMcpServers(),
-		profiles: listProfiles().map((p) => ({ slug: p.slug, name: p.name }))
+		profiles: listProfiles().map((p) => ({ slug: p.slug, name: p.name })),
+		/** A sign-in that just came back (mcp/oauth/callback): the server, and its tools' number. */
+		signedIn: signedIn ? { name: signedIn, tools: tools === null ? null : Number(tools) } : null
 	};
 };
 
@@ -123,10 +129,20 @@ export const actions: Actions = {
 			const headers = secretLines(secrets, ':');
 			if ('bad' in headers) return refuse(t.badHeader(headers.bad));
 			const kept = saved && saved.type !== 'stdio' ? saved : null;
+			// Its sign-in's own client, for a service that wants one: a secret left empty stays.
+			const clientId = form.get('clientId')?.toString().trim();
+			const clientSecret = form.get('clientSecret')?.toString().trim();
+			const keptSecret =
+				clientId && clientId === kept?.oauth?.clientId ? kept.oauth.clientSecret : undefined;
+			const oauth = {
+				...(clientId && { clientId, clientSecret: clientSecret || keptSecret }),
+				...(kept?.oauth?.scope && { scope: kept.oauth.scope })
+			};
 			server = {
 				type: form.get('transport')?.toString() === 'sse' ? 'sse' : 'http',
 				url,
 				headers: secrets ? headers.map : kept?.headers,
+				...(Object.keys(oauth).length && { oauth }),
 				description,
 				profiles
 			};
@@ -148,9 +164,36 @@ export const actions: Actions = {
 		}
 		if (found && !parsed.description) parsed.description = describeFromServer(found);
 		saveMcpServer(name, parsed);
-		return found
-			? { mcpServer: name, mcpMessage: t.works(found.tools.length, someTools(found)) }
-			: { mcpServer: name, mcpWarning: t.unchecked(sentence(problem)) };
+		if (found)
+			return { mcpServer: name, mcpMessage: t.works(found.tools.length, someTools(found)) };
+		const waiting = listMcpServers().find((s) => s.name === name)?.signIn === 'needed';
+		return {
+			mcpServer: name,
+			mcpWarning: waiting ? t.signInFirst : t.unchecked(sentence(problem))
+		};
+	},
+	/**
+	 * Signing in to a server (OAuth): to its authorization server's page, which comes back to
+	 * this nolune where the admin has it open (mcp/oauth/callback). A plain form, not enhanced, so
+	 * the browser follows.
+	 */
+	signIn: async ({ locals, request, url }) => {
+		requireAdmin(locals);
+		const name = await named(request);
+		let page: URL;
+		try {
+			page = await startMcpSignIn(name, url.origin);
+		} catch (err) {
+			if (!(err instanceof McpServerError)) throw err;
+			return fail(400, { mcpServer: name, mcpError: sentence(err.message) });
+		}
+		redirect(303, page.href);
+	},
+	signOut: async ({ locals, request }) => {
+		requireAdmin(locals);
+		const name = await named(request);
+		await signOutMcpServer(name);
+		return { mcpServer: name, mcpMessage: translations(locals.locale).m.services.signedOut };
 	},
 	/** Connects to a saved server, to see that it works. */
 	check: async ({ locals, request }) => {

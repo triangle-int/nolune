@@ -54,6 +54,8 @@ export const paths = {
 	media: join(home, 'media'),
 	/** What each MCP server last said its tools are, for chats' tools (mcp.ts). */
 	mcpTools: join(home, 'mcp-tools.json'),
+	/** MCP servers' OAuth sign-ins: nolune's registrations and the tokens (mcp-auth.ts). Readable by this user only. */
+	mcpAuth: join(home, 'mcp-auth.json'),
 	globalSkills: process.env.NOLUNE_GLOBAL_SKILLS || join(homedir(), '.agents', 'skills'),
 	/** Skills that ship with nolune, such as `automations`. */
 	builtinSkills: join(packageRoot, 'packages', 'core', 'skills'),
