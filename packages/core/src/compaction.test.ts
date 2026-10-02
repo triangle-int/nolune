@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { supportsCompaction } from './anthropic.ts';
-import { needsCompaction, serverCompactAt, summaryOf } from './compaction.ts';
+import {
+	idleCompactable,
+	needsCompaction,
+	saveIdleCompaction,
+	serverCompactAt,
+	summaryOf
+} from './compaction.ts';
+import { initConfig, readConfig } from './config.ts';
 import {
 	appendRow,
 	commitQueuedRows,
@@ -163,5 +170,53 @@ describe('compacting in the runner', () => {
 		expect(ask(['<summary>Anna wants the files.</summary>'], 'tool_use')).toBe(
 			'Anna wants the files.'
 		);
+	});
+});
+
+describe('summarizing quiet chats', () => {
+	function quietChat(used: number) {
+		const { user, profile } = makeFamily();
+		const preset = makePreset('GPT', 'gpt-6-astra', 'openai');
+		const chat = createConversation({ profile, presetId: preset.id, userId: user.id });
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Hi' });
+		commitQueuedRows(chat.id);
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([{ type: 'text', text: 'Hello.' }]),
+			usage: { input: 1_000, cacheRead: used - 1_100, cacheWrite: 0, output: 100 }
+		});
+		return { chat, user };
+	}
+
+	it('is for a chat that is big enough, answered, and new since its latest summary', () => {
+		const { chat, user } = quietChat(25_000);
+		expect(idleCompactable(chat, committedRows(chat.id))).toBe(true);
+		expect(idleCompactable({ ...chat, hidden: true }, committedRows(chat.id))).toBe(false);
+		expect(idleCompactable({ ...chat, provider: 'claude-plan' }, committedRows(chat.id))).toBe(
+			false
+		);
+
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'And?' });
+		commitQueuedRows(chat.id);
+		// It waits on an answer.
+		expect(idleCompactable(chat, committedRows(chat.id))).toBe(false);
+	});
+
+	it('leaves small chats and summarized ones alone', () => {
+		const small = quietChat(19_000).chat;
+		expect(idleCompactable(small, committedRows(small.id))).toBe(false);
+	});
+
+	it('takes whole minutes up to a week, or off', () => {
+		initConfig();
+		saveIdleCompaction(55);
+		expect(readConfig().compactWhenIdle).toBe(55);
+		for (const wrong of [0, 1.5, 7 * 24 * 60 + 1, Number.NaN]) {
+			expect(() => saveIdleCompaction(wrong)).toThrow('whole number from 1 to 10080');
+		}
+		saveIdleCompaction(null);
+		expect(readConfig().compactWhenIdle).toBeUndefined();
 	});
 });

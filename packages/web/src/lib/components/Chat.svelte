@@ -956,7 +956,9 @@
 							{/if}
 						</Collapsible.Trigger>
 						<Collapsible.Content>
-							<p class="mt-2 text-xs text-muted-foreground">{m.steps.summaryAsked}</p>
+							<p class="mt-2 text-xs text-muted-foreground">
+								{entry.asked ? m.steps.summaryAsked : m.steps.summaryIdle}
+							</p>
 							<Markdown
 								text={entry.summary}
 								class="mt-1.5 text-sm leading-relaxed text-muted-foreground"

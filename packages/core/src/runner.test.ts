@@ -381,7 +381,7 @@ describe('compaction', () => {
 			{ role: 'user', content: [{ type: 'text', text: 'Anna: Files?' }] },
 			{ role: 'assistant', content: [listFiles] },
 			{ role: 'user', content: [listed] },
-			{ role: 'user', content: [{ type: 'text', text: summaryRequest(false) }] }
+			{ role: 'user', content: [{ type: 'text', text: summaryRequest('window') }] }
 		]);
 		const note =
 			'[Earlier in this conversation, summarized to fit the context window:]\n\nAnna asked for the files; ls found a.txt.';
@@ -445,7 +445,7 @@ describe('summarizing on request', () => {
 		vi.mocked(streamTurn).mockResolvedValueOnce(summarized('Anna asked for the files: two.'));
 
 		const done = idle(chat.id);
-		compactConversation(chat.id);
+		compactConversation(chat.id, 'Anna');
 		expect(getSnapshot(chat.id).running).toBe(true);
 		await done;
 
@@ -454,7 +454,7 @@ describe('summarizing on request', () => {
 		expect(ask.compactAt).toBeUndefined();
 		expect(toAnthropicMessages(ask.messages).at(-1)).toEqual({
 			role: 'user',
-			content: [{ type: 'text', text: summaryRequest(true) }]
+			content: [{ type: 'text', text: summaryRequest('asked') }]
 		});
 		expect(committedRows(chat.id).map((row) => row.kind)).toEqual([
 			'human',
@@ -481,7 +481,7 @@ describe('summarizing on request', () => {
 			modelReply([{ type: 'text', text: 'Fine, thanks.' }], 'end_turn')
 		);
 
-		compactConversation(chat.id);
+		compactConversation(chat.id, 'Anna');
 		const answered = loopEnd(chat.id);
 		await sendMessage(chat.id, user, 'How are you?');
 		write(summarized('Anna said hi.'));
@@ -496,18 +496,18 @@ describe('summarizing on request', () => {
 
 	it('refuses while the agent works, with nothing new, and on the Claude plan', async () => {
 		const chat = chatAsking(modelReply([{ type: 'text', text: 'Two files.' }], 'end_turn'));
-		expect(() => compactConversation(chat.id)).toThrow('nothing new to summarize');
+		expect(() => compactConversation(chat.id, 'Anna')).toThrow('nothing new to summarize');
 		await run(chat.id);
 		vi.mocked(streamTurn).mockResolvedValueOnce(summarized('Anna asked for the files.'));
 		const done = idle(chat.id);
-		compactConversation(chat.id);
-		expect(() => compactConversation(chat.id)).toThrow(CompactionError);
+		compactConversation(chat.id, 'Anna');
+		expect(() => compactConversation(chat.id, 'Anna')).toThrow(CompactionError);
 		await done;
-		expect(() => compactConversation(chat.id)).toThrow('nothing new to summarize');
+		expect(() => compactConversation(chat.id, 'Anna')).toThrow('nothing new to summarize');
 
 		const plan = makePreset('Claude plan', 'opus', 'claude-plan');
 		changeModel(chat.id, plan.id);
-		expect(() => compactConversation(chat.id)).toThrow('Claude Code');
+		expect(() => compactConversation(chat.id, 'Anna')).toThrow('Claude Code');
 	});
 });
 

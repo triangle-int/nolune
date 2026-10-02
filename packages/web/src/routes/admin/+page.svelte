@@ -16,6 +16,7 @@
 	import AddModelForm from '$lib/components/admin/AddModelForm.svelte';
 	import AddCustomProvider from '$lib/components/admin/AddCustomProvider.svelte';
 	import CommandSafety from '$lib/components/admin/CommandSafety.svelte';
+	import IdleCompaction from '$lib/components/admin/IdleCompaction.svelte';
 	import CustomProviderRow from '$lib/components/admin/CustomProviderRow.svelte';
 	import MemorySearch from '$lib/components/admin/MemorySearch.svelte';
 	import PresetForm from '$lib/components/admin/PresetForm.svelte';
@@ -590,6 +591,8 @@
 				presets={data.presets.map(({ id, name }) => ({ id, name }))}
 				result={form}
 			/>
+
+			<IdleCompaction setting={data.idleCompaction} result={form} />
 		</div>
 	</main>
 </div>

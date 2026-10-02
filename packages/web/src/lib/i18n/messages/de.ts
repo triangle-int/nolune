@@ -340,6 +340,8 @@ export const de: Messages = {
 			'Der Chat war zu lang für das Modell geworden, deshalb macht es mit dieser Zusammenfassung weiter.',
 		summaryAsked:
 			'Jemand im Chat hat um diese Zusammenfassung gebeten: Das Modell macht mit ihr weiter.',
+		summaryIdle:
+			'Im Chat wurde es ruhig, deshalb wurde er zusammengefasst: Das Modell macht mit dieser Zusammenfassung weiter.',
 		running: (command: string) => `Führt ${command} aus`,
 		runningACommand: 'Führt einen Befehl aus',
 		ranACommand: 'Hat einen Befehl ausgeführt',
@@ -1285,6 +1287,22 @@ export const de: Messages = {
 			checkerNote:
 				'Ein schnelles, fähiges Modell hält Chats flott: Jeder Befehl, der mehr tut als nachzusehen, kostet eine kurze Anfrage an das Modell.',
 			saved: 'Gespeichert. Gilt ab dem nächsten Befehl.'
+		},
+		idleCompaction: {
+			title: 'Ruhige Chats',
+			hint: 'Wenn es in einem Chat eine Weile ruhig war, kann das Modell ihn zusammenfassen, damit die nächste Antwort die Zusammenfassung liest statt des ganzen Chats: schneller und günstiger. Der Chat zeigt weiter alles. Zusammengefasst werden nur Chats ab etwa 20.000 Tokens und keine im Claude-Abo, dessen Claude Code seine selbst zusammenfasst.',
+			modes: { off: 'Aus', on: 'An' },
+			offStatus:
+				'Chats werden nur zusammengefasst, wenn sie das Fenster des Modells fast füllen oder jemand darum bittet.',
+			onStatus: (minutes: number) =>
+				`Chats werden nach ${p(minutes, { one: `${minutes} ruhigen Minute`, other: `${minutes} ruhigen Minuten` })} zusammengefasst.`,
+			change: 'Ändern',
+			mode: 'Ruhige Chats zusammenfassen',
+			minutes: 'Minuten ohne Nachricht',
+			cacheNote:
+				'Unter 60 Minuten liest die Zusammenfassung den Chat aus dem Prompt-Cache, was wenig kostet; später liest sie den ganzen Chat noch einmal.',
+			invalid: (max: number) => `Eine ganze Zahl von Minuten, von 1 bis ${max}.`,
+			saved: 'Gespeichert. Es gilt für Chats ab ihrer nächsten ruhigen Phase.'
 		}
 	},
 

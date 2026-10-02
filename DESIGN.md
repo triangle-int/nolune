@@ -648,6 +648,19 @@ conversation: a chat no longer stops for good when it outgrows its model.
   needs no answer of its own (`awaitsReply`: a summary at the end counts as what came before it,
   so Continue doesn't answer it), and the chat shows it as a card of its own rather than a step of
   that reply. The context meter then shows the summary's size until the next call.
+- **When a chat goes quiet**, if Models & keys says so (Quiet chats; `compactWhenIdle` in
+  config.json, `nolune config set compact-when-idle <minutes|off>`, off by default): after that many
+  minutes without a message, the runner summarizes it the same way, with an ask that says why, so
+  the next reply reads the summary rather than the whole chat. Under an hour, the summary reads the
+  chat from the prompt cache (the form suggests 55 minutes). `idle-compaction.ts` starts a timer
+  for a chat when the agent's turn ends, which a new turn cancels, and again on start for chats
+  quiet less long than that; when it fires, `compactIdle` checks the chat is still quiet and worth
+  it (`idleCompactable`): one people see, not on the Claude plan, waiting on nobody's answer, with
+  a reply since the latest summary, and past `MIN_IDLE_CONTEXT` (20k tokens), under which a summary
+  saves little and costs a call and the chat's details. A failure only goes to the log: nobody
+  asked for it. The chat shows it as a card after the reply, saying the chat went quiet; a summary
+  someone asked for keeps their name (`message.sender_name`) and says they asked. A summary runs
+  like a turn without ending one, so memory's quiet-chat timer starts again when it's done.
 - **Switching models** keeps the summary: Claude's block goes back only to the model that wrote
   it, while it compacts on the server; any other model gets its text as a message before the
   reply (`withoutCompaction`). A chat that comes to a plan with history sends the transcript from
@@ -1983,7 +1996,8 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts; the
                 ChatGPT plan's requests in chatgpt-plan.ts, signed in with Sign in with ChatGPT in
                 chatgpt-sign-in.ts), provider
-                file cache, runner, compaction (compaction.ts), media, users/invites/profiles/presets, API
+                file cache, runner, compaction (compaction.ts, quiet chats in
+                idle-compaction.ts), media, users/invites/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
                 openai.ts), the web (web.ts), image templates and assistant avatars.

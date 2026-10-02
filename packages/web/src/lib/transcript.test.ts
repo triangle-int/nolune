@@ -87,7 +87,14 @@ describe('summaries of the conversation', () => {
 		const messages: DisplayMessage[] = [
 			human(1, 'Files?'),
 			// The runner's, before the reply…
-			{ id: 2, kind: 'compaction', summary: 'Anna asked.', usage: usage(10, 3), createdAt: 2 },
+			{
+				id: 2,
+				kind: 'compaction',
+				summary: 'Anna asked.',
+				askedBy: null,
+				usage: usage(10, 3),
+				createdAt: 2
+			},
 			// …or Claude's, starting it.
 			{
 				id: 3,
@@ -125,7 +132,7 @@ describe('summaries of the conversation', () => {
 		const entries = buildTranscript([human(1, 'Files?')], [{ type: 'compaction', text: '' }], true);
 		const reply = entries[1] as Reply;
 		const part = reply.parts[0] as ActivityPart;
-		expect(part.steps).toEqual([{ type: 'compaction', summary: '' }]);
+		expect(part.steps).toEqual([{ type: 'compaction', summary: '', asked: false }]);
 		expect(activeStepLabel(part, {}, false, m)).toBe('Summarizing');
 	});
 });
@@ -140,7 +147,14 @@ describe('a summary someone asked for', () => {
 		const saved = buildTranscript(
 			[
 				...before,
-				{ id: 3, kind: 'compaction', summary: 'Anna asked.', usage: null, createdAt: 3 },
+				{
+					id: 3,
+					kind: 'compaction',
+					summary: 'Anna asked.',
+					askedBy: 'Anna',
+					usage: null,
+					createdAt: 3
+				},
 				human(4, 'More?'),
 				said(5, 'Sure.')
 			],
@@ -154,7 +168,7 @@ describe('a summary someone asked for', () => {
 			'human',
 			'reply'
 		]);
-		expect(saved[2]).toMatchObject({ summary: 'Anna asked.', live: false });
+		expect(saved[2]).toMatchObject({ summary: 'Anna asked.', asked: true, live: false });
 	});
 });
 

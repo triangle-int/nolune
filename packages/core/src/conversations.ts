@@ -137,6 +137,11 @@ export type DisplayMessage =
 			/** The chat's model's summary of the conversation so far, which requests start from. */
 			kind: 'compaction';
 			summary: string;
+			/**
+			 * Who in the chat asked for it. Null when the runner wrote it by itself: at a turn's step
+			 * when the conversation neared the window, or after a reply when the chat went quiet.
+			 */
+			askedBy: string | null;
 			/** What writing it took. */
 			usage: Usage | null;
 			createdAt: number;
@@ -918,6 +923,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			id: row.id,
 			kind: 'compaction',
 			summary: row.text ?? '',
+			askedBy: row.senderName,
 			usage: row.usage ? (JSON.parse(row.usage) as Usage) : null,
 			createdAt
 		};

@@ -8,9 +8,9 @@ import type { RequestHandler } from './$types';
  * goes on from the summary. Answers once it has started.
  */
 export const POST: RequestHandler = ({ params, locals }) => {
-	requireConversation(locals, params.id);
+	const { user } = requireConversation(locals, params.id);
 	try {
-		compactConversation(params.id);
+		compactConversation(params.id, user.name);
 	} catch (err) {
 		if (err instanceof CompactionError) error(409, err.message);
 		throw err;

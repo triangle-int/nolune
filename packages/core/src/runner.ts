@@ -70,10 +70,12 @@ import {
 import {
 	compactsOnServer,
 	hasNewReplies,
+	idleCompactable,
 	needsCompaction,
 	serverCompactAt,
 	summaryOf,
-	summaryRequest
+	summaryRequest,
+	type SummaryReason
 } from './compaction.ts';
 import { findUploads, prepareMessage, viewedImageBlocks } from './attachments.ts';
 import {
@@ -1181,24 +1183,26 @@ async function providerMessages(conv: Conversation, messages: Message[]): Promis
 }
 
 /**
- * Has the chat's model summarize the conversation, which would soon outgrow its context window
- * or someone asked to (`asked`, compactConversation), and saves the summary as a row of its own:
- * the model calls after it start there (compaction.ts). The request is the conversation's next one
- * with the ask at the end, so the provider's cache still holds all the rest. The chat shows it as a
- * step while the model writes. False when the loop should end: stopped, or failed with `st.error`.
+ * Has the chat's model summarize the conversation, because it would soon outgrow its context
+ * window, someone asked (compactConversation, `askedBy`) or it went quiet (compactIdle), and saves
+ * the summary as a row of its own: the model calls after it start there (compaction.ts). The
+ * request is the conversation's next one with the ask at the end, so the provider's cache still
+ * holds all the rest. The chat shows it as a step while the model writes. False when the loop
+ * should end: stopped, or failed with `st.error`.
  */
 async function compact(
 	conv: Conversation,
 	rows: MessageRow[],
 	st: State,
 	abort: AbortController,
-	asked = false
+	reason: SummaryReason = 'window',
+	askedBy: string | null = null
 ): Promise<boolean> {
 	const conversationId = conv.id;
 	const block: LiveBlock = { type: 'compaction', text: '' };
 	st.live = [block];
 	emit(conversationId, { type: 'live_block', index: 0, block });
-	const ask: Message = { role: 'user', blocks: [{ type: 'text', text: summaryRequest(asked) }] };
+	const ask: Message = { role: 'user', blocks: [{ type: 'text', text: summaryRequest(reason) }] };
 	let reply: ModelReply;
 	try {
 		reply = await streamTurn({
@@ -1228,15 +1232,17 @@ async function compact(
 	);
 	if (!summary) {
 		clearLive(conversationId);
-		st.error = asked
-			? `${conv.presetName} didn't write a summary of the chat. Try again.`
-			: `${conv.presetName} didn't write the summary this chat needs to fit its context window. Try again, or switch to a model with a larger one.`;
+		st.error =
+			reason === 'window'
+				? `${conv.presetName} didn't write the summary this chat needs to fit its context window. Try again, or switch to a model with a larger one.`
+				: `${conv.presetName} didn't write a summary of the chat. Try again.`;
 		return false;
 	}
 	const row = appendRow({
 		conversationId,
 		role: 'user',
 		kind: 'compaction',
+		senderName: askedBy ?? undefined,
 		text: summary,
 		blocks: [compactionNote(summary)],
 		usage
@@ -1253,17 +1259,15 @@ export class CompactionError extends Error {}
 
 /**
  * Summarizes the conversation now, as the runner does by itself once it nears the model's window
- * (compaction.ts), because someone in the chat asked to: the model calls after it start from the
- * summary. It runs like a turn of the agent, which Stop ends, for everyone who has the chat open;
- * messages sent meanwhile start a turn once it's done. Throws CompactionError when it can't: the
- * agent is working, the chat is on the Claude plan (Claude Code summarizes its own sessions) or a
- * subagent's, or nothing came since the latest summary.
+ * (compaction.ts), because someone in the chat (`askedBy`, their name) asked to: the model calls
+ * after it start from the summary. It runs like a turn of the agent (runCompaction). Throws
+ * CompactionError when it can't: the agent is working, the chat is on the Claude plan (Claude Code
+ * summarizes its own sessions) or a subagent's, or nothing came since the latest summary.
  */
-export function compactConversation(conversationId: string): void {
-	const st = stateFor(conversationId);
+export function compactConversation(conversationId: string, askedBy: string): void {
 	const stored = getConversation(conversationId);
 	if (!stored) throw new CompactionError('This chat no longer exists.');
-	if (st.running) {
+	if (stateFor(conversationId).running) {
 		throw new CompactionError(
 			'nolune is working in this chat. Wait until it finishes, or stop it.'
 		);
@@ -1280,7 +1284,38 @@ export function compactConversation(conversationId: string): void {
 	}
 	const rows = committedRows(conversationId);
 	if (!hasNewReplies(rows)) throw new CompactionError('There is nothing new to summarize yet.');
+	runCompaction(stored, rows, 'asked', askedBy);
+}
 
+/**
+ * Summarizes a chat that went quiet, when it's worth it (idleCompactable; the minutes are
+ * idle-compaction.ts's to count): not while the agent works or a message waits. True if it started.
+ * A failure only goes to the log: nobody asked for it.
+ */
+export function compactIdle(conversationId: string): boolean {
+	const stored = getConversation(conversationId);
+	if (!stored || stateFor(conversationId).running || queuedRows(conversationId).length) {
+		return false;
+	}
+	const rows = committedRows(conversationId);
+	if (!idleCompactable(stored, rows)) return false;
+	console.log(`[nolune] ${conversationId.slice(0, 8)} went quiet, summarizing it`);
+	runCompaction(stored, rows, 'idle', null);
+	return true;
+}
+
+/**
+ * A summary outside the agent's loop, run like a turn of it: everyone with the chat open sees it,
+ * Stop ends it, and messages sent meanwhile start a turn once it's done, from the summary.
+ */
+function runCompaction(
+	stored: Conversation,
+	rows: MessageRow[],
+	reason: Exclude<SummaryReason, 'window'>,
+	askedBy: string | null
+): void {
+	const conversationId = stored.id;
+	const st = stateFor(conversationId);
 	const abort = new AbortController();
 	st.running = true;
 	st.error = null;
@@ -1288,12 +1323,19 @@ export function compactConversation(conversationId: string): void {
 	st.abort = abort;
 	emit(conversationId, { type: 'status', running: true, error: null });
 	runningChanged(conversationId, true);
-	compact(withCurrentContext(stored, rows), rows, st, abort, true)
+	compact(withCurrentContext(stored, rows), rows, st, abort, reason, askedBy)
 		.catch((err: unknown) => {
 			console.error(`[nolune] ${conversationId.slice(0, 8)} summarizing crashed:`, err);
 			st.error = err instanceof Error ? err.message : String(err);
 		})
 		.finally(() => {
+			// Nobody asked for a quiet chat's summary: a failure isn't the chat's to show.
+			if (reason === 'idle' && st.error) {
+				console.error(
+					`[nolune] ${conversationId.slice(0, 8)} quiet chat not summarized: ${st.error}`
+				);
+				st.error = null;
+			}
 			st.running = false;
 			st.abort = null;
 			st.live = [];

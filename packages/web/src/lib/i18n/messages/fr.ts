@@ -353,6 +353,8 @@ export const fr: Messages = {
 			'La conversation était devenue trop longue pour le modèle : il continue à partir de ce résumé.',
 		summaryAsked:
 			'Quelqu’un dans la discussion a demandé ce résumé : le modèle continue à partir de celui-ci.',
+		summaryIdle:
+			'La discussion est devenue calme, elle a donc été résumée : le modèle continue à partir de ce résumé.',
 		running: (command: string) => `Exécution de ${command}`,
 		runningACommand: 'Exécution d’une commande',
 		ranACommand: 'A exécuté une commande',
@@ -1305,6 +1307,22 @@ export const fr: Messages = {
 			checkerNote:
 				'Un modèle rapide et compétent garde les discussions fluides : chaque commande qui fait plus que regarder lui coûte une courte requête.',
 			saved: 'Enregistré. S’applique dès la prochaine commande.'
+		},
+		idleCompaction: {
+			title: 'Discussions calmes',
+			hint: 'Quand une discussion est calme depuis un moment, le modèle peut la résumer, pour que sa prochaine réponse lise le résumé plutôt que toute la discussion : plus rapide et moins cher. La discussion montre toujours tout. Seules les discussions de plus d’environ 20 000 tokens sont résumées, et aucune sur l’abonnement Claude, dont Claude Code résume les siennes.',
+			modes: { off: 'Désactivé', on: 'Activé' },
+			offStatus:
+				'Les discussions ne sont résumées que lorsqu’elles approchent de la fenêtre du modèle, ou quand quelqu’un le demande.',
+			onStatus: (minutes: number) =>
+				`Les discussions sont résumées après ${p(minutes, { one: `${minutes} minute calme`, other: `${minutes} minutes calmes` })}.`,
+			change: 'Modifier',
+			mode: 'Résumer les discussions calmes',
+			minutes: 'Minutes sans message',
+			cacheNote:
+				'En dessous de 60 minutes, le résumé lit la discussion depuis le cache du prompt, ce qui coûte peu ; au-delà, il relit toute la discussion.',
+			invalid: (max: number) => `Un nombre entier de minutes, de 1 à ${max}.`,
+			saved: 'Enregistré. Cela s’applique aux discussions à partir de leur prochain moment calme.'
 		}
 	},
 

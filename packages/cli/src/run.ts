@@ -30,6 +30,8 @@ import {
 	effectiveContextWindow,
 	findPreset,
 	forgetRelease,
+	idleCompactionChanged,
+	idleCompactionMinutes,
 	generatePassword,
 	getDb,
 	getDefaultPreset,
@@ -61,6 +63,7 @@ import {
 	removePreset,
 	saveApiKey,
 	saveCommandMode,
+	saveIdleCompaction,
 	saveCustomProvider,
 	saveSafetyPreset,
 	scanSkills,
@@ -134,6 +137,10 @@ Settings (${paths.home})
   nolune config set update-check <on|off>       on (the default): the gateway asks GitHub once a
                                              day for nolune's newest release, and admins see when
                                              there's one
+  nolune config set compact-when-idle <minutes|off>
+                                             summarize a chat after that many minutes without a
+                                             message, so its next reply reads less; off (the
+                                             default): only near the model's window, or on request
   nolune key set <anthropic|openai|openrouter|xai|firecrawl> [key]
                                              store an API key (prompts if omitted) after checking
                                              it; OpenAI's runs GPT chats and makes pictures, xAI's
@@ -710,19 +717,20 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				row('images', `${images.model}${images.problem ? ` (${images.problem})` : ''}`);
 				row('embeddings', embeddingStatus());
 				row('commands', describeCommandSafety());
+				row('quiet chats', describeIdleCompaction());
 				row('env', Object.keys(config.commandEnv ?? {}).join(', ') || '-');
 				row('version', describeUpdates());
 				return;
 			}
 			if (action !== 'set') {
 				fail(
-					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model|update-check> <value>]'
+					'usage: nolune config [set <host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model|update-check|compact-when-idle> <value>]'
 				);
 			}
 			const key = positional(
 				rest,
 				0,
-				'host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model|update-check'
+				'host|port|origin|image-model|embeddings|claude-path|command-mode|safety-model|update-check|compact-when-idle'
 			);
 			if (key === 'command-mode' || key === 'safety-model') {
 				// Auto mode guards against the agent itself, so it can't be the one to turn it off.
@@ -766,6 +774,17 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				);
 				return;
 			}
+			if (key === 'compact-when-idle') {
+				const value = positional(rest, 1, 'minutes|off');
+				try {
+					saveIdleCompaction(value === 'off' ? null : Number(value));
+				} catch (err) {
+					fail(`${(err as Error).message}, or off.`);
+				}
+				idleCompactionChanged();
+				io.log(`Quiet chats: ${describeIdleCompaction()}.`);
+				return;
+			}
 			if (key === 'embeddings') {
 				let setting: ReturnType<typeof parseEmbeddingSetting>;
 				try {
@@ -795,7 +814,7 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 				} else if (key === 'claude-path') c.claudePath = value;
 				else
 					fail(
-						'you can set host, port, origin, image-model, embeddings, claude-path, command-mode, safety-model or update-check'
+						'you can set host, port, origin, image-model, embeddings, claude-path, command-mode, safety-model, update-check or compact-when-idle'
 					);
 			});
 			if (key === 'claude-path') {
@@ -1132,4 +1151,12 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		default:
 			fail(`unknown command "${group}". See \`nolune help\`.`);
 	}
+}
+
+/** After how many quiet minutes chats are summarized, in words. */
+function describeIdleCompaction(): string {
+	const minutes = idleCompactionMinutes();
+	return minutes
+		? `summarized after ${minutes} minute${minutes === 1 ? '' : 's'} without a message`
+		: 'summarized only near the window, or on request';
 }
