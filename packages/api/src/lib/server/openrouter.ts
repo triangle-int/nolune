@@ -6,6 +6,8 @@
 /** A model as OpenRouter's `GET /models` lists it; the gateway reads the same shape. */
 export interface Model {
 	id: string;
+	/** When OpenRouter added it, in seconds. */
+	created?: number | null;
 	context_length?: number | null;
 	pricing?: Partial<Record<'prompt' | 'completion' | 'input_cache_read', string>>;
 	supported_parameters?: string[];
@@ -149,6 +151,19 @@ export class OpenRouter {
 export function chatModels(models: Model[]): Model[] {
 	return models.filter(
 		(model) => model.supported_parameters?.includes('tools') && !isFree(model.id)
+	);
+}
+
+/**
+ * The model the plan recommends, which new presets start on: first in its list (`/v1/models`),
+ * whose order the gateway keeps, so changing it here needs no new release of nolune.
+ */
+export const RECOMMENDED_MODEL = 'anthropic/claude-sonnet-5.5';
+
+/** The plan's models for chats in the order it offers them: its pick first, then the newest. */
+export function listedModels(models: Model[], pick = RECOMMENDED_MODEL): Model[] {
+	return chatModels(models).sort(
+		(a, b) => Number(b.id === pick) - Number(a.id === pick) || (b.created ?? 0) - (a.created ?? 0)
 	);
 }
 

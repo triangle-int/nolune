@@ -31,8 +31,8 @@ Its prices and the launch offer are written in the page: change them with Stripe
 to the account page on nolune's API, which signs people in and opens Checkout.
 
 `/privacy` is nolune's privacy policy, which the App Store listing and the iOS app link. It says
-what nolune, its apps, the relay and this site do with people's information, so a change to any of
-them that sends or keeps something new belongs there too, with a new date.
+what nolune, its apps, the relay, the nolune plan's API and this site do with people's information,
+so a change to any of them that sends or keeps something new belongs there too, with a new date.
 
 `static/og.png`, the picture shown when someone shares a link, is a 1200×630 screenshot of the hero
 with reduced motion on. Take a new one when the hero changes.

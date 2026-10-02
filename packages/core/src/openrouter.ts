@@ -118,6 +118,11 @@ export interface ChatApi {
 	wrap: <T>(call: () => Promise<T>) => Promise<T>;
 	/** Whether requests say what they're for (`X-Nolune-Use`, `X-Nolune-Turn`): nolune's API reads them. */
 	saysUse: boolean;
+	/**
+	 * Whether its list of models is in the order it recommends them, which nolune keeps: nolune's
+	 * API puts the model new presets should start on first. OpenRouter's is shown newest first.
+	 */
+	ordered: boolean;
 }
 
 /** OpenRouter itself, on the key in config.json or OPENROUTER_API_KEY. */
@@ -127,7 +132,8 @@ export const OPENROUTER: ChatApi = {
 	baseURL: openrouterBaseUrl,
 	key: apiKey,
 	wrap: tagged,
-	saysUse: false
+	saysUse: false,
+	ordered: false
 };
 
 const clients = new Map<ChatApi['provider'], { key: unknown; baseURL: string; client: OpenAI }>();
@@ -787,15 +793,15 @@ function windowOf(info: ModelInfo): number | null {
 }
 
 /**
- * The models a preset can take (they call tools), for the admin page, the newest first, with
- * OpenRouter's names and the window a preset gets. `:batch` variants are left out: they're for
- * OpenRouter's batch API, not chats.
+ * The models a preset can take (they call tools), for the admin page, the newest first (or in the
+ * API's own order, `ordered`), with OpenRouter's names and the window a preset gets. `:batch`
+ * variants are left out: they're for OpenRouter's batch API, not chats.
  */
 export async function listModels(api: ChatApi = OPENROUTER): Promise<ModelChoice[]> {
 	const models = [...(await catalogOf(api, true)).values()].filter(
 		(m) => callsTools(m) && !m.id.endsWith(':batch')
 	);
-	models.sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
+	if (!api.ordered) models.sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
 	return models.map((m) => ({
 		id: m.id,
 		name: m.name ?? null,

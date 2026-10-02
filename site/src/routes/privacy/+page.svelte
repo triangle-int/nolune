@@ -1,16 +1,17 @@
 <script lang="ts">
 	// nolune's privacy policy, at nolune.dev/privacy: the App Store asks for one, and the iOS app
-	// links it. Keep it to what the code does: packages/relay for the relay, ios/ for the app.
+	// links it. Keep it to what the code does: packages/relay for the relay, packages/api for the
+	// nolune plan, ios/ for the app.
 	const GITHUB = 'https://github.com/triangle-int/nolune';
 	const EMAIL = 'timur@triangleint.com';
-	const UPDATED = 'October 1, 2026';
+	const UPDATED = 'October 2, 2026';
 </script>
 
 <svelte:head>
 	<title>Privacy · nolune</title>
 	<meta
 		name="description"
-		content="What nolune, its apps, its relay and this website do with your information: your family's chats stay on your family's computer."
+		content="What nolune, its apps, its relay, the nolune plan and this website do with your information: your family's chats stay on your family's computer."
 	/>
 </svelte:head>
 
@@ -26,14 +27,19 @@
 		<h2>The short version</h2>
 		<ul>
 			<li>
-				nolune doesn't send us your chats, memory, files or accounts. We have no server that keeps
-				them.
+				nolune doesn't send us your chats, memory, files or accounts, and we have no server that
+				keeps them. On the nolune plan, chats pass through our server on their way to the model, and
+				it keeps none of them.
 			</li>
 			<li>There are no ads, analytics or trackers in nolune, its apps or this website.</li>
 			<li>
-				Two things pass through a server we run, and only when you use them: the relay, when your
-				family's nolune has an address on <code>nolune.family</code>, and notifications in the
-				iPhone app. We keep none of what passes through.
+				Three things pass through a server we run, and only when you use them: the relay, when your
+				family's nolune has an address on <code>nolune.family</code>, notifications in the iPhone
+				app, and requests on the nolune plan. We keep none of what passes through.
+			</li>
+			<li>
+				If you subscribe to the nolune plan, we keep your email address and what's left of your
+				plan, and Stripe handles the payment.
 			</li>
 		</ul>
 
@@ -44,10 +50,11 @@
 			computer. Everyone in a shared profile can read its chats and memory.
 		</p>
 		<p>
-			To answer, nolune sends the model your family chose (Anthropic, OpenAI, xAI, OpenRouter, or a
-			server of your own) what it needs: the conversation, the files in it, and what it remembers
-			that matters. The same goes for the other services your family sets it up with, like making
-			pictures or searching the web. Their privacy policies cover what they do with it.
+			To answer, nolune sends the model your family chose (Anthropic, OpenAI, xAI, OpenRouter, the
+			nolune plan below, or a server of your own) what it needs: the conversation, the files in it,
+			and what it remembers that matters. The same goes for the other services your family sets it
+			up with, like making pictures or searching the web. Their privacy policies cover what they do
+			with it.
 		</p>
 		<p>
 			Once a day, nolune asks GitHub whether there's a new release, so admins hear of it. GitHub
@@ -85,6 +92,48 @@
 			<a href="{GITHUB}/tree/main/packages/relay">run your own relay</a>.
 		</p>
 
+		<h2>The nolune plan</h2>
+		<p>
+			The nolune plan is a subscription to nolune itself: chats, pictures and memory search without
+			keys of your own. When your family's nolune uses it, its requests go through nolune's API, a
+			server we run at <code>api.nolune.dev</code>, on their way to the model.
+		</p>
+		<p>
+			They carry what nolune would otherwise send the model itself: the conversation, the files in
+			it, what nolune remembers that matters, a picture to make or change, and words to search
+			memory by. The API passes them on to OpenRouter, which passes them to the company that runs
+			the model your family picked; their privacy policies cover what they do with it. The API
+			doesn't store or log any of it. It reads only what it needs to check and charge a request,
+			like which model it's for and how long it is, and takes what OpenRouter says it cost off your
+			plan.
+		</p>
+		<p>What it keeps about your account:</p>
+		<ul>
+			<li>your email address, which you sign in with, and when the account was made;</li>
+			<li>
+				for each browser you're signed in on, and each nolune you've linked: when it signed in, its
+				IP address, and which browser or program it is, while that session lasts;
+			</li>
+			<li>
+				your plan: its limits, how much has been spent in the current 5 hours and week, the credits
+				left, which payment each came from and when they run out, and when the plan renews;
+			</li>
+			<li>and which customer you are at Stripe.</li>
+		</ul>
+		<p>
+			Sign-in codes are sent by Resend, which sees your email address and the code; a code lasts 5
+			minutes. Payments go through Stripe, which keeps your payment details: we never see your card
+			number. We give Stripe your email address and your account's id, so a payment finds its
+			account. From Stripe we learn what was bought and when, and whether the subscription is paid,
+			cancelled or behind. Stripe may email you about it, like when a payment doesn't go through.
+		</p>
+		<p>
+			The API's log says what went wrong when something does, and its size is capped, so older lines
+			are deleted as new ones come in. Its database is copied once a day, and each copy is deleted
+			after 14 days. Signing out, or unlinking nolune, ends that session. To delete your account,
+			write to us: we'll delete it and everything above, apart from what Stripe has to keep about
+			payments.
+		</p>
 		<h2>The iPhone and iPad app</h2>
 		<p>
 			The app keeps the address of your family's nolune on your device. Everything else it shows is
@@ -125,7 +174,7 @@
 		<p>
 			nolune is made for families, and a family may make accounts for its children on its own
 			nolune. Those accounts and what they write stay on the family's computer. We don't collect
-			information from anyone, children included.
+			information from children: the nolune plan's account is for the adult who pays for it.
 		</p>
 
 		<h2>Changes and questions</h2>

@@ -315,7 +315,9 @@ export const NOLUNE_PLAN: ChatApi = {
 		return planToken;
 	},
 	wrap: asPlan,
-	saysUse: true
+	saysUse: true,
+	// The API lists the model it recommends first.
+	ordered: true
 };
 
 async function planToken(): Promise<string> {

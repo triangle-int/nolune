@@ -2138,8 +2138,8 @@ _Built, not open yet._ nolune's API (`packages/api`) signs people in, links gate
 limits, passes chats and embeddings on to OpenRouter, and sells the plan through Stripe (its
 account page and webhook); nolune's side links to it and runs chats, memory search and their
 errors on it, and makes pictures on it. The API runs next to the relay (`compose.api.yaml`), at
-`api.nolune.dev`, on Stripe's test mode. Still to come: Stripe's live mode, automations that wait
-out a limit, and the privacy policy saying what the API keeps. Until the plan is open to everyone
+`api.nolune.dev`, on Stripe's test mode, for the addresses in `ALLOWED_EMAILS`. Still to come:
+Stripe's live mode, and automations that wait out a limit. Until the plan is open to everyone
 (`NOLUNE_PLAN_OPEN`, in `nolune-plan-open.ts`), the web UI offers it only when
 `NOLUNE_PLAN_API_URL` points nolune at an API (`nolunePlanOffered`), the CLI always has it, and
 nolune.dev's Pricing shows it only on previews.
@@ -2232,9 +2232,13 @@ Agent: one sign-in, one OpenAI-compatible address in front, OpenRouter behind it
   nolune's API and the plan's token, which the SDK asks for on every request, as `CHATGPT_PLAN`'s
   does, and never an OpenAI organization or project from the environment. Each keeps its own client
   and model list. What the plan's calls throw becomes a `PlanError` (`planErrorOf`), a stop aside.
-  Models are OpenRouter's ids (`anthropic/claude-sonnet-5-5`), from the plan's own list
+  Models are OpenRouter's ids (`anthropic/claude-sonnet-5.5`), from the plan's own list
   (`GET /v1/models`: OpenRouter's list in its shape, with prices, kept for an hour, and only the
-  models that call tools, since nolune's agent works through one: 395 of 462 in October 2026). The
+  models that call tools, since nolune's agent works through one, and none of the free ones, whose
+  limits every family would share: 381 of 464 in October 2026). The list puts the API's pick first
+  (`RECOMMENDED_MODEL`, Claude Sonnet 5.5), then the newest, and nolune keeps its order (`ordered`
+  on the plan's `ChatApi`; an OpenRouter key's list is sorted newest first), so the model a new
+  preset starts on changes with the API rather than a release of nolune. The
   plan's replies are stored as `nolune-plan`'s, so moving a chat between it and an OpenRouter key is
   a switch of provider like any other.
 - **What each request is for.** The plan's requests say so in two headers the API reads (OpenRouter
@@ -2669,8 +2673,9 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
 - **Privacy.** The app collects nothing and tracks no one (`PrivacyInfo.xcprivacy`): what people
   write goes to their family's nolune. A notification's text passes through the relay and Apple,
   as any app's notifications pass through Apple; neither keeps it. The privacy policy, at
-  `nolune.dev/privacy` (`site/src/routes/privacy`), covers nolune, the apps, the relay and the
-  site; the first screen links it, as the App Store asks. Keep it to what the code does.
+  `nolune.dev/privacy` (`site/src/routes/privacy`), covers nolune, the apps, the relay, the
+  nolune plan's API and the site; the first screen links it, as the App Store asks. Keep it to what
+  the code does.
 
 ## Not done yet
 
@@ -2708,7 +2713,6 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   which has no relay to send them.
 - A `nolune notify` command for scripts that only need to say something, without waking the agent.
 - End-to-end encryption through the relay (see [The relay](#the-relay)).
-- The nolune plan (see [The nolune plan](#the-nolune-plan)): Stripe's live mode, automations that
-  wait out a limit rather than fail, and `nolune.dev/privacy` saying what the API keeps (the email,
-  what's spent, Stripe's customer); then opening it (`NOLUNE_PLAN_OPEN` in `nolune-plan-open.ts`),
-  which also shows Pricing on nolune.dev.
+- The nolune plan (see [The nolune plan](#the-nolune-plan)): Stripe's live mode, and automations
+  that wait out a limit rather than fail; then opening it (emptying `ALLOWED_EMAILS`, and
+  `NOLUNE_PLAN_OPEN` in `nolune-plan-open.ts`), which also shows Pricing on nolune.dev.

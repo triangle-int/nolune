@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readAccount, updateAccount } from './accounts.ts';
 import { addExtra, endPlan, HOUR, startPlan, type PeriodGrant } from './limits.ts';
-import { chatModels, OpenRouter } from './openrouter.ts';
+import { chatModels, listedModels, OpenRouter } from './openrouter.ts';
 import { MAX_TOKENS, Proxy, type Endpoint } from './proxy.ts';
 import { addUser, testDb } from './test/db.ts';
 
@@ -269,6 +269,22 @@ describe('nolune’s API in front of OpenRouter', () => {
 			expect((await free.json()).error.code).toBe('model_not_offered');
 		}
 		expect(s.calls()).toHaveLength(0);
+	});
+
+	it('lists its pick first, then the newest', () => {
+		const models = [
+			{ id: 'old/one', created: 1, supported_parameters: ['tools'] },
+			{ id: 'anthropic/claude-sonnet-5.5', created: 2, supported_parameters: ['tools'] },
+			{ id: 'new/one', created: 3, supported_parameters: ['tools'] },
+			{ id: 'newest/free:free', created: 4, supported_parameters: ['tools'] }
+		];
+		expect(listedModels(models).map((m) => m.id)).toEqual([
+			'anthropic/claude-sonnet-5.5',
+			'new/one',
+			'old/one'
+		]);
+		// Without its pick on OpenRouter, just the newest first.
+		expect(listedModels(models, 'gone/model')[0].id).toBe('new/one');
 	});
 
 	it('offers what it lists: models that call tools, with variants and no free ones', async () => {

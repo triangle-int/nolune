@@ -83,6 +83,13 @@ const MODELS = [
 		context_length: 200_000,
 		supported_parameters: ['tools', 'reasoning'],
 		architecture: { input_modalities: ['text', 'image'] }
+	},
+	// Newer, but the API lists its pick first.
+	{
+		id: 'someone/newer-model',
+		created: 1_770_000_000,
+		context_length: 100_000,
+		supported_parameters: ['tools']
 	}
 ];
 
@@ -445,7 +452,7 @@ describe('chats on the nolune plan', () => {
 		logged.mockRestore();
 	});
 
-	it("lists the plan's models, and uses the plan for memory search when there's no key", async () => {
+	it("lists the plan's models in its order, and uses the plan for memory search when there's no key", async () => {
 		await link();
 		expect(await listModels('nolune-plan')).toEqual([
 			{
@@ -453,7 +460,8 @@ describe('chats on the nolune plan', () => {
 				name: 'Anthropic: Claude Haiku 4.5',
 				description: null,
 				contextWindow: 200_000
-			}
+			},
+			{ id: 'someone/newer-model', name: null, description: null, contextWindow: 100_000 }
 		]);
 		expect(embeddingSource()).toEqual({
 			url: `${base}/v1`,
