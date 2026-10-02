@@ -121,8 +121,12 @@ kernel could stop the relay to make room. GitHub Actions builds it on each chang
 (`.github/workflows/api-image.yml`) into `ghcr.io/triangle-int/nolune-api`, and the server pulls
 it: `latest` from `main`, a branch's own tag (`claude-nolune-plan-design`), and each commit's
 (`sha-1234567`). The package is public, as the repository is, so the server pulls it without signing
-in; GitHub makes a new package private, which its settings change (Change visibility). The
-image is `linux/amd64`, for the relay's server.
+in. GitHub makes a new package private: an organization owner allows public ones (the
+organization's settings, Packages, Package creation), and then the package's settings change it
+(Change visibility). A private one works too, once the server has signed in to the registry
+with a classic token that can only read packages:
+`echo <token> | docker login ghcr.io -u <user> --password-stdin`. The image is `linux/amd64`, for
+the relay's server.
 
 1. **DNS.** An A (and AAAA) record for `api.nolune.dev`, **DNS only** like the others. The
    Cloudflare token edits `nolune.dev` already, which Caddy needs for the API's certificate too
