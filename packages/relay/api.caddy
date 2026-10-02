@@ -1,0 +1,13 @@
+# nolune's API (packages/api), when compose.api.yaml runs it: api.nolune.dev. Its certificate comes
+# the same way as the relay's, through Cloudflare's DNS, so the token must edit the API host's zone
+# too (nolune.dev, which relay.nolune.dev is in already).
+{$API_HOST} {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+		resolvers 1.1.1.1 1.0.0.1
+	}
+	reverse_proxy api:3000 {
+		# Chats stream their replies: on as they come.
+		flush_interval -1
+	}
+}

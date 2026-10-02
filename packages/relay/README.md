@@ -138,15 +138,98 @@ record is missing or in the wrong zone (check it with `dig +short relay.nolune.d
 Cloudflare's API means the token can't edit that zone. Caddy tries again by itself, every minute at
 first; `docker compose restart caddy` tries at once.
 
+## nolune's API next to it
+
+nolune's own server also runs nolune's API (`packages/api`, the nolune plan's sign-in, limits,
+models and payments; DESIGN.md, The nolune plan) behind the same Caddy, at `api.nolune.dev`.
+`compose.api.yaml` adds it to `compose.yaml`: the API, its Postgres, and a service that backs the
+database up each day. A relay alone is just `compose.yaml`, as before.
+
+The API's image isn't built on the server: building it (`packages/api/Dockerfile`) wants close to
+a gigabyte of memory, and a 1 GB server running the relay has about half that free, so the
+kernel could stop the relay to make room. GitHub Actions builds it on each change
+(`.github/workflows/api-image.yml`) into `ghcr.io/triangle-int/nolune-api`, and the server pulls
+it: `latest` from `main`, a branch's own tag (`claude-nolune-plan-design`), and each commit's
+(`sha-1234567`). The package is public, as the repository is, so the server pulls it without signing
+in. GitHub makes a new package private: an organization owner allows public ones (the
+organization's settings, Packages, Package creation), and then the package's settings change it
+(Change visibility). A private one works too, once the server has signed in to the registry
+with a classic token that can only read packages:
+`echo <token> | docker login ghcr.io -u <user> --password-stdin`. The image is `linux/amd64`, for
+the relay's server.
+
+1. **DNS.** An A (and AAAA) record for `api.nolune.dev`, **DNS only** like the others. The
+   Cloudflare token edits `nolune.dev` already, which Caddy needs for the API's certificate too
+   (`api.caddy`).
+2. **Settings.** Add to `.env`:
+
+   ```sh
+   COMPOSE_FILE=compose.yaml:compose.api.yaml
+   API_HOST=api.nolune.dev
+   API_DB_PASSWORD=...   # openssl rand -hex 24
+   ```
+
+   and put the API's secrets in `api.env` (`cp api.env.example api.env && chmod 600 api.env`):
+   the session secret, Resend's key, nolune's OpenRouter key and Stripe's. `api.env.example` says
+   what each is. The API won't start at an `https://` address without Resend: the sign-in codes
+   would have nowhere to go.
+
+3. **Stripe.** A webhook endpoint at `https://api.nolune.dev/stripe/webhook`, API version
+   `2026-09-30.endive`, with `invoice.paid`, `checkout.session.completed`,
+   `checkout.session.async_payment_succeeded` and `customer.subscription.deleted`; its signing
+   secret is `STRIPE_WEBHOOK_SECRET`. A customer portal configuration of nolune's own
+   (cancelling, cards and invoices, no switching) is `STRIPE_PORTAL_CONFIGURATION`. Start with
+   test-mode keys and move to live ones when it's all been tried.
+4. **Start it**: `docker compose up -d`, which pulls the API's image. `./check.sh` then says whether
+   `https://api.nolune.dev/health` answers `ok` (the API and its Postgres), and when the last
+   backup was.
+
+**Updating it**, once GitHub Actions has built the change:
+`docker compose pull api && docker compose up -d api` restarts only the API; the relay and
+Postgres go on. It brings its database up to date as it starts (the migrations in
+`packages/api/drizzle`). Requests on their way are cut, and a chat stream cut off in the few
+minutes before may go uncharged: what it cost is still being asked of OpenRouter. To go back to
+an earlier one, set `API_IMAGE` to its `sha-` tag and `docker compose up -d api`; a version
+whose migrations have run can't always go back, so restore a backup from before it too.
+
+| Variable          | Meaning                                                                       |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `API_HOST`        | The API's address. `api.nolune.dev` by default.                               |
+| `API_IMAGE`       | The API's image. `ghcr.io/triangle-int/nolune-api:latest` by default.         |
+| `API_DB_PASSWORD` | Postgres's password, which the API and the backups use. Required.             |
+| `API_BACKUP_DAYS` | Days of daily backups kept in `backups/`. 14 by default.                      |
+| `COMPOSE_FILE`    | `compose.yaml:compose.api.yaml` runs the API; `docker compose` reads it here. |
+
+### Its backups
+
+The database is people's payments and what they have left, so it's backed up: a dump when the
+backup service starts and each day after, in `backups/` (`nolune_api-<date>.dump`, pg_dump's
+custom format), for `API_BACKUP_DAYS` days. Copy them off the server too, with rsync, rclone or
+your host's snapshots: a dump on a server that's lost is lost with it.
+
+To bring one back (over what's there):
+
+```sh
+docker compose stop api
+docker compose exec -T postgres dropdb -U nolune nolune_api
+docker compose exec -T postgres createdb -U nolune nolune_api
+docker compose exec -T postgres pg_restore -U nolune -d nolune_api --no-owner < backups/nolune_api-<date>.dump
+docker compose start api
+```
+
+Payments made since the dump are still in Stripe: sending their events again from the Dashboard
+(each event's page, or the webhook's; Stripe keeps events for 30 days) grants them, once each.
+
 ## Looking after it
 
 - **Is it all right?** `./check.sh` in this folder, on the server, answers in a few lines: whether
-  the containers run, the certificates and until when, whether the relay answers, and the last
-  errors in the logs.
+  the containers run, the certificates and until when, whether the relay (and the API) answers,
+  the API's last backup, and the last errors in the logs.
 - **The logs** are lines to read (Caddy's in its console format, the relay's as `[relay] ...`),
   capped at 30 MB a container, as nolune's [privacy policy](https://nolune.dev/privacy) says:
   `docker compose logs -f relay` for addresses coming and going, `docker compose logs -f caddy` for
-  certificates, `docker compose logs --since 1h` for the last hour of both.
+  certificates, `docker compose logs --since 1h` for the last hour of both. The API's are
+  `docker compose logs -f api`: it writes only what went wrong, as `[nolune api] ...`.
 
 - **Back up** the gateways file (the `relay-data` volume). Without it, every family's nolune
   asks for its name again when it next connects, and gets it unless someone took it first.

@@ -1,0 +1,23 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/figtree';
+
+/* The gateway's greys (packages/web), light and dark with the system. */
+@theme {
+	--font-sans: 'Figtree Variable', ui-sans-serif, system-ui, sans-serif;
+	--color-background: light-dark(#ffffff, #0d0d0d);
+	--color-foreground: light-dark(#0d0d0d, #f4f4f4);
+	--color-muted: light-dark(#f4f4f4, #1f1f1f);
+	--color-muted-foreground: light-dark(#5d5d5d, #a3a3a3);
+	--color-border: light-dark(#e5e5e5, #2e2e2e);
+	--color-primary: light-dark(#0d0d0d, #f4f4f4);
+	--color-primary-foreground: light-dark(#ffffff, #0d0d0d);
+	--color-danger: light-dark(#c62828, #ff8a80);
+}
+
+:root {
+	color-scheme: light dark;
+}
+
+body {
+	@apply bg-background font-sans text-foreground antialiased;
+}

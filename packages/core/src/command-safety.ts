@@ -463,7 +463,10 @@ export async function checkCommand(request: CheckRequest): Promise<SafetyVerdict
 			input: `${input}\n\n${QUICK}`,
 			// Room for whatever thinking the model does first; the answer is one word.
 			maxTokens: 2048,
-			timeoutMs: 30_000
+			timeoutMs: 30_000,
+			// A check goes on the turn that asked for the command, which the nolune plan lets finish.
+			use: 'person',
+			continuing: true
 		});
 		const first = quickVerdict(quick.text);
 		log('quick', first, quick.usage);
@@ -475,7 +478,9 @@ export async function checkCommand(request: CheckRequest): Promise<SafetyVerdict
 			system: SYSTEM,
 			input: `${input}\n\n${CAREFUL}`,
 			maxTokens: 4096,
-			timeoutMs: 60_000
+			timeoutMs: 60_000,
+			use: 'person',
+			continuing: true
 		});
 		const second = carefulVerdict(careful.text);
 		log('careful', second ? (second.allowed ? 'allow' : 'block') : 'unclear', careful.usage);

@@ -29,7 +29,7 @@ export const load: PageServerLoad = ({ locals, params, url }) => {
 	return {
 		suggestions: withIcons(suggestions.suggestions, translations(locals.locale).m),
 		suggestionsStale: suggestions.stale,
-		presets: listPresets().map((p) => ({ id: p.id, name: p.name })),
+		presets: listPresets().map((p) => ({ id: p.id, name: p.name, provider: p.provider })),
 		defaultPresetId: getDefaultPreset()?.id ?? '',
 		efforts: [...EFFORTS],
 		commandMode: commandMode(),

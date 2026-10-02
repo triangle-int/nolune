@@ -18,6 +18,7 @@
 	import Orbit from '$lib/Orbit.svelte';
 	import Stars from '$lib/Stars.svelte';
 	import GithubMark from '$lib/GithubMark.svelte';
+	import { PLAN_ACCOUNT_URL, SHOW_PLAN } from '$lib/plan';
 
 	const GITHUB = 'https://github.com/triangle-int/nolune';
 	// Each release's nolune.app, under names that stay the same, so these always get the newest.
@@ -307,6 +308,47 @@
 			</p>
 		</div>
 	</section>
+
+	{#if SHOW_PLAN}
+		<section id="pricing" class="pricing">
+			<div class="wrap">
+				<h2 class="ruled">Pricing</h2>
+				<div class="offers">
+					<article class="offer">
+						<p class="price">$0</p>
+						<h3>Free and open source</h3>
+						<p>
+							Everything nolune does, on your own computer. Chats run on an API key you bring, or on
+							a Claude or ChatGPT plan you already have.
+						</p>
+						<a href="#how" class="pill">Install nolune</a>
+						<p class="fine-print">On a Mac, or on Linux with Node.js 22.18 or later.</p>
+					</article>
+					<article class="offer plan">
+						<p class="price">$20<span>a month</span></p>
+						<h3>The nolune plan</h3>
+						<p class="launch">Launch offer: $25 of credits for $20</p>
+						<p>
+							No keys to get: link nolune once, and it chats, makes pictures and searches its memory
+							on the plan.
+						</p>
+						<ul>
+							<li><CheckIcon size={18} />Chats on Claude, GPT and other models</li>
+							<li><CheckIcon size={18} />No hourly or weekly limits, just the month's credits</li>
+							<li><CheckIcon size={18} />More credits in $10 packs, when you need them</li>
+							<li><CheckIcon size={18} />Cancel any time on your account page</li>
+						</ul>
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- the account page, on nolune's API -->
+						<a href={PLAN_ACCOUNT_URL} class="pill subscribe">Subscribe</a>
+						<p class="fine-print">
+							Then link nolune to it under Models &amp; keys, or pick the nolune plan when it first
+							asks for a model.
+						</p>
+					</article>
+				</div>
+			</div>
+		</section>
+	{/if}
 
 	<div class="wrap">
 		<ul class="strip">
@@ -757,6 +799,85 @@
 		text-underline-offset: 4px;
 	}
 
+	/* pricing */
+	.pricing {
+		padding: 48px 0 64px;
+	}
+	.offers {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 28px;
+		max-width: 960px;
+		margin: 40px auto 0;
+	}
+	.offer {
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+		padding: 32px;
+		border: 1px solid var(--line);
+		border-radius: 20px;
+		background: var(--ink-raised);
+	}
+	.offer.plan {
+		border-color: var(--rust);
+	}
+	.offer p,
+	.offer ul {
+		font-size: 0.95rem;
+		line-height: 1.65;
+	}
+	.offer .price {
+		color: var(--cream);
+		font: 800 2.6rem / 1 var(--sans);
+	}
+	.price span {
+		margin-left: 10px;
+		color: var(--muted);
+		font: 500 1rem var(--mono);
+	}
+	.offer .launch {
+		width: fit-content;
+		padding: 2px 12px;
+		border-radius: 10px;
+		background: rgb(240 122 60 / 0.14);
+		color: var(--rust);
+		font-size: 0.85rem;
+	}
+	.offer ul {
+		display: grid;
+		gap: 8px;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.offer li {
+		display: flex;
+		gap: 10px;
+		align-items: flex-start;
+	}
+	.offer li :global(svg) {
+		flex: none;
+		margin-top: 4px;
+		color: var(--rust);
+	}
+	.offer .pill {
+		justify-content: center;
+		margin-top: auto;
+	}
+	.pill.subscribe {
+		background: var(--rust);
+		color: var(--ink);
+		font-weight: 600;
+	}
+	.pill.subscribe:hover {
+		background: #f38d57;
+	}
+	.offer .fine-print {
+		color: var(--muted);
+		font-size: 0.85rem;
+	}
+
 	/* strip */
 	.strip {
 		display: flex;
@@ -805,7 +926,8 @@
 			row-gap: 28px;
 		}
 		.columns,
-		.steps {
+		.steps,
+		.offers {
 			grid-template-columns: 1fr;
 		}
 		.columns article,
@@ -856,6 +978,9 @@
 		}
 		.product {
 			padding: 40px 0 64px;
+		}
+		.offer {
+			padding: 24px;
 		}
 	}
 </style>

@@ -405,7 +405,12 @@
 						out:fade={{ duration: reduced ? 0 : 150 }}
 					>
 						{#if steps[step] === 'model'}
-							<ModelStep isAdmin={data.isAdmin} keys={data.keys} ondone={nextStep} />
+							<ModelStep
+								isAdmin={data.isAdmin}
+								keys={data.keys}
+								nolunePlan={data.nolunePlan}
+								ondone={nextStep}
+							/>
 						{:else if steps[step] === 'avatar'}
 							<form
 								method="POST"

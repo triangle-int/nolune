@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { resolve } from '$app/paths';
+	import { SHOW_PLAN } from '$lib/plan';
 	import Wordmark from '$lib/Wordmark.svelte';
 
 	let { children } = $props();
@@ -25,6 +26,9 @@
 		<nav>
 			<a href="{home}#features">Features</a>
 			<a href="{home}#how">How it works</a>
+			{#if SHOW_PLAN}
+				<a href="{home}#pricing">Pricing</a>
+			{/if}
 			{@render docsLink()}
 			<a href={GITHUB}>GitHub</a>
 		</nav>

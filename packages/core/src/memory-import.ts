@@ -123,7 +123,9 @@ export async function reformatMemoryExport(text: string, preset: Preset): Promis
 		system: REFORMAT_SYSTEM,
 		input: `<pasted>\n${text}\n</pasted>`,
 		maxTokens: 16_000,
-		timeoutMs: 120_000
+		timeoutMs: 120_000,
+		// Someone is waiting on it, in the welcome.
+		use: 'person'
 	}).catch((err: unknown) => {
 		throw new Error(describeApiError(err), { cause: err });
 	});

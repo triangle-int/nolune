@@ -32,17 +32,18 @@ export interface Config {
 	 */
 	claudePath?: string;
 	/**
-	 * What `nolune generate image` uses, as `<provider>/<model>`. Defaults to
-	 * `openai/gpt-image-2.5-flare`.
+	 * What `nolune generate image` uses, as `<provider>/<model>`. Unset: gpt-image-2.5-flare on
+	 * the first of an OpenAI key, an OpenRouter key and the nolune plan that nolune has.
 	 */
 	imageModel?: string;
 	/**
 	 * Where memory search gets embeddings, to find facts by meaning (memory-embeddings.ts): off, or
 	 * a provider's model with its key, or a custom provider's that speaks OpenAI's API
-	 * (`custom-openai`, the model `<id>/<model>`) like Ollama, LM Studio or oMLX. Unset: OpenAI's
-	 * key, else OpenRouter's.
+	 * (`custom-openai`, the model `<id>/<model>`) like Ollama, LM Studio or oMLX, or the nolune plan's.
+	 * Unset: OpenAI's key, else OpenRouter's, else the nolune plan.
 	 */
-	embeddings?: 'off' | { provider: 'openai' | 'openrouter' | 'custom-openai'; model: string };
+	embeddings?:
+		'off' | { provider: 'openai' | 'openrouter' | 'nolune-plan' | 'custom-openai'; model: string };
 	/** Extra environment variables for commands the agent runs (e.g. FIRECRAWL_API_KEY). */
 	commandEnv?: Record<string, string>;
 	/**

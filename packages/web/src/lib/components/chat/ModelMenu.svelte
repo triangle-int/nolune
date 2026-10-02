@@ -2,7 +2,7 @@
 	/** "claude-opus-5-5 (anthropic)" → "claude-opus-5-5". */
 	export function shortModelName(name: string): string {
 		return name.replace(
-			/\s*\((anthropic|openai|openrouter|xai|custom-openai|custom-anthropic|claude-plan|chatgpt-plan)\)$/i,
+			/\s*\((anthropic|openai|openrouter|xai|custom-openai|custom-anthropic|claude-plan|chatgpt-plan|nolune-plan)\)$/i,
 			''
 		);
 	}
@@ -13,15 +13,17 @@
 	import type { Avatar } from '@nolune/core/avatars';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import EffortSlider from './EffortSlider.svelte';
+	import PlanUsageBars from './PlanUsageBars.svelte';
 	import { getI18n } from '$lib/i18n';
+	import { planUsage } from '$lib/plan-usage.svelte';
 	import { getPreferences } from '$lib/preferences.svelte';
 
 	interface Props {
 		efforts: string[];
 		effort: string;
 		onEffortChange: (effort: string) => void;
-		/** The models to choose from. */
-		presets: { id: string; name: string }[];
+		/** The models to choose from, with their provider: the nolune plan's limits show under it. */
+		presets: { id: string; name: string; provider?: string }[];
 		presetId: string;
 		onPresetChange: (id: string) => void;
 		/** Marked in the list so people can find their way back to it. */
@@ -49,6 +51,12 @@
 	/** Labels and hints by reasoning level; levels added later show as they are. */
 	const effortInfo: Record<string, { label: string; hint: string } | undefined> = m.model.efforts;
 	const preset = $derived(presets.find((p) => p.id === presetId));
+	const onPlan = $derived(preset?.provider === 'nolune-plan');
+
+	// Opened on the nolune plan: where its limits stand now.
+	$effect(() => {
+		if (open && onPlan) void planUsage.refresh();
+	});
 </script>
 
 <DropdownMenu.Root bind:open>
@@ -84,5 +92,12 @@
 			>{m.model.reasoning}</DropdownMenu.Label
 		>
 		<EffortSlider {efforts} value={effort} onchange={onEffortChange} {avatar} />
+		{#if onPlan && planUsage.current}
+			<DropdownMenu.Separator />
+			<DropdownMenu.Label class="text-xs font-normal text-muted-foreground"
+				>{m.planUsage.title}</DropdownMenu.Label
+			>
+			<PlanUsageBars usage={planUsage.current.usage} class="px-2 pt-1 pb-2" />
+		{/if}
 	</DropdownMenu.Content>
 </DropdownMenu.Root>

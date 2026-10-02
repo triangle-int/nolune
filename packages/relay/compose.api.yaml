@@ -1,0 +1,76 @@
+# nolune's API (packages/api) on the relay's server, behind the relay's Caddy, with its Postgres
+# and a daily backup of it (README.md, "nolune's API"). Added to compose.yaml by .env's
+# COMPOSE_FILE=compose.yaml:compose.api.yaml, so a relay alone is just compose.yaml. The API's
+# secrets are in api.env (api.env.example); API_DB_PASSWORD and API_HOST in .env.
+# Logs are capped at 30 MB a container, as compose.yaml's are (nolune.dev/privacy).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+services:
+  api:
+    # Built by GitHub Actions (.github/workflows/api-image.yml) and pulled, never built here:
+    # building it wants close to a gigabyte of memory, which would leave the relay short.
+    image: ${API_IMAGE:-ghcr.io/triangle-int/nolune-api:latest}
+    restart: unless-stopped
+    logging: *logging
+    env_file: api.env
+    environment:
+      DATABASE_URL: postgres://nolune:${API_DB_PASSWORD:?set API_DB_PASSWORD}@postgres:5432/nolune_api
+      ORIGIN: https://${API_HOST:-api.nolune.dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:3000/health']
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: nolune
+      POSTGRES_DB: nolune_api
+      POSTGRES_PASSWORD: ${API_DB_PASSWORD:?set API_DB_PASSWORD}
+    volumes:
+      - api-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'nolune', '-d', 'nolune_api']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # A dump of the database when it starts and each day after, kept in ./backups for
+  # API_BACKUP_DAYS days. Copy them off the server too: they're money people paid.
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      PGHOST: postgres
+      PGUSER: nolune
+      PGDATABASE: nolune_api
+      PGPASSWORD: ${API_DB_PASSWORD:?set API_DB_PASSWORD}
+      KEEP_DAYS: ${API_BACKUP_DAYS:-14}
+    volumes:
+      - ./backup-api.sh:/usr/local/bin/backup-api.sh:ro
+      - ./backups:/backups
+    entrypoint: ['sh', '/usr/local/bin/backup-api.sh']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The relay's Caddy serves the API's address too (api.caddy, which the Caddyfile imports).
+  caddy:
+    environment:
+      API_HOST: ${API_HOST:-api.nolune.dev}
+    volumes:
+      - ./api.caddy:/etc/caddy/sites/api.caddy:ro
+
+volumes:
+  api-db:

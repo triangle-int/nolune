@@ -13,6 +13,20 @@ const to = (name: string) => (name ? `, ${name}` : '');
  * by the Rich component; see src/lib/i18n/index.ts.
  */
 export const en = {
+	/** The nolune plan's limits, as bars: in the model menu, under the composer, in Models & keys. */
+	planUsage: {
+		title: 'nolune plan',
+		window: '5 hours',
+		week: 'This week',
+		/** The period's credits: what's been spent of them, and when they come again. */
+		month: 'This month',
+		credits: 'Credits left',
+		extra: (amount: string) => `+ ${amount} extra`,
+		used: (percent: number) => `${percent}% used`,
+		renews: (when: string) => `renews ${when}`,
+		resets: (when: string) => `resets ${when}`,
+		reached: (limit: string) => `${limit}: limit reached`
+	},
 	common: {
 		add: 'Add',
 		cancel: 'Cancel',
@@ -900,6 +914,10 @@ export const en = {
 			askAdmin:
 				'I need a model before I can chat. Ask whoever set up nolune to add one under Models & keys; everything else works in the meantime.',
 			choices: {
+				'nolune-plan': {
+					title: 'nolune plan',
+					about: 'Chats, pictures and memory search on one subscription, no keys needed'
+				},
 				'claude-plan': {
 					title: 'Claude plan',
 					about: 'A Pro or Max plan, through Claude Code on this computer'
@@ -915,6 +933,11 @@ export const en = {
 					about: 'Claude, GPT, Gemini and more, on one key'
 				},
 				xai: { title: 'xAI API key', about: 'Grok models, paid as you go' }
+			},
+			/** With the nolune plan offered, the rest of the choices are one step further. */
+			others: {
+				title: 'Other providers',
+				about: 'A Claude or ChatGPT plan you already have, or your own API key'
 			},
 			checkingPlan: 'Checking the sign-in…',
 			pasteKey: (label: string) => `Paste your ${label} key`,
@@ -935,6 +958,21 @@ export const en = {
 				starting: "Getting ChatGPT's sign-in page ready…",
 				tryAgain: 'Try again',
 				otherDevice: 'Signing in on another device?'
+			},
+			/** Linking nolune to the nolune plan right in the step. */
+			nolune: {
+				title: 'Link nolune to your plan',
+				about:
+					'Open the link page on any device, sign in to your nolune account, and check the code. Chats then run on your plan, with no keys.',
+				open: 'Open the link page',
+				code: 'Your code',
+				waiting: "Once it's linked there, this page goes on by itself.",
+				starting: 'Getting a code…',
+				tryAgain: 'Try again',
+				noPlanTitle: 'Start your nolune plan',
+				noPlan:
+					"The account nolune is linked to has no plan yet. Subscribe on nolune's site, then come back: this page goes on by itself once the plan has started.",
+				subscribe: 'Subscribe'
 			}
 		},
 		avatar: {
@@ -1065,6 +1103,26 @@ export const en = {
 		chatgptSignOutTitle: 'Sign out of ChatGPT?',
 		chatgptSignOutBody: 'Chats on ChatGPT plan presets stop working until someone signs in again.',
 		signedOut: 'Signed out.',
+		nolunePlan: 'nolune plan',
+		nolunePlanAbout:
+			'Chats, pictures and memory search on a subscription to nolune, with no API keys.',
+		nolunePlanLink: 'Link',
+		nolunePlanStarting: 'Getting a code…',
+		nolunePlanCheck: 'Check',
+		nolunePlanUnlink: 'Unlink',
+		nolunePlanOpen: 'Open {link} on any device, sign in, and check that it shows this code:',
+		nolunePlanLinkPage: "nolune's link page",
+		nolunePlanWaiting: 'This page goes on by itself once nolune is linked.',
+		nolunePlanLinked: 'Linked. Chats on nolune plan presets now use this plan.',
+		nolunePlanNoPlan:
+			"Linked, to an account with no plan yet. Subscribe on nolune's site: the limits show here once the plan has started.",
+		nolunePlanSubscribe: 'Subscribe',
+		nolunePlanNotLinked: "nolune isn't linked to a nolune plan.",
+		nolunePlanUnlinked: 'Unlinked.',
+		nolunePlanUnlinkedLocally:
+			"Unlinked here, but nolune's API couldn't be told: the link ends by itself unused.",
+		nolunePlanUnlinkTitle: 'Unlink the nolune plan?',
+		nolunePlanUnlinkBody: 'Chats on nolune plan presets stop working until nolune is linked again.',
 		notAt: 'Not at {path}, where {command} says it is.',
 		notInstalled: 'Not installed on this computer.',
 		checkSignIn: 'Check sign-in',
@@ -1110,12 +1168,16 @@ export const en = {
 					'Auto uses the window the server lists for the model, if it lists one (vLLM does); otherwise it stays unknown.',
 				'claude-plan': "Claude Code doesn't report it: Auto knows only its 1M-context models'.",
 				'chatgpt-plan':
-					'Auto uses the window ChatGPT lists for the model, if it lists one; otherwise it stays unknown.'
+					'Auto uses the window ChatGPT lists for the model, if it lists one; otherwise it stays unknown.',
+				'nolune-plan':
+					'Auto uses the window OpenRouter lists for the model and its main provider, as the nolune plan passes it on.'
 			},
 			onPlan: 'Runs on the Pro or Max plan Claude Code is signed in to.',
 			noClaudeCode: "Claude Code isn't installed yet: see Claude plan, above.",
 			onChatGptPlan: 'Runs on the ChatGPT plan of whoever is signed in with ChatGPT, above.',
 			noChatGpt: 'Nobody is signed in with ChatGPT yet: see ChatGPT plan, above.',
+			onNolunePlan: 'Runs on the nolune plan this nolune is linked to, above.',
+			noNolunePlan: "nolune isn't linked to a nolune plan yet: see nolune plan, above.",
 			onKey: (provider: string) => `Runs on the ${provider} API key.`,
 			noKey: (provider: string) => `No ${provider} API key yet: add one under API keys, above.`,
 			onCustom: (api: string, url: string) =>

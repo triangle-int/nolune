@@ -3,8 +3,10 @@
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
 	import CheckIcon from '@lucide/svelte/icons/check';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import KeyRoundIcon from '@lucide/svelte/icons/key-round';
 	import MessageCircleIcon from '@lucide/svelte/icons/message-circle';
+	import MoonStarIcon from '@lucide/svelte/icons/moon-star';
 	import SparklesIcon from '@lucide/svelte/icons/sparkles';
 	import type { ModelChoice, ModelKeyProvider } from '@nolune/core';
 	import { Button } from '$lib/components/ui/button';
@@ -18,15 +20,18 @@
 	interface Props {
 		isAdmin: boolean;
 		keys: { provider: ModelKeyProvider; label: string; consoleUrl: string; set: boolean }[];
+		/** Whether the nolune plan is offered: first, since it needs no keys at all. */
+		nolunePlan?: boolean;
 		/** The model is saved, or someone who can't add one carries on without. */
 		ondone: () => void;
 	}
 
-	let { isAdmin, keys, ondone }: Props = $props();
+	let { isAdmin, keys, nolunePlan = false, ondone }: Props = $props();
 	const { m } = getI18n();
 
-	type Choice = 'claude-plan' | 'chatgpt-plan' | ModelKeyProvider;
-	const CHOICES: { id: Choice; icon: typeof KeyRoundIcon }[] = [
+	type Choice = 'nolune-plan' | 'claude-plan' | 'chatgpt-plan' | ModelKeyProvider;
+	/** Everything but the nolune plan, which has a screen of its own when it's offered. */
+	const CHOICES: { id: Exclude<Choice, 'nolune-plan'>; icon: typeof KeyRoundIcon }[] = [
 		{ id: 'claude-plan', icon: SparklesIcon },
 		{ id: 'chatgpt-plan', icon: MessageCircleIcon },
 		{ id: 'anthropic', icon: KeyRoundIcon },
@@ -37,9 +42,16 @@
 	/** How many of the provider's models are offered as chips; the rest can be typed. */
 	const SHOWN = 6;
 
-	/** A key that's already set (in the environment, say) is the likely pick. */
-	let choice = $state<Choice>(untrack(() => keys.find((k) => k.set)?.provider ?? 'claude-plan'));
-	let view = $state<'choose' | 'key' | 'plan' | 'chatgpt' | 'models'>('choose');
+	/** A key that's already set (in the environment, say) is the likely pick; else the nolune plan. */
+	let choice = $state<Choice>(
+		untrack(() => keys.find((k) => k.set)?.provider ?? (nolunePlan ? 'nolune-plan' : 'claude-plan'))
+	);
+	/**
+	 * With the nolune plan offered, the step first asks between it and "Other providers", which
+	 * open the rest. A key that's set already opens them straight away: it's the likely pick.
+	 */
+	let others = $state(untrack(() => !nolunePlan || choice !== 'nolune-plan'));
+	let view = $state<'choose' | 'key' | 'plan' | 'chatgpt' | 'nolune' | 'models'>('choose');
 	let busy = $state(false);
 	let problem = $state<string | null>(null);
 	let installCommand = $state<string | null>(null);
@@ -50,11 +62,23 @@
 	let model = $state('');
 
 	const key = $derived(keys.find((k) => k.provider === choice));
-	const isPlan = $derived(choice === 'claude-plan' || choice === 'chatgpt-plan');
+	const isPlan = $derived(
+		choice === 'claude-plan' || choice === 'chatgpt-plan' || choice === 'nolune-plan'
+	);
 
 	function pick(id: Choice) {
 		choice = id;
 		problem = null;
+	}
+
+	function showOthers() {
+		others = true;
+		pick(keys.find((k) => k.set)?.provider ?? 'claude-plan');
+	}
+
+	function hideOthers() {
+		others = false;
+		pick('nolune-plan');
 	}
 
 	async function listModels() {
@@ -186,6 +210,125 @@
 		return () => clearInterval(timer);
 	});
 
+	/** Linking nolune to the nolune plan right here (/api/nolune-plan/sign-in). */
+	interface NoluneState {
+		pending: { code: string; url: string; expiresAt: number } | null;
+		error: string | null;
+		signedIn: string | null;
+		problem: string | null;
+		/** Linked, to an account with no plan yet. */
+		noPlan?: boolean;
+		/** The account page, where it subscribes. */
+		accountUrl?: string;
+	}
+	let nolune = $state<NoluneState | null>(null);
+	/**
+	 * What the step waits on: a code to be approved, or a plan for the account it linked to. Once
+	 * it has both, on to the models.
+	 */
+	let waitingForNolune = $state<'link' | 'plan' | null>(null);
+
+	/** Asks where the link is (with `check`, whether the account has a plan), or starts or cancels it. */
+	async function askNolune(
+		body?: Record<string, unknown>,
+		check = false
+	): Promise<NoluneState | null> {
+		let next: NoluneState;
+		try {
+			const res = await fetch(
+				`/api/nolune-plan/sign-in${check ? '?check=1' : ''}`,
+				body
+					? {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify(body)
+						}
+					: {}
+			);
+			if (!res.ok && res.status !== 400) throw new Error(String(res.status));
+			next = (await res.json()) as NoluneState;
+		} catch {
+			nolune = {
+				...(nolune ?? { pending: null, signedIn: null, problem: null }),
+				error: m.admin.addModel.unreachable
+			};
+			return null;
+		}
+		// An answer that comes back after someone went back is for nothing.
+		if (view !== 'nolune') return next;
+		nolune = next;
+		if (next.pending) {
+			waitingForNolune = 'link';
+			return next;
+		}
+		// Turned down or run out (it says why), or not linked after all: nothing more to wait on.
+		if (next.error || !next.signedIn) {
+			if (waitingForNolune === 'link') waitingForNolune = null;
+			return next;
+		}
+		// Just linked: whether the account has a plan is the API's to say.
+		if (waitingForNolune === 'link' && !check) return askNolune(undefined, true);
+		if (next.noPlan) {
+			waitingForNolune = 'plan';
+			return next;
+		}
+		if (waitingForNolune && check && !next.problem) {
+			waitingForNolune = null;
+			play('confirm');
+			note = next.signedIn;
+			listModels();
+		}
+		return next;
+	}
+
+	/**
+	 * nolune isn't linked, or the link doesn't work: link it here. Linked to an account with no
+	 * plan (what the plan's check said), it waits for one instead.
+	 */
+	async function toNolune(failed?: Record<string, unknown>) {
+		nolune = null;
+		waitingForNolune = null;
+		view = 'nolune';
+		if (failed?.noPlan) {
+			nolune = {
+				pending: null,
+				error: null,
+				signedIn: String(failed.signedIn ?? ''),
+				problem: null,
+				noPlan: true,
+				accountUrl: String(failed.accountUrl ?? '')
+			};
+			waitingForNolune = 'plan';
+			return;
+		}
+		// A link already under way (from Models & keys, say) is followed as it is.
+		const found = await askNolune();
+		if (found && !found.pending && !found.noPlan && view === 'nolune') await startNolune();
+	}
+
+	async function startNolune() {
+		busy = true;
+		await askNolune({ action: 'start' });
+		busy = false;
+	}
+
+	function leaveNolune() {
+		// Not waiting any more: cancelling mustn't count as linking.
+		const linking = waitingForNolune === 'link';
+		waitingForNolune = null;
+		if (linking) void askNolune({ action: 'cancel' });
+		view = 'choose';
+	}
+
+	// The code is approved on another page, maybe another device, and the plan is subscribed to
+	// on the account page: ask until it has been.
+	$effect(() => {
+		if (view !== 'nolune' || !waitingForNolune) return;
+		const check = waitingForNolune === 'plan';
+		const timer = setInterval(() => askNolune(undefined, check), check ? 4000 : 2000);
+		return () => clearInterval(timer);
+	});
+
 	/** API keys already set go straight to the models; plans are checked first. */
 	function next() {
 		problem = null;
@@ -223,6 +366,8 @@
 					listModels();
 				} else if (result.type === 'failure' && choice === 'chatgpt-plan') {
 					toChatgpt(result.data);
+				} else if (result.type === 'failure' && choice === 'nolune-plan') {
+					toNolune(result.data);
 				} else if (result.type === 'failure') {
 					problem = String(result.data?.planError ?? '');
 					installCommand = (result.data?.installCommand as string | null) ?? null;
@@ -238,39 +383,88 @@
 			<p class="text-muted-foreground">{m.welcome.model.subtitle}</p>
 		</div>
 		<input type="hidden" name="plan" value={choice} />
-		<!-- The two plans side by side, the API keys in a row under them. -->
-		<div class="grid gap-3 sm:grid-cols-6" role="radiogroup" aria-label={m.welcome.model.title}>
-			{#each CHOICES as { id, icon: Icon } (id)}
-				{@const picked = choice === id}
+		{#if !others}
+			<!-- The nolune plan, which needs nothing else, and the rest one step further. -->
+			<div class="space-y-3">
 				<button
-					type="button"
-					role="radio"
-					aria-checked={picked}
-					onclick={() => pick(id)}
-					class={cn(
-						'relative flex flex-col gap-3 rounded-3xl border bg-card p-5 text-left transition duration-200 outline-none hover:border-foreground/25 focus-visible:ring-3 focus-visible:ring-ring/30 motion-safe:hover:-translate-y-0.5',
-						id === 'claude-plan' || id === 'chatgpt-plan' ? 'sm:col-span-3' : 'sm:col-span-2',
-						picked && 'border-foreground/60 shadow-lg ring-3 ring-foreground/10'
-					)}
+					type="submit"
+					disabled={busy}
+					class="relative flex w-full flex-col items-start gap-5 rounded-3xl border border-foreground/60 bg-card p-7 text-left shadow-lg ring-3 ring-foreground/10 transition duration-200 outline-none hover:border-foreground focus-visible:ring-ring/30 disabled:opacity-80 motion-safe:hover:-translate-y-0.5 sm:p-9"
 				>
-					<Icon class="size-6" />
-					<span class="space-y-0.5">
-						<span class="block font-medium">{m.welcome.model.choices[id].title}</span>
-						<span class="block text-sm text-muted-foreground">
-							{m.welcome.model.choices[id].about}
+					<span
+						class="flex size-14 items-center justify-center rounded-2xl bg-foreground text-background"
+					>
+						<MoonStarIcon class="size-7" />
+					</span>
+					<span class="space-y-1.5 pr-8">
+						<span class="block text-2xl font-semibold tracking-tight">
+							{m.welcome.model.choices['nolune-plan'].title}
+						</span>
+						<span class="block text-muted-foreground">
+							{m.welcome.model.choices['nolune-plan'].about}
 						</span>
 					</span>
-					{#if picked}
-						<span
-							class="absolute top-4 right-4 flex size-6 items-center justify-center rounded-full bg-foreground text-background"
-						>
-							<CheckIcon class="size-3.5" />
-						</span>
-					{/if}
+					<span
+						class="absolute top-6 right-6 flex size-7 items-center justify-center rounded-full bg-foreground text-background"
+					>
+						<CheckIcon class="size-4" />
+					</span>
 				</button>
-			{/each}
-		</div>
-		<div class="flex justify-center">
+				<button
+					type="button"
+					onclick={showOthers}
+					class="flex w-full items-center gap-4 rounded-3xl border bg-card p-5 text-left transition duration-200 outline-none hover:border-foreground/25 focus-visible:ring-3 focus-visible:ring-ring/30"
+				>
+					<KeyRoundIcon class="size-6 shrink-0 text-muted-foreground" />
+					<span class="min-w-0 flex-1 space-y-0.5">
+						<span class="block font-medium">{m.welcome.model.others.title}</span>
+						<span class="block text-sm text-muted-foreground">
+							{m.welcome.model.others.about}
+						</span>
+					</span>
+					<ChevronRightIcon class="size-5 shrink-0 text-muted-foreground" />
+				</button>
+			</div>
+		{:else}
+			<!-- The two plans side by side, the API keys under them. -->
+			<div class="grid gap-3 sm:grid-cols-6" role="radiogroup" aria-label={m.welcome.model.title}>
+				{#each CHOICES as { id, icon: Icon } (id)}
+					{@const picked = choice === id}
+					<button
+						type="button"
+						role="radio"
+						aria-checked={picked}
+						onclick={() => pick(id)}
+						class={cn(
+							'relative flex flex-col gap-3 rounded-3xl border bg-card p-5 text-left transition duration-200 outline-none hover:border-foreground/25 focus-visible:ring-3 focus-visible:ring-ring/30 motion-safe:hover:-translate-y-0.5',
+							id === 'claude-plan' || id === 'chatgpt-plan' ? 'sm:col-span-3' : 'sm:col-span-2',
+							picked && 'border-foreground/60 shadow-lg ring-3 ring-foreground/10'
+						)}
+					>
+						<Icon class="size-6" />
+						<span class="space-y-0.5">
+							<span class="block font-medium">{m.welcome.model.choices[id].title}</span>
+							<span class="block text-sm text-muted-foreground">
+								{m.welcome.model.choices[id].about}
+							</span>
+						</span>
+						{#if picked}
+							<span
+								class="absolute top-4 right-4 flex size-6 items-center justify-center rounded-full bg-foreground text-background"
+							>
+								<CheckIcon class="size-3.5" />
+							</span>
+						{/if}
+					</button>
+				{/each}
+			</div>
+		{/if}
+		<div class="flex justify-center gap-2">
+			{#if others && nolunePlan}
+				<Button type="button" variant="ghost" size="lg" class="h-11" onclick={hideOthers}>
+					{m.welcome.back}
+				</Button>
+			{/if}
 			<Button type="submit" size="lg" class="h-11 min-w-44 px-8" disabled={busy}>
 				{busy ? m.welcome.model.checkingPlan : m.common.continue}
 			</Button>
@@ -485,6 +679,62 @@
 					{m.admin.chatgptAnotherAccount}
 				</Button>
 			{/if}
+		</div>
+	</div>
+{:else if view === 'nolune'}
+	<div class="space-y-6 text-center">
+		<div class="space-y-3">
+			<h2 class="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">
+				{nolune?.noPlan ? m.welcome.model.nolune.noPlanTitle : m.welcome.model.nolune.title}
+			</h2>
+			<!-- Linked already, with no plan: what's left is subscribing. -->
+			<p class="mx-auto max-w-md text-muted-foreground">
+				{nolune?.noPlan ? m.welcome.model.nolune.noPlan : m.welcome.model.nolune.about}
+			</p>
+		</div>
+		<div class="flex flex-col items-center gap-3" aria-live="polite">
+			{#if nolune?.noPlan}
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- the account page, another site -->
+				<Button
+					href={nolune.accountUrl}
+					target="_blank"
+					rel="noreferrer"
+					size="lg"
+					class="h-11 min-w-56 px-8"
+				>
+					{m.welcome.model.nolune.subscribe}
+				</Button>
+				<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			{:else if nolune?.pending}
+				<p class="text-sm text-muted-foreground">{m.welcome.model.nolune.code}</p>
+				<p class="rounded-2xl bg-muted px-6 py-3 font-mono text-3xl font-semibold tracking-[0.2em]">
+					{nolune.pending.code}
+				</p>
+				<Button
+					href={nolune.pending.url}
+					target="_blank"
+					rel="noreferrer"
+					size="lg"
+					class="h-11 min-w-56 px-8"
+				>
+					{m.welcome.model.nolune.open}
+				</Button>
+				<p class="text-sm text-muted-foreground">{m.welcome.model.nolune.waiting}</p>
+			{:else if nolune?.error}
+				<Button size="lg" class="h-11 min-w-44 px-8" disabled={busy} onclick={() => startNolune()}>
+					{m.welcome.model.nolune.tryAgain}
+				</Button>
+			{:else}
+				<p class="text-sm text-muted-foreground">{m.welcome.model.nolune.starting}</p>
+			{/if}
+			{#if nolune?.error}
+				<p class="mx-auto max-w-md text-sm text-destructive" role="alert">{nolune.error}</p>
+			{/if}
+		</div>
+		<div class="flex justify-center gap-2">
+			<Button type="button" variant="ghost" size="lg" class="h-11" onclick={leaveNolune}>
+				{m.welcome.back}
+			</Button>
 		</div>
 	</div>
 {:else if view === 'models'}

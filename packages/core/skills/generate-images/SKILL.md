@@ -96,6 +96,8 @@ prompt again with the change worked in.
 - `--background transparent` for stickers, logos, icons and sprites (PNG or WebP).
 - `--format png|jpeg|webp`, `--count 1-4`, `--out <folder or file>`.
 - `--model <provider/model>` to use another model than the configured one (`nolune config`).
+  Models differ in what they take (qualities, transparent backgrounds, how many `--image`s); the
+  command says plainly when one can't do what you asked, before anything is paid for.
 - `--dry-run` prints the prompt and settings without making anything.
 
 ## Things to know
@@ -106,8 +108,11 @@ prompt again with the change worked in.
   with `nolune view <path>` before showing it; otherwise just show it.
 - The image model gets the pictures you pass with `--image` itself, so your prompt doesn't need to
   describe what's in them, only what to make of them.
-- **No API key**: tell the person that an admin can add an OpenAI key under Models & keys in nolune
-  (or with `nolune key set openai` on this computer).
+- **Nothing to make pictures with** (no key, no plan): tell the person that an admin can add an
+  OpenAI or OpenRouter key, or link the nolune plan, under Models & keys in nolune (or with
+  `nolune key set openai` on this computer).
+- **A limit of the nolune plan**: the command says when it starts again. Tell the person; don't
+  retry.
 - **Refused by the safety system**: say so plainly. Don't reword the prompt to get around it.
 - **Photos of people**: the model keeps faces close, but not perfectly. Say so if it matters.
 

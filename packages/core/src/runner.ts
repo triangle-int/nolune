@@ -749,7 +749,9 @@ async function runToolCall(
 	const env = {
 		NOLUNE_PROFILE: slug,
 		NOLUNE_PROFILE_DIR: dir,
-		NOLUNE_CONVERSATION_ID: conv.id
+		NOLUNE_CONVERSATION_ID: conv.id,
+		// Who the command's work is for: an automation's or subagent's run is background work.
+		NOLUNE_USE: conv.hidden ? 'background' : 'person'
 	};
 
 	const blocked = await safetyCheck(
@@ -1537,7 +1539,9 @@ async function loop(conversationId: string): Promise<void> {
 					messages: await providerMessages(conv, messages),
 					compactAt: onServer ? serverCompactAt(conv.contextWindow) : null,
 					signal: abort.signal,
-					onEvent: (event) => onStreamEvent(conversationId, event)
+					onEvent: (event) => onStreamEvent(conversationId, event),
+					// Automations' and subagents' runs, which the nolune plan keeps a share of its limits from.
+					use: conv.hidden ? 'background' : 'person'
 				});
 			} catch (err) {
 				clearLive(conversationId);

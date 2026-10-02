@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { parseImageModel, parseImageSize } from './image-generation.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { imageGenerationStatus, parseImageModel, parseImageSize } from './image-generation.ts';
 
 describe('parseImageModel', () => {
 	it('reads the provider from the first segment', () => {
@@ -41,5 +41,30 @@ describe('parseImageSize', () => {
 
 	it.each(['huge', '1536', '0x0x0', ''])('refuses "%s"', (value) => {
 		expect(() => parseImageSize(value)).toThrow();
+	});
+});
+
+describe('the image model when none is set', () => {
+	afterEach(() => vi.unstubAllEnvs());
+
+	it('is the default model on the first of the keys nolune has', () => {
+		vi.stubEnv('OPENAI_API_KEY', '');
+		vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-test');
+		expect(imageGenerationStatus()).toMatchObject({
+			model: 'openrouter/openai/gpt-image-2.5-flare',
+			ready: true
+		});
+		vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+		expect(imageGenerationStatus().model).toBe('openai/gpt-image-2.5-flare');
+	});
+
+	it("is OpenAI's, saying a key is missing, when nolune has nothing to make pictures with", () => {
+		vi.stubEnv('OPENAI_API_KEY', '');
+		vi.stubEnv('OPENROUTER_API_KEY', '');
+		expect(imageGenerationStatus()).toMatchObject({
+			model: 'openai/gpt-image-2.5-flare',
+			ready: false,
+			missingKey: 'openai'
+		});
 	});
 });

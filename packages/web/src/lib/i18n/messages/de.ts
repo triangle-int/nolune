@@ -84,6 +84,19 @@ function describe(schedule: Schedule): string {
 const memories = (n: number) => p(n, { one: `${n} Erinnerung`, other: `${n} Erinnerungen` });
 
 export const de: Messages = {
+	planUsage: {
+		title: 'nolune-Abo',
+		window: '5 Stunden',
+		week: 'Diese Woche',
+		/** The period's credits: what's been spent of them, and when they come again. */
+		month: 'Dieser Monat',
+		credits: 'Guthaben übrig',
+		extra: (amount: string) => `+ ${amount} zusätzlich`,
+		used: (percent: number) => `${percent} % genutzt`,
+		renews: (when: string) => `neu am ${when}`,
+		resets: (when: string) => `wieder ab ${when}`,
+		reached: (limit: string) => `${limit}: Limit erreicht`
+	},
 	common: {
 		add: 'Hinzufügen',
 		cancel: 'Abbrechen',
@@ -953,6 +966,10 @@ export const de: Messages = {
 			askAdmin:
 				'Zum Chatten brauche ich ein Modell. Bitte die Person, die nolune eingerichtet hat, eines unter Modelle & Schlüssel hinzuzufügen; alles andere funktioniert schon.',
 			choices: {
+				'nolune-plan': {
+					title: 'nolune-Abo',
+					about: 'Chats, Bilder und Gedächtnissuche in einem Abo, ohne Schlüssel'
+				},
 				'claude-plan': {
 					title: 'Claude-Abo',
 					about: 'Ein Pro- oder Max-Abo, über Claude Code auf diesem Computer'
@@ -971,6 +988,11 @@ export const de: Messages = {
 					about: 'Claude, GPT, Gemini und mehr mit einem Schlüssel'
 				},
 				xai: { title: 'xAI-API-Schlüssel', about: 'Grok-Modelle, nach Verbrauch bezahlt' }
+			},
+			/** With the nolune plan offered, the rest of the choices are one step further. */
+			others: {
+				title: 'Andere Anbieter',
+				about: 'Ein Claude- oder ChatGPT-Abo, das du schon hast, oder dein eigener API-Schlüssel'
 			},
 			checkingPlan: 'Anmeldung wird geprüft…',
 			pasteKey: (label: string) => `Füge deinen ${label}-Schlüssel ein`,
@@ -991,6 +1013,20 @@ export const de: Messages = {
 				starting: 'Die Anmeldeseite von ChatGPT wird vorbereitet…',
 				tryAgain: 'Erneut versuchen',
 				otherDevice: 'Meldest du dich auf einem anderen Gerät an?'
+			},
+			nolune: {
+				title: 'Verknüpfe nolune mit deinem Abo',
+				about:
+					'Öffne die Verknüpfungsseite auf einem beliebigen Gerät, melde dich bei deinem nolune-Konto an und prüfe den Code. Chats laufen dann über dein Abo, ohne Schlüssel.',
+				open: 'Verknüpfungsseite öffnen',
+				code: 'Dein Code',
+				waiting: 'Sobald es dort verknüpft ist, geht diese Seite von selbst weiter.',
+				starting: 'Code wird geholt…',
+				tryAgain: 'Nochmal versuchen',
+				noPlanTitle: 'Schließ dein nolune-Abo ab',
+				noPlan:
+					'Das Konto, mit dem nolune verknüpft ist, hat noch kein Abo. Schließe es auf der Website von nolune ab und komm zurück: Diese Seite geht von selbst weiter, sobald das Abo läuft.',
+				subscribe: 'Abo abschließen'
 			}
 		},
 		avatar: {
@@ -1128,6 +1164,28 @@ export const de: Messages = {
 		chatgptSignOutBody:
 			'Chats mit ChatGPT-Abo-Voreinstellungen funktionieren erst wieder, wenn sich jemand erneut anmeldet.',
 		signedOut: 'Abgemeldet.',
+		nolunePlan: 'nolune-Abo',
+		nolunePlanAbout:
+			'Chats, Bilder und Gedächtnissuche mit einem Abo von nolune, ohne API-Schlüssel.',
+		nolunePlanLink: 'Verknüpfen',
+		nolunePlanStarting: 'Code wird geholt…',
+		nolunePlanCheck: 'Prüfen',
+		nolunePlanUnlink: 'Trennen',
+		nolunePlanOpen:
+			'Öffne {link} auf einem beliebigen Gerät, melde dich an und prüfe, dass dort dieser Code steht:',
+		nolunePlanLinkPage: 'die Verknüpfungsseite von nolune',
+		nolunePlanWaiting: 'Diese Seite geht von selbst weiter, sobald nolune verknüpft ist.',
+		nolunePlanLinked: 'Verknüpft. Chats mit nolune-Abo-Voreinstellungen nutzen jetzt dieses Abo.',
+		nolunePlanNoPlan:
+			'Verknüpft, mit einem Konto ohne Abo. Schließe es auf der Website von nolune ab: Sobald es läuft, stehen hier die Limits.',
+		nolunePlanSubscribe: 'Abo abschließen',
+		nolunePlanNotLinked: 'nolune ist mit keinem nolune-Abo verknüpft.',
+		nolunePlanUnlinked: 'Getrennt.',
+		nolunePlanUnlinkedLocally:
+			'Hier getrennt, aber nolunes API konnte nicht benachrichtigt werden: Die Verknüpfung endet von selbst, wenn sie nicht genutzt wird.',
+		nolunePlanUnlinkTitle: 'nolune-Abo trennen?',
+		nolunePlanUnlinkBody:
+			'Chats mit nolune-Abo-Voreinstellungen funktionieren erst wieder, wenn nolune erneut verknüpft ist.',
 		notAt: 'Nicht unter {path}, wo es laut {command} sein sollte.',
 		notInstalled: 'Nicht auf diesem Computer installiert.',
 		checkSignIn: 'Anmeldung prüfen',
@@ -1172,12 +1230,16 @@ export const de: Messages = {
 					'Auto verwendet das Fenster, das der Server für das Modell angibt, falls er eines angibt (vLLM tut es); sonst bleibt es offen.',
 				'claude-plan': 'Claude Code meldet es nicht: Auto kennt nur seine Modelle mit 1M Kontext.',
 				'chatgpt-plan':
-					'Auto nutzt das Fenster, das ChatGPT für das Modell angibt, falls es eines angibt; sonst bleibt es offen.'
+					'Auto nutzt das Fenster, das ChatGPT für das Modell angibt, falls es eines angibt; sonst bleibt es offen.',
+				'nolune-plan':
+					'Auto nutzt das Fenster, das OpenRouter für das Modell und seinen Hauptanbieter angibt, da das nolune-Abo die Anfragen dorthin weitergibt.'
 			},
 			onPlan: 'Läuft über das Pro- oder Max-Abo, mit dem Claude Code angemeldet ist.',
 			noClaudeCode: 'Claude Code ist noch nicht installiert: siehe „Claude-Abo“ oben.',
 			onChatGptPlan: 'Läuft über das ChatGPT-Abo der Person, die oben mit ChatGPT angemeldet ist.',
 			noChatGpt: 'Noch ist niemand mit ChatGPT angemeldet: siehe „ChatGPT-Abo“ oben.',
+			onNolunePlan: 'Läuft über das nolune-Abo, mit dem dieses nolune verknüpft ist (oben).',
+			noNolunePlan: 'nolune ist noch mit keinem nolune-Abo verknüpft: siehe „nolune-Abo“ oben.',
 			onKey: (provider: string) => `Läuft über den ${provider}-API-Schlüssel.`,
 			noKey: (provider: string) =>
 				`Noch kein ${provider}-API-Schlüssel: Füge oben unter „API-Schlüssel“ einen hinzu.`,

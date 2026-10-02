@@ -36,6 +36,8 @@ export const paths = {
 	 * id, and each account's registration and tokens. Readable by this user only.
 	 */
 	chatgpt: join(home, 'chatgpt.json'),
+	/** The token that links this gateway to the nolune plan (nolune-plan.ts). Readable by this user only. */
+	nolunePlan: join(home, 'nolune-plan.json'),
 	/**
 	 * nolune's newest release, as the gateway last heard from GitHub (updates.ts). The macOS app
 	 * reads it too, for its menu.

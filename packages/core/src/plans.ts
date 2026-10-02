@@ -4,7 +4,9 @@ import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
 
 /*
  * Chats on someone's subscription plan instead of an API key: the Claude plan (claude-plan.ts,
- * through Claude Code) and the ChatGPT plan (chatgpt-plan.ts, through Sign in with ChatGPT). What
+ * through Claude Code), the ChatGPT plan (chatgpt-plan.ts, through Sign in with ChatGPT) and the
+ * nolune plan (nolune-plan.ts, a subscription to nolune's own API, which covers pictures and
+ * embeddings too). What
  * people see of them is shared: one kind of error, one way of saying who a plan is signed in as,
  * and one status for Models & keys, `nolune <plan> status` and adding a preset.
  *
@@ -16,7 +18,7 @@ import type { Effort, ModelReply, StreamEvent, ToolCall } from './models.ts';
  * This module imports neither plan, so both can build on it.
  */
 
-export const PLANS = ['claude-plan', 'chatgpt-plan'] as const;
+export const PLANS = ['claude-plan', 'chatgpt-plan', 'nolune-plan'] as const;
 export type Plan = (typeof PLANS)[number];
 
 export function isPlan(provider: string): provider is Plan {

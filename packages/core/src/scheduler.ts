@@ -276,6 +276,8 @@ function startScriptRun(run: TriggerRun): void {
 				NOLUNE_PROFILE: profile.slug,
 				NOLUNE_PROFILE_DIR: dir,
 				NOLUNE_TRIGGER_ID: t.id,
+				// Nobody waits on a trigger's script: the nolune plan counts it as background work.
+				NOLUNE_USE: 'background',
 				...(run.payload ? { NOLUNE_PAYLOAD: run.payload } : {})
 			}),
 			signal: new AbortController().signal,

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type OpenAI from 'openai';
 import { configuredApiKey, readConfig, updateConfig, type Config } from './config.ts';
 import { findCustomProvider, openaiUrl, splitModel } from './custom-providers.ts';
+import { nolunePlanApiUrl, nolunePlanToken } from './nolune-plan.ts';
 import { openaiBaseUrl } from './openai.ts';
 import { openrouterBaseUrl } from './openrouter.ts';
 import { memoryDir, placeName, type MemoryPlace } from './paths.ts';
@@ -21,7 +22,8 @@ export const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 /** OpenAI's model, as each provider names it. */
 export const DEFAULT_EMBEDDING_MODELS = {
 	openai: DEFAULT_EMBEDDING_MODEL,
-	openrouter: `openai/${DEFAULT_EMBEDDING_MODEL}`
+	openrouter: `openai/${DEFAULT_EMBEDDING_MODEL}`,
+	'nolune-plan': `openai/${DEFAULT_EMBEDDING_MODEL}`
 } as const;
 /** Hidden, like the fact dates: `nolune memory` refuses names starting with a dot. */
 const FILE = '.embeddings.json';
@@ -31,7 +33,12 @@ const BATCH_TIMEOUT_MS = 60_000;
 
 export type EmbeddingSetting = NonNullable<Config['embeddings']>;
 export type EmbeddingProvider = Exclude<EmbeddingSetting, 'off'>['provider'];
-const EMBEDDING_PROVIDERS: EmbeddingProvider[] = ['openai', 'openrouter', 'custom-openai'];
+const EMBEDDING_PROVIDERS: EmbeddingProvider[] = [
+	'openai',
+	'openrouter',
+	'nolune-plan',
+	'custom-openai'
+];
 
 /** Where embeddings come from. */
 export interface EmbeddingSource {
@@ -60,6 +67,15 @@ function fromProvider(provider: EmbeddingProvider, model: string): EmbeddingSour
 		const name = `${custom.name}/${bare}`;
 		return { url: openaiUrl(custom.url), model: bare, key: custom.key ?? null, name };
 	}
+	if (provider === 'nolune-plan') {
+		let token: string;
+		try {
+			token = nolunePlanToken();
+		} catch {
+			return null;
+		}
+		return { url: `${nolunePlanApiUrl()}/v1`, model, key: token, name: `${provider}/${model}` };
+	}
 	const found = configuredApiKey(provider);
 	if (!found) return null;
 	const url = provider === 'openai' ? openaiBaseUrl() : openrouterBaseUrl();
@@ -68,14 +84,17 @@ function fromProvider(provider: EmbeddingProvider, model: string): EmbeddingSour
 
 /**
  * The configured source, or nolune's own choice when none is: OpenAI's model with OpenAI's key, else
- * the same model through OpenRouter. Null when it's off, or its key or custom provider is missing.
+ * the same model through OpenRouter, else through the nolune plan, last since the keys are paid for
+ * already and don't count against the plan's credits. Null when it's off, or its key or custom
+ * provider is missing.
  */
 export function embeddingSource(configured = setting()): EmbeddingSource | null {
 	if (configured === 'off') return null;
 	if (configured) return fromProvider(configured.provider, configured.model);
 	return (
 		fromProvider('openai', DEFAULT_EMBEDDING_MODELS.openai) ??
-		fromProvider('openrouter', DEFAULT_EMBEDDING_MODELS.openrouter)
+		fromProvider('openrouter', DEFAULT_EMBEDDING_MODELS.openrouter) ??
+		fromProvider('nolune-plan', DEFAULT_EMBEDDING_MODELS['nolune-plan'])
 	);
 }
 
@@ -115,15 +134,18 @@ export function embeddingStatus(): string {
 		const { provider: id } = splitModel(configured.model);
 		return `${configured.provider}/${configured.model}, but there is no custom provider "${id}" that speaks OpenAI's API (nolune provider list)`;
 	}
+	if (configured?.provider === 'nolune-plan') {
+		return `${configured.provider}/${configured.model}, but nolune isn't linked to a nolune plan (nolune nolune-plan setup)`;
+	}
 	if (configured) {
 		return `${configured.provider}/${configured.model}, but there is no ${configured.provider} key`;
 	}
-	return "off: no OpenAI or OpenRouter key (or a custom provider's model: nolune config set embeddings custom-openai/<provider>/<model>)";
+	return "off: no OpenAI or OpenRouter key, nor a nolune plan (or a custom provider's model: nolune config set embeddings custom-openai/<provider>/<model>)";
 }
 
 /**
  * `nolune config set embeddings`: `auto`, `off`, or `<provider>/<model>`, where the provider is
- * openai, openrouter or custom-openai, whose model is `<id>/<model>` on a custom provider
+ * openai, openrouter, nolune-plan or custom-openai, whose model is `<id>/<model>` on a custom provider
  * `nolune provider add` saved that speaks OpenAI's API. Unset means auto.
  */
 export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefined {
@@ -140,7 +162,7 @@ export function parseEmbeddingSetting(value: string): EmbeddingSetting | undefin
 	const model = word.slice(slash + 1);
 	if (slash < 0 || !EMBEDDING_PROVIDERS.includes(provider) || !model) {
 		throw new Error(
-			'embeddings are auto, off, openai/<model>, openrouter/<model>, or custom-openai/<provider>/<model> for a model of a custom provider (Ollama, LM Studio...)'
+			'embeddings are auto, off, openai/<model>, openrouter/<model>, nolune-plan/<model>, or custom-openai/<provider>/<model> for a model of a custom provider (Ollama, LM Studio...)'
 		);
 	}
 	if (provider === 'custom-openai') {

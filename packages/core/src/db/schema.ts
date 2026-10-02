@@ -198,7 +198,8 @@ export const modelPreset = sqliteTable('model_preset', {
 			'custom-openai',
 			'custom-anthropic',
 			'claude-plan',
-			'chatgpt-plan'
+			'chatgpt-plan',
+			'nolune-plan'
 		]
 	}).notNull(),
 	model: text('model').notNull(),
@@ -286,7 +287,8 @@ export const conversation = sqliteTable(
 				'custom-openai',
 				'custom-anthropic',
 				'claude-plan',
-				'chatgpt-plan'
+				'chatgpt-plan',
+				'nolune-plan'
 			]
 		}).notNull(),
 		model: text('model').notNull(),
@@ -423,7 +425,8 @@ export const message = sqliteTable(
 				'custom-openai',
 				'custom-anthropic',
 				'claude-plan',
-				'chatgpt-plan'
+				'chatgpt-plan',
+				'nolune-plan'
 			]
 		}),
 		/** Replies: the model that wrote it. */

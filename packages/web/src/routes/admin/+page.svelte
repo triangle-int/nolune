@@ -19,6 +19,7 @@
 	import IdleCompaction from '$lib/components/admin/IdleCompaction.svelte';
 	import CustomProviderRow from '$lib/components/admin/CustomProviderRow.svelte';
 	import MemorySearch from '$lib/components/admin/MemorySearch.svelte';
+	import NolunePlanRow from '$lib/components/admin/NolunePlanRow.svelte';
 	import PresetForm from '$lib/components/admin/PresetForm.svelte';
 	import CopyButton from '$lib/components/chat/CopyButton.svelte';
 	import { formatTokens } from '$lib/format';
@@ -53,6 +54,9 @@
 	const claudeResult = $derived(form?.plan === 'claude-plan' ? form : null);
 	const chatgptResult = $derived(form?.plan === 'chatgpt-plan' ? form : null);
 	const chatgptError = $derived(chatgptResult?.planError ?? chatgpt.signInError);
+	const nolunePlanResult = $derived(form?.plan === 'nolune-plan' ? form : null);
+	/** Whether nolune is linked to the nolune plan, for its presets. */
+	const nolunePlanLinked = $derived(!!data.nolunePlan?.status.signedIn);
 
 	// The sign-in finishes in a browser, on this computer or another device: ask until it has.
 	$effect(() => {
@@ -228,6 +232,9 @@
 					</p>
 				</div>
 				<ul class="overflow-hidden rounded-2xl border">
+					{#if data.nolunePlan}
+						<NolunePlanRow plan={data.nolunePlan} result={nolunePlanResult} />
+					{/if}
 					<li class="space-y-3 border-b px-4 py-3 text-sm last:border-b-0">
 						<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
 							<span
@@ -557,6 +564,7 @@
 									customProviders={data.customProviders}
 									claudeInstalled={data.claude.installed}
 									chatgptSignedIn={!!chatgptSignedIn}
+									{nolunePlanLinked}
 									{preset}
 									problem={form?.editId === preset.id ? form.editError : null}
 									class="pt-4 sm:pl-12"
@@ -575,6 +583,7 @@
 					customProviders={data.customProviders}
 					claudeInstalled={data.claude.installed}
 					chatgptSignedIn={!!chatgptSignedIn}
+					{nolunePlanLinked}
 					problem={form?.addError}
 					startOpen={data.presets.length === 0}
 				/>
