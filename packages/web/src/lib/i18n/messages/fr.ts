@@ -334,6 +334,8 @@ export const fr: Messages = {
 			`${ttl === '5m' ? 'Plus de 5 minutes se sont écoulées' : 'Plus d’une heure s’est écoulée'} depuis l’étape précédente : la discussion en cache a expiré et a été traitée à nouveau (plus lent et plus coûteux).`,
 		cacheBroken:
 			'Du contexte qui aurait dû venir du cache a été traité à nouveau (plus lent et plus coûteux). Cela arrive une fois quand on change de modèle ou de niveau de réflexion, qu’on déplace la discussion dans un autre dossier ou qu’on modifie son dossier.',
+		cacheElsewhere:
+			'Du contexte qui aurait dû venir du cache a été traité à nouveau (plus lent et plus coûteux). OpenAI garde le cache sur l’un de ses serveurs, et cette requête est sans doute arrivée sur un autre : nolune ne peut pas choisir lequel. Cela arrive aussi une fois quand on change de niveau de réflexion, qu’on déplace la discussion dans un autre dossier ou qu’on modifie son dossier.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} en cache`,
 		contextUsed: (used: string, window: string) =>
@@ -345,6 +347,10 @@ export const fr: Messages = {
 	steps: {
 		thinking: 'Réflexion',
 		thinkingDots: 'Réflexion…',
+		summarizing: 'Résumé de la conversation jusqu’ici',
+		summarized: 'A résumé la conversation jusqu’ici',
+		summaryHint:
+			'La conversation était devenue trop longue pour le modèle : il continue à partir de ce résumé.',
 		running: (command: string) => `Exécution de ${command}`,
 		runningACommand: 'Exécution d’une commande',
 		ranACommand: 'A exécuté une commande',
@@ -1052,7 +1058,9 @@ export const fr: Messages = {
 				'Fait tourner les discussions et les automatisations sur les modèles OpenAI, et crée les images de la page Images et celles que dessine l’agent.',
 			openrouter:
 				'Fait tourner les discussions et les automatisations sur les modèles que propose OpenRouter (Claude, GPT, Gemini, DeepSeek et bien d’autres), avec une seule clé et ses crédits.',
-			xai: 'Fait tourner les discussions et les automatisations sur les modèles Grok de xAI.'
+			xai: 'Fait tourner les discussions et les automatisations sur les modèles Grok de xAI.',
+			firecrawl:
+				'Permet à l’agent de chercher sur le web et de lire des pages. Sans clé, il utilise l’offre gratuite de Firecrawl, limitée chaque jour pour cet ordinateur.'
 		},
 		withoutIt: {
 			anthropic:
@@ -1061,13 +1069,16 @@ export const fr: Messages = {
 				'Les discussions et les automatisations sur les modèles OpenAI cessent de fonctionner, et nolune ne peut plus créer d’images, jusqu’à l’ajout d’une nouvelle clé.',
 			openrouter:
 				'Les discussions et les automatisations sur les modèles OpenRouter cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.',
-			xai: 'Les discussions et les automatisations sur les modèles Grok cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.'
+			xai: 'Les discussions et les automatisations sur les modèles Grok cessent de fonctionner jusqu’à l’ajout d’une nouvelle clé.',
+			firecrawl:
+				'Les recherches sur le web reviennent à l’offre gratuite de Firecrawl, avec sa limite quotidienne.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`Enregistrée dans nolune${hint ? `, se termine par ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`Depuis la variable d’environnement ${variable}${hint ? `, se termine par ${hint}` : ''}`,
 		notSet: 'Non définie',
+		notSetFree: 'Non définie : offre gratuite limitée par jour',
 		replace: 'Remplacer',
 		pasteKey: (provider: string) => `Collez la clé d’API ${provider}`,
 		keyLabel: (provider: string) => `Clé d’API ${provider}`,

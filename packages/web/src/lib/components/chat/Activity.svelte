@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import ListCollapseIcon from '@lucide/svelte/icons/list-collapse';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { getI18n } from '$lib/i18n';
 	import { getPreferences } from '$lib/preferences.svelte';
@@ -111,13 +112,15 @@
 		<ol
 			class="relative mt-3 mb-1 space-y-3 pl-7 before:absolute before:top-2.5 before:bottom-2.5 before:left-[9px] before:w-px before:bg-border"
 		>
-			{#each part.steps as step, i (step.type === 'command' ? `command-${step.id}` : `thinking-${i}`)}
+			{#each part.steps as step, i (step.type === 'command' ? `command-${step.id}` : `${step.type}-${i}`)}
 				<li class="relative min-w-0">
 					<span
 						class="absolute top-0.5 -left-7 flex size-5 items-center justify-center bg-background text-muted-foreground"
 					>
 						{#if step.type === 'command'}
 							<StepIcon name={step.icon} class="size-3.5" />
+						{:else if step.type === 'compaction'}
+							<ListCollapseIcon class="size-3.5" />
 						{:else}
 							<span class="size-1.5 rounded-full bg-muted-foreground/60"></span>
 						{/if}
@@ -127,6 +130,28 @@
 							<Markdown text={step.text} class="text-sm leading-relaxed text-muted-foreground" />
 						{:else}
 							<span class="text-sm text-muted-foreground">{m.steps.thinkingDots}</span>
+						{/if}
+					{:else if step.type === 'compaction'}
+						{#if step.summary.trim()}
+							<Collapsible.Root>
+								<Collapsible.Trigger
+									class="group/summary flex max-w-full min-w-0 items-center gap-1 text-left text-sm text-muted-foreground hover:text-foreground"
+								>
+									<span class="min-w-0 truncate">{m.steps.summarized}</span>
+									<ChevronRightIcon
+										class="size-3.5 shrink-0 transition-transform group-data-[state=open]/summary:rotate-90"
+									/>
+								</Collapsible.Trigger>
+								<Collapsible.Content>
+									<p class="mt-1.5 text-xs text-muted-foreground">{m.steps.summaryHint}</p>
+									<Markdown
+										text={step.summary}
+										class="mt-1.5 text-sm leading-relaxed text-muted-foreground"
+									/>
+								</Collapsible.Content>
+							</Collapsible.Root>
+						{:else}
+							<span class="text-sm text-muted-foreground">{m.steps.summarizing}…</span>
 						{/if}
 					{:else}
 						<CommandStep

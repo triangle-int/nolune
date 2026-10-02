@@ -341,6 +341,8 @@ export const es: Messages = {
 			`Pasaron más de ${ttl === '5m' ? '5 minutos' : 'una hora'} desde el paso anterior, así que la conversación en caché caducó y se procesó de nuevo (más lento y más caro).`,
 		cacheBroken:
 			'El contexto que debía salir de la caché se procesó de nuevo (más lento y más caro). Pasa una vez al cambiar el modelo o el nivel de razonamiento, mover el chat a otra carpeta o cambiar su carpeta.',
+		cacheElsewhere:
+			'El contexto que debía salir de la caché se procesó de nuevo (más lento y más caro). OpenAI guarda la caché en uno de sus servidores, y esta petición probablemente llegó a otro: nolune no puede elegir cuál. También pasa una vez al cambiar el nivel de razonamiento, mover el chat a otra carpeta o cambiar su carpeta.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} en caché`,
 		contextUsed: (used: string, window: string) =>
@@ -352,6 +354,10 @@ export const es: Messages = {
 	steps: {
 		thinking: 'Pensando',
 		thinkingDots: 'Pensando…',
+		summarizing: 'Resumiendo la conversación hasta ahora',
+		summarized: 'Resumió la conversación hasta ahora',
+		summaryHint:
+			'La conversación se había vuelto demasiado larga para el modelo, así que continúa a partir de este resumen.',
 		running: (command: string) => `Ejecutando ${command}`,
 		runningACommand: 'Ejecutando un comando',
 		ranACommand: 'Ejecutó un comando',
@@ -1049,7 +1055,9 @@ export const es: Messages = {
 				'Hace funcionar los chats y las automatizaciones con modelos de OpenAI, y crea las imágenes de la página Imágenes y las que dibuja el agente.',
 			openrouter:
 				'Hace funcionar los chats y las automatizaciones con los modelos que ofrece OpenRouter (Claude, GPT, Gemini, DeepSeek y muchos más), con una sola clave y sus créditos.',
-			xai: 'Hace funcionar los chats y las automatizaciones con los modelos Grok de xAI.'
+			xai: 'Hace funcionar los chats y las automatizaciones con los modelos Grok de xAI.',
+			firecrawl:
+				'Permite al agente buscar en la web y leer páginas. Sin clave usa el plan gratuito de Firecrawl, con un límite diario para este ordenador.'
 		},
 		withoutIt: {
 			anthropic:
@@ -1058,13 +1066,16 @@ export const es: Messages = {
 				'Los chats y las automatizaciones con modelos de OpenAI dejan de funcionar, y nolune no puede crear imágenes, hasta que se añada una clave nueva.',
 			openrouter:
 				'Los chats y las automatizaciones con modelos de OpenRouter dejan de funcionar hasta que se añada una clave nueva.',
-			xai: 'Los chats y las automatizaciones con modelos Grok dejan de funcionar hasta que se añada una clave nueva.'
+			xai: 'Los chats y las automatizaciones con modelos Grok dejan de funcionar hasta que se añada una clave nueva.',
+			firecrawl:
+				'Las búsquedas en la web vuelven al plan gratuito de Firecrawl, con su límite diario.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`Guardada en nolune${hint ? `, termina en ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`De la variable de entorno ${variable}${hint ? `, termina en ${hint}` : ''}`,
 		notSet: 'Sin configurar',
+		notSetFree: 'Sin configurar: plan gratuito con límite diario',
 		replace: 'Reemplazar',
 		pasteKey: (provider: string) => `Pega la clave de API de ${provider}`,
 		keyLabel: (provider: string) => `Clave de API de ${provider}`,

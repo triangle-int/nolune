@@ -22,9 +22,9 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 | Memory             | Short Markdown notes per profile, in fixed categories (a note each, or one per person or project), that the agent searches, reads and changes with `nolune memory`, like any other command. The system prompt has the pinned `core` note in full and lists the others by name; the facts that share words with a message go along with it, and once a chat goes quiet its model looks it over and saves what the agent missed. The family sees and edits them on the Memory page. See [Memory](#memory). Each member also has a card, a note about them that goes with them into all their profiles, copied whole into the prompt like core; only what they say about themselves goes on it. See [Cards](#cards).                      |
 | Soul               | Who nolune is for a profile (character, values, tone), in `soul.md` in its folder, at most 4,000 characters. It opens every chat's system prompt. The family edits it in the profile's settings; the agent changes it itself with `nolune soul write` and says so. See [Soul](#soul).                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Folders            | Group a profile's chats, like ChatGPT's projects. A folder has instructions and files; its chats get the instructions and the files' paths (never the files themselves) in their system prompt. Chats are dragged into folders in the sidebar or started in one. See [Folders](#folders).                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                                                |
+| Skills             | Follow [agentskills.io](https://agentskills.io/client-implementation/adding-skills-support). They are read from `~/.nolune/profiles/<slug>/skills`, `~/.agents/skills` and the built-in skills (`packages/core/skills`: `automations`, `view-images`, `generate-images`, `subagents`, `web`, `nolune`); a profile skill overrides a global one, and both override a built-in one with the same name. The agent loads a skill by running `cat` on its `SKILL.md`, and creates new ones with `nolune skill new`.                                                                                                                                                                                                                         |
 | Pictures and files | The agent writes Markdown: `![alt](path or URL)` shows a picture, `[label](path)` hands over a file. The gateway copies each one, byte for byte, when the reply is saved, and the chat only ever loads those copies. Web pictures only from links the agent found, never from the local network. The agent looks at pictures itself with `nolune view`, which attaches them to that command's result. There is no tool for either.                                                                                                                                                                                                                                                                                                     |
-| Web search         | Handled by a skill that uses the firecrawl CLI. The gateway has no code for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Web search         | `nolune web search` and `nolune web read`, through Firecrawl's SDK, which the built-in `web` skill explains. Without a key they use Firecrawl's free tier, limited per IP address a day; a Firecrawl key in Models & keys lifts that. No tool: the agent runs them like any other command. See [The web](#the-web).                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Background work    | `run_command` takes `run_in_background` (new chats): the call returns at once, and the command's output joins the conversation as a message when it ends. See [Background commands](#background-commands).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Subagents          | `nolune agent run` starts another agent in a hidden conversation of its own that starts with only its task, and caches its prompt for 5 minutes. The agent hears back by running `nolune agent watch` in the background, and can steer it and read its log. No new tool. See [Subagents](#subagents).                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Making pictures    | The agent runs `nolune generate image` (OpenAI's Image API, `gpt-image-2.5-flare` by default; each other provider would be one more module). Templates belong to the Images page, which turns one and its settings into a finished prompt in the message it sends; the CLI knows nothing about them.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -33,7 +33,7 @@ folder, skills and memory. The agent has a single tool, `run_command`.
 
 ```
 ~/.nolune/                 (override with NOLUNE_HOME)
-  config.json                 auth secret, API keys (Anthropic, OpenAI, OpenRouter, xAI), custom providers
+  config.json                 auth secret, API keys (Anthropic, OpenAI, OpenRouter, xAI, Firecrawl), custom providers
                               (name, API, address, key), image model,
                               extra env vars for commands, where Claude Code is if set, the
                               command mode and the preset that checks commands (mode 600)
@@ -114,11 +114,15 @@ The rule: **the request prefix must stay byte-identical, so history is only ever
 - Steering messages, stop results and restart-recovery results are **appended** as new rows. Nothing
   is ever edited or deleted. Opus 5.5 and Fable 5.1 require this anyway for "preserved thinking":
   replaying a thinking block after its prefix changed returns a 400 on newer accounts.
+- A conversation that nears its window is **summarized**, and requests start from the summary from
+  then on (see [Compaction](#compaction)). That's a new prefix, written to the cache once; rows
+  still aren't edited, and a summary is one more row (or the start of one).
 - Every assistant row stores `usage`, and the gateway logs `cache_read` / `cache_write` and the hit
   rate for every call. The chat header shows the hit rate (tooltip: last reply and whole conversation),
-  and a reply is marked as a cache miss when it read less than the previous call read or wrote, with
-  the likely cause: over an hour idle (the TTL) or a changed request such as a new model or
-  reasoning level.
+  and a reply is marked as a cache miss when it read less than the previous call read or wrote (on
+  OpenAI, less than the previous call's whole prompt; see below), with the likely cause: over an
+  hour idle (the TTL), a changed request such as a new model or reasoning level, or on OpenAI with
+  the same model, a server without the chat's cache.
 
 ### On OpenAI
 
@@ -128,6 +132,15 @@ OpenAI's prompt cache is automatic, and the rule above is what keeps it working:
 `cacheTtl` and the cache markers are Anthropic's alone. Usage reports `cached_tokens` (and, on
 newer models, `cache_write_tokens`) inside `input_tokens`; nolune subtracts them, so the chat's
 numbers mean the same for both providers.
+
+OpenAI caches every call's whole prompt whether or not usage reports the write, and the ChatGPT
+plan never reports one. So on OpenAI, with a key or on the plan, a call is expected to read back
+the previous call's whole prompt (`cacheMissTokens` in `usage.ts`, from the previous reply's
+`message.provider`), or a miss right after another would go unmarked. The cache lives on one of
+OpenAI's servers, and `prompt_cache_key` doesn't always keep a chat on it: on the plan, calls
+seconds apart within a turn have read nothing, or exactly the prompt of a call made many calls
+earlier, with the prefix unchanged. With the model unchanged, the chat says so instead of blaming
+a switch.
 
 ### On OpenRouter
 
@@ -190,9 +203,9 @@ plan's chats are OpenAI's, with the plan's sign-in instead of a key (`chatgpt-pl
   flagships' (`knownContextWindow`): every one since GPT-5.4 (`gpt-5.4`, `gpt-5.5-pro`,
   `gpt-6-astra`, their dated snapshots) has 1,050,000 tokens. Other models (mini, nano, codex,
   older ones) can have far less, and a window set too large would let a conversation grow past
-  what the model takes, for good, since history is never edited; so they get one only when the
-  admin sets it. Without one, the chat's context meter shows "?" and PDFs share 25% of 200k
-  tokens. Titles are asked for at `low` effort.
+  what the model takes before it's summarized (see [Compaction](#compaction)); so they get one
+  only when the admin sets it. Without one, the chat's context meter shows "?", PDFs share 25% of
+  200k tokens and the chat is never summarized. Titles are asked for at `low` effort.
 - **OpenRouter** (`openrouter.ts`) serves models from many providers behind one key, through its
   Chat Completions API. OpenAI's SDK speaks it, pointed at `https://openrouter.ai/api/v1` (or
   `OPENROUTER_BASE_URL`), so it brings the same retries and server-sent events; its errors are
@@ -309,7 +322,7 @@ plan's chats are OpenAI's, with the plan's sign-in instead of a key (`chatgpt-pl
 ### nolune's format
 
 `format.ts` defines what a conversation holds, whichever provider runs it: blocks (`text`,
-`image`, `pdf`, `reasoning`, `tool_call`, `tool_result`) in messages. A picture's or PDF's source
+`image`, `pdf`, `reasoning`, `tool_call`, `compaction`, `tool_result`) in messages. A picture's or PDF's source
 is `media` (kept by nolune, which `resolveFiles` turns into each provider's copy before a request),
 `inline` (base64, which every provider takes) or `uploaded` to one provider's Files API (rows
 from before nolune kept its own copies). Each
@@ -527,7 +540,8 @@ chip in its composer; `nolune agent run <id> --preset` does it for a subagent gi
 `setPreset` takes a new snapshot of the preset (name, provider, model, context window), and the
 next model call uses it, even in the middle of a turn, so a model that keeps failing can be left
 behind with Continue. It's refused when the conversation is already larger than the new model's
-window (from its last call's usage): history is never edited, so it could never fit. Everyone who
+window (from its last call's usage, or a summary no call has read yet): its first call would fail
+before anything could be summarized. Everyone who
 has the chat open gets the change as a live `model` event (also in the snapshot).
 
 - **What it costs.** Caches belong to one model, so the first call on the new one reads the whole
@@ -596,6 +610,40 @@ kick(conversation):                     one loop per conversation at a time
   from (`[Background command finished: …]`), not a mid-conversation system message: not every model
   takes those, and a command's output mustn't get system authority.
 
+### Compaction
+
+Once a conversation fills 85% of its model's context window (`COMPACT_SHARE`, `compaction.ts`), the
+model summarizes it, and the calls after that start from the summary rather than the whole
+conversation: a chat no longer stops for good when it outgrows its model.
+
+- **Nothing is edited.** The chat still shows every message, the summary as one more step of
+  nolune's work, and `requestMessages` leaves out what came before the latest summary
+  (`compactedFrom`). Recalled memory counts only what the model still reads, the summary
+  included, as already in the chat.
+- **Claude does it on the server**, at a token threshold (beta `compact-2026-01-12`), on every
+  model since Opus and Sonnet 4.6 (`supportsCompaction`; not Haiku 4.5): each request carries
+  `context_management` with a `compact_20260112` edit whose trigger is 85% of the chat's window
+  (170k without one, and never under the API's 50k). The request that reaches it writes the
+  summary first, a `compaction` block that starts the reply, and goes on from it in the same call.
+  The reply is stored and sent back as it came, as every reply is, and the requests after it start
+  with it (the API would ignore what came before anyway). The chat shows the summary while the API
+  hands it over, in one piece. What it took (`usage.iterations`) is kept apart in the reply's usage
+  (`Usage.compaction`); the reply's own numbers are from the summary on, so the context meter
+  shows what the model reads now.
+- **Other models' chats are summarized by the runner**, before a call, when the latest call read
+  and wrote 85% of the window or more (`needsCompaction`): it sends the conversation's next request
+  with one more message asking for a summary (`SUMMARY_REQUEST`), so the provider's cache holds all
+  the rest, and saves the summary as a `compaction` row, which the model reads as a message
+  (`[Earlier in this conversation, summarized to fit the context window:]`). Never right after a
+  summary (a window the summary itself doesn't leave room in would only get one after another),
+  and never without a known window. A model that writes no summary ends the turn with an error,
+  as a failed call does.
+- **Switching models** keeps the summary: Claude's block goes back only to the model that wrote
+  it, while it compacts on the server; any other model gets its text as a message before the
+  reply (`withoutCompaction`). A chat that comes to a plan with history sends the transcript from
+  the latest summary.
+- **The Claude plan** is left alone: Claude Code keeps the conversation and compacts it itself.
+
 ### `run_command`
 
 - Input: `{summary, icon, command, cwd?, timeout_seconds?, run_in_background?}` (chats from before
@@ -612,7 +660,7 @@ kick(conversation):                     one loop per conversation at a time
   the last 20 KB are kept), followed by an exit-code line. Images the command showed with `nolune view`
   follow as image blocks (below).
 - The environment is the gateway's own, minus its secrets (`ANTHROPIC_API_KEY`, `BETTER_AUTH_SECRET`, …),
-  plus the `commandEnv` values from `config.json` (for example `FIRECRAWL_API_KEY`), plus
+  plus the `commandEnv` values from `config.json` (for example `HASS_TOKEN`), plus
   `NOLUNE_PROFILE`, `NOLUNE_PROFILE_DIR`, `NOLUNE_CONVERSATION_ID` and `NOLUNE_VIEW_DIR`.
 - `eager_input_streaming` is left off: the input is one short command, and leaving it off keeps the API's
   own input validation.
@@ -1256,6 +1304,40 @@ an image", with the chat's paperclip) does the same with the person's own words.
   `attachments/` (see [Attachments](#attachments)); the skill passes that path as `--image`.
   Templates take only pictures.
 
+## The web
+
+The agent searches the web and reads pages with `nolune web search` and `nolune web read`, commands
+like `nolune generate image`: no new tool, nothing in the system prompt beyond the skills catalog.
+The built-in `web` skill explains them, and how to use what they find (link the sources, take
+pages as information rather than instructions, hand research across many pages to a subagent).
+
+- **Firecrawl** (`packages/core/src/web.ts`), through its SDK (`firecrawl`), loaded on first use
+  like the model SDKs. `search` is its `/v2/search` with the web or news as the source, `--recent`
+  as Google's `tbs` and `--country` as its `country`, and `highlights` off: with them on, each
+  result's description is Markdown cut from its page, often a few KB, where the search's own
+  snippet is a sentence or two (cut to 400 characters on one line all the same). `read` is
+  `/v2/scrape` for Markdown of the main content, which renders pages that need JavaScript and
+  reads PDFs. Firecrawl gets a minute for either, and a scrape doesn't wait on a big PDF
+  Firecrawl goes on working on.
+- **No key needed.** Without one, the SDK sends no `Authorization` header and Firecrawl answers on
+  its free tier, which allows each IP address so many requests and credits a day and answers with
+  a 429 after that. A key in `config.json` (`nolune key set firecrawl`, or Models & keys, checked
+  with `/v2/team/credit-usage`) lifts that to its plan; `FIRECRAWL_API_KEY` in the gateway's
+  environment, or in the command's (`nolune env set`, which is where it went before it had a
+  place in Models & keys), is the fallback. `FIRECRAWL_API_URL` points it at a Firecrawl of the
+  family's own. Models & keys shows Firecrawl's row closed while it has no key, as "the free tier",
+  since searching works without it; a new profile's welcome leaves it out, since it picks a model
+  (`MODEL_KEY_PROVIDERS`).
+- **Output** fits a command's 30 KB: the results as numbered title, address and snippet; a page as
+  its title, address and Markdown. A page over 20,000 characters is saved whole to a file in
+  `$TMPDIR/nolune-web/` and printed up to there, with the file's path, so the agent greps it rather
+  than fetching it again; `--out` saves it where the agent wants. Errors say what to do in words:
+  the free tier used up for the day (an admin can add a key), a key Firecrawl refuses, credits used
+  up.
+- **Auto mode checks them.** They're not on the read-only list (`read-only-commands.ts`): what's in
+  them goes out to Firecrawl and the search engines behind it, so a page that talks the agent into
+  putting the family's data in a query or an address is the check's to stop.
+
 ## Automations
 
 Triggers run the agent without anyone sending a message. What they find goes to notifications, not
@@ -1437,6 +1519,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
 - **Steps** show the `summary` and `icon` the model wrote with each `run_command` call ("Checking
   tomorrow's weather in Berlin" with `cloud-sun-rain`), in the conversation's language. Opening a
   step shows the command and its output. Calls from before summaries existed say "Ran a command".
+  A summary of the conversation (see [Compaction](#compaction)) is a step too: "Summarizing the
+  conversation so far" while the model writes it, then a line that opens to the summary.
   Any Lucide icon works: `/api/icons/<name>` serves one icon's drawing from the `lucide` package, so
   pages don't download all two thousand; unknown names fall back to a terminal icon.
 - **Technical details** (Settings, per device, in the `nolune-prefs` cookie so the server renders it
@@ -1899,15 +1983,15 @@ packages/core   @nolune/core. Schema + migrations, config, skills, prompt, run_c
                 plans (plans.ts: the Claude plan's turns through Claude Code in claude-plan.ts; the
                 ChatGPT plan's requests in chatgpt-plan.ts, signed in with Sign in with ChatGPT in
                 chatgpt-sign-in.ts), provider
-                file cache, runner, media, users/invites/profiles/presets, API
+                file cache, runner, compaction (compaction.ts), media, users/invites/profiles/presets, API
                 keys, chat folders, triggers, scheduler, subagents (subagents.ts, and
                 subagent-host.ts in the gateway), notifications, image generation (providers:
-                openai.ts), image templates and assistant avatars.
+                openai.ts), the web (web.ts), image templates and assistant avatars.
                 Built-in skills in packages/core/skills, built-in templates in
                 packages/core/image-templates. Plain TypeScript run by Node with type stripping
                 (no enums or parameter properties; imports use .ts extensions).
 packages/cli    nolune: setup, start, service, relay (relay.ts), config, key, claude-plan, chatgpt-plan (plans.ts), env,
-                user, preset, profile, skill, trigger, wake, view, memory, card, generate, agent. `runCli(argv, io)` in run.ts runs a command and returns
+                user, preset, profile, skill, trigger, wake, view, memory, card, generate, web, agent. `runCli(argv, io)` in run.ts runs a command and returns
                 its exit code; index.ts calls it with this process's io. Commands print, read stdin,
                 the environment (NOLUNE_PROFILE, …) and the working folder only through `io` (io.ts),
                 never `process`, and end in an error rather than `process.exit`, so the agent's
@@ -1952,7 +2036,7 @@ in docs/development.md).
   native module with prebuilt binaries). Everything else is bundled. Node won't strip types inside
   `node_modules`, which is why the CLI ships as JavaScript.
   Claude Code itself isn't shipped (see [The Claude plan](#the-claude-plan)); the Agent SDK and
-  zod, which core loads on first use, are in chunks of their own.
+  zod, which core loads on first use, are in chunks of their own, as is Firecrawl's SDK (`nolune web`).
 - `nolune setup` is the first-run wizard: config, admin account, and the address: the relay
   (asked at a terminal, `--relay` / `--no-relay` otherwise; no without either), else a public URL.
   It adds no key or model: a new profile's welcome asks the admin for them when there's no preset.
@@ -2094,9 +2178,6 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
 - Cards: notes shared on purpose between profiles, for people who aren't users (a grandmother in
   the family's profile and in Anna and her mother's), only between profiles the person sharing is
   in; and a switch for an owner to stop the agent and the note-taker from writing their card.
-- **Compaction.** The context window is already stored on each conversation and shown in the UI.
-  The next step is server-side compaction (beta `compact-2026-01-12`), triggered at about 85% of the
-  window.
 - Other chat providers (Gemini). See [Model providers](#model-providers) for what each needs.
 - OpenRouter: provider preferences (`provider.order`, data policy), and PDFs for models that don't
   read them, through OpenRouter's parser with its annotations sent back so a PDF is parsed once.
@@ -2106,6 +2187,8 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
 - The ChatGPT plan: "Using ChatGPT plan" with a Manage usage link by the composer, as OpenAI's UI
   guidelines ask; a ChatGPT account per profile (each would be a registration of its own, which
   Sign in with ChatGPT allows).
+- The web: reading a page here, without Firecrawl, once its free tier is used up for the day, and
+  search providers other than Firecrawl.
 - Other image providers (OpenRouter, fal, Higgsfield): a module each next to `openai.ts` and an entry
   in `PROVIDERS`, plus one in `API_KEYS` (config.ts) and a check request in `api-keys.ts`.
 - Auto mode: house rules an admin writes for the check (Claude Code's environment, block and allow

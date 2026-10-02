@@ -249,6 +249,8 @@ export const en = {
 			`Over ${ttl === '5m' ? '5 minutes' : 'an hour'} passed since the previous step, so the cached conversation expired and was processed again (slower and costlier).`,
 		cacheBroken:
 			'Context that should have come from the cache was processed again (slower and costlier). Switching the model or the reasoning level, moving the chat to another folder or changing its folder cause this once.',
+		cacheElsewhere:
+			"Context that should have come from the cache was processed again (slower and costlier). OpenAI keeps the cache on one of its servers, and this request most likely reached another one: nolune can't choose which. Switching the reasoning level, moving the chat to another folder or changing its folder cause this once too.",
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} cached`,
 		contextUsed: (used: string, window: string) =>
@@ -260,6 +262,9 @@ export const en = {
 	steps: {
 		thinking: 'Thinking',
 		thinkingDots: 'Thinking…',
+		summarizing: 'Summarizing the conversation so far',
+		summarized: 'Summarized the conversation so far',
+		summaryHint: 'The chat had grown too long for the model, so it goes on from this summary.',
 		running: (command: string) => `Running ${command}`,
 		runningACommand: 'Running a command',
 		ranACommand: 'Ran a command',
@@ -980,7 +985,9 @@ export const en = {
 				'Runs chats and automations on OpenAI models, and makes pictures for the Images page and when the agent draws.',
 			openrouter:
 				'Runs chats and automations on the models OpenRouter serves (Claude, GPT, Gemini, DeepSeek and many more), with one key and its credits.',
-			xai: "Runs chats and automations on xAI's Grok models."
+			xai: "Runs chats and automations on xAI's Grok models.",
+			firecrawl:
+				"Searches the web and reads pages for the agent. Without a key it uses Firecrawl's free tier, which allows this computer so many searches a day."
 		},
 		withoutIt: {
 			anthropic: 'Chats and automations on Claude models stop working until a new key is added.',
@@ -988,12 +995,14 @@ export const en = {
 				"Chats and automations on OpenAI models stop working, and nolune can't make pictures, until a new key is added.",
 			openrouter:
 				'Chats and automations on OpenRouter models stop working until a new key is added.',
-			xai: 'Chats and automations on Grok models stop working until a new key is added.'
+			xai: 'Chats and automations on Grok models stop working until a new key is added.',
+			firecrawl: "Web searches go back to Firecrawl's free tier, with its daily limit."
 		},
 		savedInNolune: (hint: string | null) => `Saved in nolune${hint ? ` ending in ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`From the ${variable} environment variable${hint ? ` ending in ${hint}` : ''}`,
 		notSet: 'Not set',
+		notSetFree: 'Not set: the free tier, limited per day',
 		replace: 'Replace',
 		pasteKey: (provider: string) => `Paste the ${provider} API key`,
 		keyLabel: (provider: string) => `${provider} API key`,

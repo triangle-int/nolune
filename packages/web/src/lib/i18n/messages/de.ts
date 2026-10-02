@@ -321,6 +321,8 @@ export const de: Messages = {
 			`Seit dem vorigen Schritt ${ttl === '5m' ? 'sind über 5 Minuten' : 'ist über eine Stunde'} vergangen, daher war der zwischengespeicherte Chat abgelaufen und wurde neu verarbeitet (langsamer und teurer).`,
 		cacheBroken:
 			'Kontext, der aus dem Cache hätte kommen sollen, wurde neu verarbeitet (langsamer und teurer). Das passiert einmal, wenn das Modell oder die Denktiefe gewechselt, der Chat in einen anderen Ordner verschoben oder sein Ordner geändert wird.',
+		cacheElsewhere:
+			'Kontext, der aus dem Cache hätte kommen sollen, wurde neu verarbeitet (langsamer und teurer). OpenAI hält den Cache auf einem seiner Server, und diese Anfrage ist wahrscheinlich bei einem anderen gelandet: Welcher es wird, kann nolune nicht wählen. Einmal passiert das auch, wenn die Denktiefe gewechselt, der Chat in einen anderen Ordner verschoben oder sein Ordner geändert wird.',
 		contextChip: (used: string, window: string, rate: string) =>
 			`${used} / ${window} · ${rate} aus dem Cache`,
 		contextUsed: (used: string, window: string) =>
@@ -332,6 +334,10 @@ export const de: Messages = {
 	steps: {
 		thinking: 'Denkt nach',
 		thinkingDots: 'Denkt nach…',
+		summarizing: 'Fasst das Gespräch bisher zusammen',
+		summarized: 'Hat das Gespräch bisher zusammengefasst',
+		summaryHint:
+			'Der Chat war zu lang für das Modell geworden, deshalb macht es mit dieser Zusammenfassung weiter.',
 		running: (command: string) => `Führt ${command} aus`,
 		runningACommand: 'Führt einen Befehl aus',
 		ranACommand: 'Hat einen Befehl ausgeführt',
@@ -1035,7 +1041,9 @@ export const de: Messages = {
 				'Für Chats und Automationen mit OpenAI-Modellen und zum Erstellen von Bildern auf der Seite „Bilder“ und wenn der Agent zeichnet.',
 			openrouter:
 				'Für Chats und Automationen mit den Modellen, die OpenRouter anbietet (Claude, GPT, Gemini, DeepSeek und viele mehr), mit einem Schlüssel und dessen Guthaben.',
-			xai: 'Für Chats und Automationen mit den Grok-Modellen von xAI.'
+			xai: 'Für Chats und Automationen mit den Grok-Modellen von xAI.',
+			firecrawl:
+				'Damit der Agent im Web sucht und Seiten liest. Ohne Schlüssel nutzt er den kostenlosen Tarif von Firecrawl mit einem Tageslimit für diesen Computer.'
 		},
 		withoutIt: {
 			anthropic:
@@ -1044,13 +1052,16 @@ export const de: Messages = {
 				'Chats und Automationen mit OpenAI-Modellen funktionieren nicht mehr, und nolune kann keine Bilder erstellen, bis ein neuer Schlüssel hinzugefügt wird.',
 			openrouter:
 				'Chats und Automationen mit OpenRouter-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.',
-			xai: 'Chats und Automationen mit Grok-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.'
+			xai: 'Chats und Automationen mit Grok-Modellen funktionieren nicht mehr, bis ein neuer Schlüssel hinzugefügt wird.',
+			firecrawl:
+				'Websuchen laufen wieder über den kostenlosen Tarif von Firecrawl mit seinem Tageslimit.'
 		},
 		savedInNolune: (hint: string | null) =>
 			`In nolune gespeichert${hint ? `, endet auf ${hint}` : ''}`,
 		fromEnv: (variable: string, hint: string | null) =>
 			`Aus der Umgebungsvariable ${variable}${hint ? `, endet auf ${hint}` : ''}`,
 		notSet: 'Nicht gesetzt',
+		notSetFree: 'Nicht gesetzt: kostenloser Tarif mit Tageslimit',
 		replace: 'Ersetzen',
 		pasteKey: (provider: string) => `${provider}-API-Schlüssel einfügen`,
 		keyLabel: (provider: string) => `${provider}-API-Schlüssel`,

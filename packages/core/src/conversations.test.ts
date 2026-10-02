@@ -405,6 +405,139 @@ describe('requestMessages', () => {
 	});
 });
 
+describe('compaction', () => {
+	const note = (summary: string) => ({
+		type: 'text' as const,
+		text: `[Earlier in this conversation, summarized to fit the context window:]\n\n${summary}`
+	});
+	const summary = {
+		type: 'compaction',
+		content: 'Anna asked for the files; there are two.',
+		encrypted_content: 'opaque',
+		signature: 'sig'
+	};
+
+	/** Anna asked twice; Claude summarized the conversation before answering the second time. */
+	function compactedOnServer(compaction: object = summary) {
+		const { chat, user } = newChat();
+		const say = (text: string) => {
+			insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text });
+			commitQueuedRows(chat.id);
+		};
+		const answer = (content: unknown[]) =>
+			appendRow({
+				conversationId: chat.id,
+				role: 'assistant',
+				kind: 'assistant',
+				content: JSON.stringify(content),
+				provider: 'anthropic',
+				model: 'claude-sonnet-5'
+			});
+		say('Files?');
+		answer([{ type: 'text', text: 'Two.' }]);
+		say('Which?');
+		answer([compaction, { type: 'text', text: 'a.txt and b.txt.' }]);
+		say('Thanks!');
+		return { chat, user, rows: committedRows(chat.id) };
+	}
+
+	it("starts the transcript at Claude's summary, as it came, for the model that wrote it", () => {
+		const { rows } = compactedOnServer();
+		expect(toAnthropicMessages(requestMessages(rows, null, 'claude-sonnet-5'))).toEqual([
+			{ role: 'assistant', content: [summary, { type: 'text', text: 'a.txt and b.txt.' }] },
+			{ role: 'user', content: [{ type: 'text', text: 'Anna: Thanks!' }] }
+		]);
+	});
+
+	it('gives any other model the summary as a message, before the reply', () => {
+		const { rows } = compactedOnServer();
+		const expected = [
+			{ role: 'user', content: [note(summary.content)] },
+			{ role: 'assistant', content: [{ type: 'text', text: 'a.txt and b.txt.' }] },
+			{ role: 'user', content: [{ type: 'text', text: 'Anna: Thanks!' }] }
+		];
+		// Another Claude model, or one that doesn't compact on the server.
+		expect(toAnthropicMessages(requestMessages(rows, null, 'claude-opus-5-5'))).toEqual(expected);
+		expect(forClaude(rows)).toEqual(expected);
+		expect(toResponsesInput(requestMessages(rows, null), 'gpt-6-astra')).toEqual([
+			{ role: 'user', content: [{ type: 'input_text', text: note(summary.content).text }] },
+			{ role: 'assistant', content: 'a.txt and b.txt.' },
+			{ role: 'user', content: [{ type: 'input_text', text: 'Anna: Thanks!' }] }
+		]);
+	});
+
+	it('sends everything when the summary failed: the API takes such a block for nothing', () => {
+		const { rows } = compactedOnServer({
+			type: 'compaction',
+			content: null,
+			encrypted_content: null
+		});
+		expect(requestMessages(rows, null, 'claude-sonnet-5')).toHaveLength(5);
+	});
+
+	it("starts at the latest of the runner's summaries, a message of its own", () => {
+		const { chat, user, rows: before } = compactedOnServer();
+		const row = appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'compaction',
+			text: 'Anna thanked us.',
+			blocks: [note('Anna thanked us.')],
+			usage: { input: 0, cacheRead: 20_000, cacheWrite: 0, output: 300 }
+		});
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Bye' });
+		commitQueuedRows(chat.id);
+		const rows = committedRows(chat.id);
+		expect(forClaude(rows)).toEqual([
+			{ role: 'user', content: [note('Anna thanked us.')] },
+			{ role: 'user', content: [{ type: 'text', text: 'Anna: Bye' }] }
+		]);
+		expect(toDisplay(row)).toEqual({
+			id: row.id,
+			kind: 'compaction',
+			summary: 'Anna thanked us.',
+			usage: { input: 0, cacheRead: 20_000, cacheWrite: 0, output: 300 },
+			createdAt: row.createdAt.getTime()
+		});
+		expect(toDisplay(before[3])).toMatchObject({
+			kind: 'assistant',
+			blocks: [
+				{ type: 'compaction', summary: summary.content },
+				{ type: 'text', text: 'a.txt and b.txt.' }
+			]
+		});
+		// The model wrote it: links in it weren't found anywhere.
+		expect(foundText(rows)).not.toContain('thanked');
+	});
+
+	it('lets a chat move to a smaller model once it was summarized', () => {
+		const { chat } = compactedOnServer();
+		appendRow({
+			conversationId: chat.id,
+			role: 'assistant',
+			kind: 'assistant',
+			content: JSON.stringify([{ type: 'text', text: 'Long.' }]),
+			usage: { input: 1_000, cacheRead: 180_000, cacheWrite: 0, output: 500 }
+		});
+		const small = makePreset('Small', 'claude-haiku-4-5');
+		getDb()
+			.update(modelPreset)
+			.set({ modelContextWindow: 100_000 })
+			.where(eq(modelPreset.id, small.id))
+			.run();
+		expect(() => setPreset(chat.id, small.id)).toThrow('more than Small can read');
+		appendRow({
+			conversationId: chat.id,
+			role: 'user',
+			kind: 'compaction',
+			text: 'Long.',
+			blocks: [note('Long.')],
+			usage: { input: 0, cacheRead: 181_000, cacheWrite: 0, output: 2_000 }
+		});
+		expect(setPreset(chat.id, small.id).presetName).toBe('Small');
+	});
+});
+
 describe('switching models', () => {
 	const thinking = { type: 'thinking', thinking: 'Anna wants the files.', signature: 'sig' };
 	const listCall = { type: 'tool_use', id: 't1', name: 'run_command', input: { command: 'ls' } };

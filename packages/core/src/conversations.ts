@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Anthropic from '@anthropic-ai/sdk';
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, max } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, max, or } from 'drizzle-orm';
 import { parseAttachments, type MessageAttachment } from './attachments.ts';
 import { getDb } from './db/index.ts';
 import {
@@ -15,10 +15,12 @@ import {
 } from './db/schema.ts';
 import { folderContextFor, getFolder } from './folders.ts';
 import {
+	compactionNote,
 	messageText,
 	placeholder,
 	readMessage,
 	resultText,
+	withoutCompaction,
 	type Block,
 	type FileProvider,
 	type Message,
@@ -50,11 +52,18 @@ export interface Usage {
 	cacheRead: number;
 	cacheWrite: number;
 	output: number;
+	/**
+	 * A reply that started by summarizing the conversation on the server (compaction.ts): what the
+	 * summary took. The numbers above are the reply's own, read from the summary on.
+	 */
+	compaction?: Omit<Usage, 'compaction'>;
 }
 
 export type DisplayBlock =
 	| { type: 'text'; text: string }
 	| { type: 'thinking'; text: string }
+	/** Claude's summary of the conversation before it, written on the server. */
+	| { type: 'compaction'; summary: string }
 	| {
 			type: 'tool';
 			id: string;
@@ -125,13 +134,23 @@ export type DisplayMessage =
 	  }
 	| {
 			id: number;
+			/** The chat's model's summary of the conversation so far, which requests start from. */
+			kind: 'compaction';
+			summary: string;
+			/** What writing it took. */
+			usage: Usage | null;
+			createdAt: number;
+	  }
+	| {
+			id: number;
 			kind: 'assistant';
 			blocks: DisplayBlock[];
 			/** The pictures and files its text links to, keyed by link target. */
 			media: Record<string, DisplayMedia>;
 			stopReason: string | null;
 			usage: Usage | null;
-			/** The model that wrote it: a conversation can switch models. */
+			/** The provider and model that wrote it: a conversation can switch models. */
+			provider: Provider | null;
 			model: string | null;
 			createdAt: number;
 	  }
@@ -284,15 +303,18 @@ export function setCommandMode(id: string, commandMode: CommandMode | null): voi
 /** Why a conversation can't switch to a model, in words for the person switching. */
 export class ModelSwitchError extends Error {}
 
-/** The prompt and reply of the conversation's latest model call, in tokens, or 0 before one. */
+/**
+ * The prompt and reply of the conversation's latest model call, in tokens, or 0 before one. After
+ * a summary of the conversation that no call has read yet, the summary.
+ */
 function contextUsed(conversationId: string): number {
 	const last = getDb()
-		.select({ usage: message.usage })
+		.select({ kind: message.kind, usage: message.usage })
 		.from(message)
 		.where(
 			and(
 				eq(message.conversationId, conversationId),
-				eq(message.role, 'assistant'),
+				or(eq(message.role, 'assistant'), eq(message.kind, 'compaction')),
 				isNotNull(message.usage)
 			)
 		)
@@ -301,15 +323,15 @@ function contextUsed(conversationId: string): number {
 		.get();
 	if (!last?.usage) return 0;
 	const usage = JSON.parse(last.usage) as Usage;
-	return promptTokens(usage) + usage.output;
+	return last.kind === 'compaction' ? usage.output : promptTokens(usage) + usage.output;
 }
 
 /**
  * Switches the conversation to another model preset, from its next model call on (a turn in
  * progress goes on with the new model too). The new model has none of the conversation cached, so
  * that call reads it all again once. Another provider gets earlier replies and files translated
- * (requestMessages). Refused when the conversation is already larger than the new model's window,
- * which it could never shrink back into: history is never edited.
+ * (requestMessages). Refused when the conversation is already larger than the new model's window:
+ * its first call would fail before it could summarize anything (compaction.ts).
  */
 export function setPreset(id: string, presetId: string): Conversation {
 	const conv = getConversation(id);
@@ -576,8 +598,8 @@ export function appendRow(
 	input: {
 		conversationId: string;
 		role: 'user' | 'assistant';
-		kind: 'trigger' | 'tool_results' | 'assistant';
-		/** Trigger rows: the trigger's name and prompt, for display. */
+		kind: 'trigger' | 'compaction' | 'tool_results' | 'assistant';
+		/** Trigger rows: the trigger's name and prompt, for display. Compactions: the summary. */
 		senderName?: string;
 		text?: string;
 		stopReason?: string | null;
@@ -673,20 +695,58 @@ export function rowCalls(row: MessageRow): ToolCallBlock[] {
 }
 
 /**
- * The transcript for a model call, in nolune's format: every row, with its replies marked when
- * they're from before the system prompt was last built again (`promptChangedAtSeq`), and every
- * tool call answered once (pairToolResults). Each provider's module turns it into its request
- * (format.ts), and does it the same way on every call, so the prefix stays byte-identical.
+ * The summary of the conversation before the row, if it has one (compaction.ts): a compaction
+ * row's, or that of a reply Claude started by summarizing the conversation on the server.
  */
-export function requestMessages(rows: MessageRow[], promptChangedAtSeq: number | null): Message[] {
-	const messages = rows.map((row): Message => {
+export function compactionSummary(row: MessageRow): string | null {
+	if (row.kind === 'compaction') return row.text ?? '';
+	// Most replies have none, and this runs over every row before each model call.
+	if (row.role !== 'assistant' || !row.content.includes('"compaction"')) return null;
+	const block = readRow(row).blocks.find((b) => b.type === 'compaction');
+	return block?.type === 'compaction' ? block.summary : null;
+}
+
+/** Where the rows a model call gets start: at the latest summary of the ones before it, or 0. */
+export function compactedFrom(rows: MessageRow[]): number {
+	return Math.max(
+		0,
+		rows.findLastIndex((row) => compactionSummary(row) !== null)
+	);
+}
+
+/**
+ * The transcript for a model call, in nolune's format: every row from the latest summary of the
+ * conversation on (compactedFrom), with its replies marked when they're from before the system
+ * prompt was last built again (`promptChangedAtSeq`), and every tool call answered once
+ * (pairToolResults). Each provider's module turns it into its request (format.ts), and does it the
+ * same way on every call, so the prefix stays byte-identical.
+ *
+ * A reply that starts with Claude's summary goes as it came to the model that wrote it, when that
+ * model compacts on the server (`compacting`, its id): the API takes the summary in place of what
+ * came before. Any other model gets the summary as a message of its own, before the reply.
+ */
+export function requestMessages(
+	rows: MessageRow[],
+	promptChangedAtSeq: number | null,
+	compacting: string | null = null
+): Message[] {
+	const messages = rows.slice(compactedFrom(rows)).flatMap((row): Message[] => {
 		const read = readRow(row);
 		const before =
 			row.role === 'assistant' &&
 			promptChangedAtSeq !== null &&
 			row.seq !== null &&
 			row.seq <= promptChangedAtSeq;
-		return before ? { ...read, beforePromptChange: true } : read;
+		const message = before ? { ...read, beforePromptChange: true } : read;
+		const summary = row.role === 'assistant' ? compactionSummary(row) : null;
+		if (summary === null) return [message];
+		const native = message.native;
+		const kept =
+			compacting !== null &&
+			(native?.provider ?? 'anthropic') === 'anthropic' &&
+			(native?.model ?? compacting) === compacting;
+		if (kept) return [message];
+		return [{ role: 'user', blocks: [compactionNote(summary)] }, withoutCompaction(message)];
 	});
 	return pairToolResults(messages);
 }
@@ -759,11 +819,14 @@ export function replyText(row: MessageRow): string {
 /**
  * Everything the model read that it didn't write: what people wrote, automation prompts and
  * events, and command output. A web picture in a reply is downloaded only if its link is in here.
- * A subagent's task and steers are left out: another agent wrote them.
+ * A subagent's task and steers are left out: another agent wrote them. So are summaries of the
+ * conversation, which the model wrote.
  */
 export function foundText(rows: MessageRow[]): string {
 	return rows
-		.filter((row) => row.kind !== 'assistant' && row.kind !== 'agent_message')
+		.filter(
+			(row) => row.kind !== 'assistant' && row.kind !== 'agent_message' && row.kind !== 'compaction'
+		)
 		.flatMap((row) =>
 			readRow(row).blocks.map((b) =>
 				b.type === 'tool_result' ? resultText(b.content) : b.type === 'text' ? b.text : ''
@@ -842,6 +905,15 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			createdAt
 		};
 	}
+	if (row.kind === 'compaction') {
+		return {
+			id: row.id,
+			kind: 'compaction',
+			summary: row.text ?? '',
+			usage: row.usage ? (JSON.parse(row.usage) as Usage) : null,
+			createdAt
+		};
+	}
 	if (row.kind === 'human') {
 		return {
 			id: row.id,
@@ -870,6 +942,8 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			if (block.text.trim()) {
 				blocks.push({ type: block.type === 'text' ? 'text' : 'thinking', text: block.text });
 			}
+		} else if (block.type === 'compaction') {
+			blocks.push({ type: 'compaction', summary: block.summary });
 		} else if (block.type === 'tool_call') {
 			const input = (block.input ?? {}) as Record<string, unknown>;
 			const text = (key: string) =>
@@ -891,6 +965,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 		media: toDisplayMedia(mediaRows),
 		stopReason: row.stopReason,
 		usage: row.usage ? (JSON.parse(row.usage) as Usage) : null,
+		provider: row.provider,
 		model: row.model,
 		createdAt
 	};

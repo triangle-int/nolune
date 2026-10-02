@@ -14,7 +14,9 @@ nolune key set anthropic       # or openai / openrouter / xai
 ```
 
 nolune checks a key before it stores it. OpenAI's key also makes pictures on the
-[Images](/docs/guides/images/) page.
+[Images](/docs/guides/images/) page. Firecrawl's key (`nolune key set firecrawl`) is for
+[searching the web](/docs/guides/skills/#searching-the-web), which works without one up to a daily
+limit.
 
 ## Grok, with an xAI key
 
