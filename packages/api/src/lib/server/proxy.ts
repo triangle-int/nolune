@@ -14,6 +14,7 @@ import {
 	chatModels,
 	costOf,
 	EMBEDDING_MODELS,
+	isFree,
 	type ImageModel,
 	type Model,
 	type OpenRouter
@@ -149,9 +150,12 @@ export class Proxy {
 			const refused = await this.imageRequestProblem(json, modelId);
 			if (refused) return refused;
 		} else if (endpoint === 'chat') {
-			// A variant (`:nitro`) is its model's.
+			// A model as listed, or a variant (`:nitro`) of one, but never the free one (chatModels).
+			const offered = chatModels(await this.openrouter.models());
 			const base = modelId.split(':')[0];
-			model = chatModels(await this.openrouter.models()).find((m) => m.id === base);
+			model = isFree(modelId)
+				? undefined
+				: (offered.find((m) => m.id === modelId) ?? offered.find((m) => m.id === base));
 			if (!model) {
 				return apiError(
 					400,

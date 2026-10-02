@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readAccount, updateAccount } from './accounts.ts';
 import { addExtra, endPlan, HOUR, startPlan, type PeriodGrant } from './limits.ts';
-import { OpenRouter } from './openrouter.ts';
+import { chatModels, OpenRouter } from './openrouter.ts';
 import { MAX_TOKENS, Proxy, type Endpoint } from './proxy.ts';
 import { addUser, testDb } from './test/db.ts';
 
@@ -21,7 +21,11 @@ const MODELS = {
 			pricing: { prompt: '0.000001', input_cache_read: '0.0000001' },
 			supported_parameters: ['tools', 'reasoning']
 		},
-		{ id: 'some/model-without-tools', supported_parameters: ['temperature'] }
+		{ id: 'some/model-without-tools', supported_parameters: ['temperature'] },
+		// OpenRouter lists a free variant, and some variants with no model of their own, as models.
+		{ id: 'anthropic/claude-haiku-4.5:free', supported_parameters: ['tools'] },
+		{ id: 'apodex/apodex-1.1-mini:free', supported_parameters: ['tools'] },
+		{ id: 'someone/thinker:thinking', supported_parameters: ['tools'] }
 	]
 };
 const IMAGE_MODELS = {
@@ -91,7 +95,7 @@ async function setup(
 			body: JSON.stringify(body),
 			signal
 		});
-	return { db, userId, proxy, send, sendImage, calls: forwarded, logged };
+	return { db, userId, proxy, openrouter, send, sendImage, calls: forwarded, logged };
 }
 
 const chat = { model: 'anthropic/claude-haiku-4.5', messages: [{ role: 'user', content: 'Hi' }] };
@@ -258,7 +262,22 @@ describe('nolune’s API in front of OpenRouter', () => {
 		expect((await noTools.json()).error.code).toBe('model_not_offered');
 		const embedding = await s.send({ model: 'someone/else', input: 'x' }, 'embedding');
 		expect(embedding.status).toBe(400);
+		// Free models, listed on their own or as a variant of one the plan offers.
+		for (const model of ['apodex/apodex-1.1-mini:free', 'anthropic/claude-haiku-4.5:free']) {
+			const free = await s.send({ ...chat, model });
+			expect(free.status).toBe(400);
+			expect((await free.json()).error.code).toBe('model_not_offered');
+		}
 		expect(s.calls()).toHaveLength(0);
+	});
+
+	it('offers what it lists: models that call tools, with variants and no free ones', async () => {
+		const s = await setup(() => Response.json({ choices: [], usage }));
+		const listed = chatModels(await s.openrouter.models()).map((m) => m.id);
+		expect(listed).toEqual(['anthropic/claude-haiku-4.5', 'someone/thinker:thinking']);
+		for (const model of [...listed, 'anthropic/claude-haiku-4.5:nitro']) {
+			expect((await s.send({ ...chat, model })).status).toBe(200);
+		}
 	});
 
 	it('passes a picture request on to the Image API, and charges what it cost', async () => {

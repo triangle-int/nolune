@@ -141,9 +141,20 @@ export class OpenRouter {
 	}
 }
 
-/** Models the plan offers for chats: those that call tools, since nolune's agent works through one. */
+/**
+ * Models the plan offers for chats: those that call tools, since nolune's agent works through one.
+ * Not OpenRouter's free ones: their limits are per account, so every family on the plan would share
+ * nolune's, and their providers may keep what's sent and train on it.
+ */
 export function chatModels(models: Model[]): Model[] {
-	return models.filter((model) => model.supported_parameters?.includes('tools'));
+	return models.filter(
+		(model) => model.supported_parameters?.includes('tools') && !isFree(model.id)
+	);
+}
+
+/** OpenRouter's free variant of a model (`…:free`), which the plan doesn't offer. */
+export function isFree(id: string): boolean {
+	return id.endsWith(':free');
 }
 
 /** Embedding models the plan offers: OpenAI's, which nolune's memory search is tuned for. */
