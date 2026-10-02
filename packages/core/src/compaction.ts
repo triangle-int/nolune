@@ -1,5 +1,13 @@
 import { supportsCompaction } from './anthropic.ts';
-import { compactedFrom, type Conversation, type MessageRow, type Usage } from './conversations.ts';
+import { readConfig, updateConfig } from './config.ts';
+import {
+	awaitsReply,
+	compactedFrom,
+	compactionSummary,
+	type Conversation,
+	type MessageRow,
+	type Usage
+} from './conversations.ts';
 import type { ModelReply, Provider } from './models.ts';
 import { isAgentPlan } from './plans.ts';
 import { promptTokens } from './usage.ts';
@@ -58,17 +66,97 @@ export function needsCompaction(
 	}
 	const from = compactedFrom(rows);
 	const calls = rows.slice(from).filter((row) => row.role === 'assistant' && row.usage);
-	const last = calls.at(-1);
-	if (!last?.usage || (from > 0 && calls.length < 2)) return false;
-	const usage = JSON.parse(last.usage) as Usage;
-	return promptTokens(usage) + usage.output >= COMPACT_SHARE * window;
+	if (from > 0 && calls.length < 2) return false;
+	return contextSince(rows) >= COMPACT_SHARE * window;
 }
 
-/** What the runner asks the chat's model, as one more message after the conversation. */
-export const SUMMARY_REQUEST = `[This conversation has grown too long for your context window, so it is being summarized now. The summary will take the place of everything above, which you won't see again. Don't run any commands: reply only with the summary, in the conversation's language. Write down everything you will need to go on as if nothing was lost: who asked for what and what they prefer, what was done and found, decisions made, the state of any work in progress and its next steps, and the exact details (names, paths, numbers, commands). Wrap the summary in <summary></summary>.]`;
+/** What the latest call since the latest summary read and wrote, in tokens, or 0 before one. */
+function contextSince(rows: MessageRow[]): number {
+	const last = rows
+		.slice(compactedFrom(rows))
+		.findLast((row) => row.role === 'assistant' && row.usage);
+	if (!last?.usage) return 0;
+	const usage = JSON.parse(last.usage) as Usage;
+	return promptTokens(usage) + usage.output;
+}
 
 /**
- * The summary in the model's reply to SUMMARY_REQUEST, or null if it didn't write one. Without the
+ * Why the runner has the model summarize the conversation: it nears the window, someone in the
+ * chat asked, or it has been quiet for the minutes Models & keys says (compactWhenIdle).
+ */
+export type SummaryReason = 'window' | 'asked' | 'idle';
+
+/** What the runner asks the chat's model, as one more message after the conversation. */
+export function summaryRequest(reason: SummaryReason): string {
+	const why = {
+		window:
+			'This conversation has grown too long for your context window, so it is being summarized now.',
+		asked:
+			'Someone in the chat asked to summarize the conversation so far, so it is being summarized now.',
+		idle: 'This conversation has been quiet for a while, so it is being summarized now, to keep it short for when it goes on.'
+	}[reason];
+	return `[${why} The summary will take the place of everything above, which you won't see again. Don't run any commands: reply only with the summary, in the conversation's language. Write down everything you will need to go on as if nothing was lost: who asked for what and what they prefer, what was done and found, decisions made, the state of any work in progress and its next steps, and the exact details (names, paths, numbers, commands). Wrap the summary in <summary></summary>.]`;
+}
+
+/** The longest a chat can be quiet before it's summarized, in minutes: a week. */
+export const MAX_IDLE_MINUTES = 7 * 24 * 60;
+
+/** Minutes a chat stays quiet before it's summarized, or null when quiet chats aren't. */
+export function idleCompactionMinutes(): number | null {
+	try {
+		return readConfig().compactWhenIdle ?? null;
+	} catch {
+		return null; // not set up yet
+	}
+}
+
+/** Whole minutes from 1 to MAX_IDLE_MINUTES, or null to summarize quiet chats no more. */
+export function saveIdleCompaction(minutes: number | null): void {
+	if (
+		minutes !== null &&
+		!(Number.isInteger(minutes) && minutes >= 1 && minutes <= MAX_IDLE_MINUTES)
+	) {
+		throw new Error(`Minutes are a whole number from 1 to ${MAX_IDLE_MINUTES}`);
+	}
+	updateConfig((c) => {
+		if (minutes === null) delete c.compactWhenIdle;
+		else c.compactWhenIdle = minutes;
+	});
+}
+
+/**
+ * A quiet chat is summarized only from this size on, in tokens: below it, the summary saves the
+ * next reply little and would cost a call and the chat's details.
+ */
+export const MIN_IDLE_CONTEXT = 20_000;
+
+/**
+ * Whether a chat that went quiet gets summarized: one people see (not a background run nobody
+ * continued, or a subagent's), not on the Claude plan, that waits on nobody's answer, with a reply
+ * since the latest summary, and big enough to be worth it (MIN_IDLE_CONTEXT).
+ */
+export function idleCompactable(
+	conv: Pick<Conversation, 'provider' | 'hidden'>,
+	rows: MessageRow[]
+): boolean {
+	if (conv.hidden || isAgentPlan(conv.provider)) return false;
+	if (awaitsReply(rows) || !hasNewReplies(rows)) return false;
+	return contextSince(rows) >= MIN_IDLE_CONTEXT;
+}
+
+/**
+ * Whether there's anything to summarize: a reply since the latest summary. The one that starts with
+ * Claude's summary doesn't count.
+ */
+export function hasNewReplies(rows: MessageRow[]): boolean {
+	const from = compactedFrom(rows);
+	const cut = rows[from];
+	const since = cut && compactionSummary(cut) !== null ? rows.slice(from + 1) : rows;
+	return since.some((row) => row.role === 'assistant');
+}
+
+/**
+ * The summary in the model's reply to summaryRequest, or null if it didn't write one. Without the
  * tags, the whole reply, unless the model went on to run a command: then its text was only what
  * it said first.
  */

@@ -334,6 +334,11 @@ export const fr: Messages = {
 			'Certaines images et certains PDF de cette discussion ne passent pas à un autre fournisseur : le nouveau modèle reçoit l’emplacement de leurs fichiers et peut les regarder à nouveau.',
 		switch: 'Changer',
 		change: 'Modifier',
+		compact: 'Résumer la discussion',
+		compactTitle: 'Résumer la discussion ?',
+		compactBody: (tokens: string | null) =>
+			`Le modèle écrit un court résumé de la discussion jusqu’ici et continue à partir de celui-ci : chaque réponse lit moins${tokens ? ` (environ ${tokens} tokens actuellement)` : ''}. Tout le monde voit toujours la discussion en entier, mais le modèle peut oublier les détails absents du résumé.`,
+		compactAction: 'Résumer',
 		models: (models: string[]) => models.join(', puis '),
 		usage: 'Consommation',
 		tokensInOut: (input: string, output: string) =>
@@ -365,6 +370,10 @@ export const fr: Messages = {
 		summarized: 'A résumé la conversation jusqu’ici',
 		summaryHint:
 			'La conversation était devenue trop longue pour le modèle : il continue à partir de ce résumé.',
+		summaryAsked:
+			'Quelqu’un dans la discussion a demandé ce résumé : le modèle continue à partir de celui-ci.',
+		summaryIdle:
+			'La discussion est devenue calme, elle a donc été résumée : le modèle continue à partir de ce résumé.',
 		running: (command: string) => `Exécution de ${command}`,
 		runningACommand: 'Exécution d’une commande',
 		ranACommand: 'A exécuté une commande',
@@ -1317,6 +1326,22 @@ export const fr: Messages = {
 			checkerNote:
 				'Un modèle rapide et compétent garde les discussions fluides : chaque commande qui fait plus que regarder lui coûte une courte requête.',
 			saved: 'Enregistré. S’applique dès la prochaine commande.'
+		},
+		idleCompaction: {
+			title: 'Discussions calmes',
+			hint: 'Quand une discussion est calme depuis un moment, le modèle peut la résumer, pour que sa prochaine réponse lise le résumé plutôt que toute la discussion : plus rapide et moins cher. La discussion montre toujours tout. Seules les discussions de plus d’environ 20 000 tokens sont résumées, et aucune sur l’abonnement Claude, dont Claude Code résume les siennes.',
+			modes: { off: 'Désactivé', on: 'Activé' },
+			offStatus:
+				'Les discussions ne sont résumées que lorsqu’elles approchent de la fenêtre du modèle, ou quand quelqu’un le demande.',
+			onStatus: (minutes: number) =>
+				`Les discussions sont résumées après ${p(minutes, { one: `${minutes} minute calme`, other: `${minutes} minutes calmes` })}.`,
+			change: 'Modifier',
+			mode: 'Résumer les discussions calmes',
+			minutes: 'Minutes sans message',
+			cacheNote:
+				'En dessous de 60 minutes, le résumé lit la discussion depuis le cache du prompt, ce qui coûte peu ; au-delà, il relit toute la discussion.',
+			invalid: (max: number) => `Un nombre entier de minutes, de 1 à ${max}.`,
+			saved: 'Enregistré. Cela s’applique aux discussions à partir de leur prochain moment calme.'
 		}
 	},
 

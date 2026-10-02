@@ -496,6 +496,7 @@ describe('compaction', () => {
 			id: row.id,
 			kind: 'compaction',
 			summary: 'Anna thanked us.',
+			askedBy: null,
 			usage: { input: 0, cacheRead: 20_000, cacheWrite: 0, output: 300 },
 			createdAt: row.createdAt.getTime()
 		});

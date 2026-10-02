@@ -143,7 +143,9 @@
 									/>
 								</Collapsible.Trigger>
 								<Collapsible.Content>
-									<p class="mt-1.5 text-xs text-muted-foreground">{m.steps.summaryHint}</p>
+									<p class="mt-1.5 text-xs text-muted-foreground">
+										{step.asked ? m.steps.summaryAsked : m.steps.summaryHint}
+									</p>
 									<Markdown
 										text={step.summary}
 										class="mt-1.5 text-sm leading-relaxed text-muted-foreground"

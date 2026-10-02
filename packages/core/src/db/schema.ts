@@ -390,7 +390,8 @@ export const message = sqliteTable(
 		senderId: text('sender_id').references(() => user.id, { onDelete: 'set null' }),
 		/**
 		 * Sender's display name when the message was sent. Trigger rows: the trigger's name. Agent
-		 * messages: the subagent's id. Task results: the command's summary.
+		 * messages: the subagent's id. Task results: the command's summary. Compactions: who asked for
+		 * it, if anyone did.
 		 */
 		senderName: text('sender_name'),
 		/**

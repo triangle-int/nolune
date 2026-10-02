@@ -29,6 +29,7 @@
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import FolderIcon from '@lucide/svelte/icons/folder';
 	import InfoIcon from '@lucide/svelte/icons/info';
+	import ListCollapseIcon from '@lucide/svelte/icons/list-collapse';
 	import LoaderIcon from '@lucide/svelte/icons/loader-circle';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -149,6 +150,7 @@
 	/** What reloading the chat's tools did, until the next message. */
 	let reloaded = $state<string | null>(null);
 	let deleteOpen = $state(false);
+	let compactOpen = $state(false);
 	let creatingFolder = $state(false);
 	const folder = $derived(folders.find((f) => f.id === folderId));
 	let viewing = $state<PictureGallery | null>(null);
@@ -237,10 +239,13 @@
 	 */
 	const usage = $derived.by(() => {
 		let last: Usage | null = null;
+		/** A summary no model call has read yet: what it'll read of the conversation. */
+		let summary: number | null = null;
 		const total: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 		for (const m of chat.messages) {
 			if ((m.kind !== 'assistant' && m.kind !== 'compaction') || !m.usage) continue;
 			if (m.kind === 'assistant') last = m.usage;
+			summary = m.kind === 'compaction' ? m.usage.output : null;
 			for (const part of [m.usage, m.usage.compaction]) {
 				if (!part) continue;
 				total.input += part.input;
@@ -249,10 +254,36 @@
 				total.output += part.output;
 			}
 		}
-		return last && { last, total };
+		return last && { last, total, summary };
 	});
 
-	const contextUsed = $derived(usage && promptTokens(usage.last) + usage.last.output);
+	const contextUsed = $derived(
+		usage && (usage.summary ?? promptTokens(usage.last) + usage.last.output)
+	);
+
+	/**
+	 * Whether someone can have the model summarize the chat now: not while it works, not on the
+	 * Claude plan (Claude Code summarizes its own sessions) or in a subagent's chat, and only with a
+	 * reply since the latest summary.
+	 */
+	const compactable = $derived(
+		model.provider !== 'claude-plan' && !conversation.subagent && repliedSinceSummary(chat.messages)
+	);
+
+	function repliedSinceSummary(messages: typeof chat.messages): boolean {
+		const summarized = messages.findLastIndex(
+			(m) =>
+				m.kind === 'compaction' ||
+				(m.kind === 'assistant' && m.blocks.some((b) => b.type === 'compaction'))
+		);
+		return messages.slice(summarized + 1).some((m) => m.kind === 'assistant');
+	}
+
+	async function compact() {
+		compactOpen = false;
+		stickToBottom = true;
+		await post('compact');
+	}
 
 	/**
 	 * Replies whose request processed again what the previous request had cached, keyed by id.
@@ -317,11 +348,12 @@
 		};
 	}
 
+	/** A summary at the end counts as what came before it, as in the runner (awaitsReply). */
 	const unanswered = $derived(
 		!chat.running &&
 			chat.queued.length === 0 &&
 			chat.messages.length > 0 &&
-			chat.messages[chat.messages.length - 1].kind !== 'assistant'
+			chat.messages.findLast((m) => m.kind !== 'compaction')?.kind !== 'assistant'
 	);
 
 	/** The newest entry when it's a reply: its avatar shows what nolune is doing. Older ones hold still. */
@@ -835,6 +867,12 @@
 					onmove={move}
 					onnew={() => (creatingFolder = true)}
 				/>
+				{#if compactable}
+					<DropdownMenu.Item disabled={chat.running} onSelect={() => (compactOpen = true)}>
+						<ListCollapseIcon />
+						{m.chat.compact}
+					</DropdownMenu.Item>
+				{/if}
 				{#if !conversation.subagent}
 					<DropdownMenu.Item
 						disabled={chat.running || reloading}
@@ -948,6 +986,32 @@
 					</Collapsible.Root>
 				{:else if entry.type === 'memory'}
 					<MemoryLook look={entry.look} slug={page.params.slug ?? ''} />
+				{:else if entry.type === 'compaction'}
+					<Collapsible.Root class="rounded-2xl border px-4 py-2.5 text-sm">
+						<Collapsible.Trigger
+							disabled={entry.live}
+							class="group/summary flex w-full min-w-0 items-center gap-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+						>
+							<ListCollapseIcon class="size-3.5 shrink-0" />
+							<span class={cn('min-w-0 truncate', entry.live && 'thinking-shimmer')}>
+								{entry.live ? m.steps.summarizing : m.steps.summarized}
+							</span>
+							{#if !entry.live}
+								<ChevronRightIcon
+									class="size-3.5 shrink-0 transition-transform group-data-[state=open]/summary:rotate-90"
+								/>
+							{/if}
+						</Collapsible.Trigger>
+						<Collapsible.Content>
+							<p class="mt-2 text-xs text-muted-foreground">
+								{entry.asked ? m.steps.summaryAsked : m.steps.summaryIdle}
+							</p>
+							<Markdown
+								text={entry.summary}
+								class="mt-1.5 text-sm leading-relaxed text-muted-foreground"
+							/>
+						</Collapsible.Content>
+					</Collapsible.Root>
 				{:else}
 					{@render reply(entry, entry === newest)}
 				{/if}
@@ -1175,6 +1239,21 @@
 				</AlertDialog.Action>
 			</AlertDialog.Footer>
 		{/if}
+	</AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root bind:open={compactOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>{m.chat.compactTitle}</AlertDialog.Title>
+			<AlertDialog.Description>
+				{m.chat.compactBody(prefs.technical && contextUsed ? formatTokens(contextUsed) : null)}
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>{m.common.cancel}</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={compact}>{m.chat.compactAction}</AlertDialog.Action>
+		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
 

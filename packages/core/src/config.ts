@@ -58,6 +58,12 @@ export interface Config {
 	/** The preset whose model does auto mode's checks. Unset, or removed: each chat's own model. */
 	safetyPresetId?: string;
 	/**
+	 * Minutes a chat stays quiet before the model summarizes it (compaction.ts), so the next reply
+	 * reads the summary rather than the whole chat. Unset: chats are summarized only when they near
+	 * the model's window, or when someone asks.
+	 */
+	compactWhenIdle?: number;
+	/**
 	 * Whether the gateway asks GitHub once a day for nolune's newest release, so admins hear when
 	 * there's a new one (updates.ts). Unset: it does.
 	 */

@@ -139,6 +139,11 @@ export type DisplayMessage =
 			/** The chat's model's summary of the conversation so far, which requests start from. */
 			kind: 'compaction';
 			summary: string;
+			/**
+			 * Who in the chat asked for it. Null when the runner wrote it by itself: at a turn's step
+			 * when the conversation neared the window, or after a reply when the chat went quiet.
+			 */
+			askedBy: string | null;
 			/** What writing it took. */
 			usage: Usage | null;
 			createdAt: number;
@@ -837,6 +842,14 @@ export function compactionSummary(row: MessageRow): string | null {
 	return block?.type === 'compaction' ? block.summary : null;
 }
 
+/**
+ * Whether the conversation ends with something the agent hasn't answered: a user row. A summary
+ * at the end counts as what came before it: one someone asked for after a reply needs no answer.
+ */
+export function awaitsReply(rows: MessageRow[]): boolean {
+	return rows.findLast((row) => row.kind !== 'compaction')?.role === 'user';
+}
+
 /** Where the rows a model call gets start: at the latest summary of the ones before it, or 0. */
 export function compactedFrom(rows: MessageRow[]): number {
 	return Math.max(
@@ -1041,6 +1054,7 @@ export function toDisplay(row: MessageRow, mediaRows: MediaRow[] = []): DisplayM
 			id: row.id,
 			kind: 'compaction',
 			summary: row.text ?? '',
+			askedBy: row.senderName,
 			usage: row.usage ? (JSON.parse(row.usage) as Usage) : null,
 			createdAt
 		};

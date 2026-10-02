@@ -202,11 +202,13 @@ export {
 	type MediaRow
 } from './media.ts';
 export {
+	CompactionError,
 	ReloadError,
 	changeCommandMode,
 	changeEffort,
 	changeModel,
 	chatToolChanges,
+	compactConversation,
 	getSnapshot,
 	isRunning,
 	kick,
@@ -229,6 +231,8 @@ export {
 	type Snapshot,
 	type Typist
 } from './runner.ts';
+export { MAX_IDLE_MINUTES, idleCompactionMinutes, saveIdleCompaction } from './compaction.ts';
+export { idleCompactionChanged } from './idle-compaction.ts';
 export { TitleError } from './titles.ts';
 export {
 	EFFORTS,

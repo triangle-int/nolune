@@ -9,6 +9,7 @@ import {
 	replyText
 } from './conversations.ts';
 import { pruneUploads } from './attachments.ts';
+import { startIdleCompaction } from './idle-compaction.ts';
 import { pruneMedia } from './media.ts';
 import { startLearning } from './memory-learning.ts';
 import { profileCards } from './memory-cards.ts';
@@ -57,8 +58,8 @@ const holder = globalThis as unknown as { __noluneScheduler?: boolean };
  * Gateway only. Every few seconds: fires triggers that are due and starts queued runs (including
  * the ones `nolune wake` and `nolune trigger run` queue from other processes), starts the subagents
  * that `nolune agent` asks for, and notices profiles that `nolune profile` changed from another process.
- * Chats that went quiet get looked over for memory (memory-learning.ts), and memory facts get
- * their embeddings (memory-search.ts).
+ * Chats that went quiet get looked over for memory (memory-learning.ts) and, if Models & keys says
+ * so, summarized (idle-compaction.ts), and memory facts get their embeddings (memory-search.ts).
  */
 export function startScheduler(): void {
 	if (holder.__noluneScheduler) return;
@@ -66,6 +67,7 @@ export function startScheduler(): void {
 	onLoopEnd(finishAgentRun);
 	startSubagentHost();
 	startLearning();
+	startIdleCompaction();
 	startEmbeddingMemory(listProfiles().map((p) => p.slug));
 	recoverRuns();
 	prune();

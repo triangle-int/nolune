@@ -322,6 +322,11 @@ export const de: Messages = {
 			'Manche Bilder und PDFs in diesem Chat gehen nicht zu einem anderen Anbieter mit: Das neue Modell bekommt, wo ihre Dateien liegen, und kann sie sich noch einmal ansehen.',
 		switch: 'Wechseln',
 		change: 'Ändern',
+		compact: 'Chat zusammenfassen',
+		compactTitle: 'Chat zusammenfassen?',
+		compactBody: (tokens: string | null) =>
+			`Das Modell schreibt eine kurze Zusammenfassung des bisherigen Chats und macht damit weiter, sodass jede Antwort weniger liest${tokens ? ` (gerade etwa ${tokens} Tokens)` : ''}. Alle sehen weiterhin den ganzen Chat, aber Details, die nicht in der Zusammenfassung stehen, kann das Modell vergessen.`,
+		compactAction: 'Zusammenfassen',
 		models: (models: string[]) => models.join(', dann '),
 		usage: 'Verbrauch',
 		tokensInOut: (input: string, output: string) => `${input} Tokens rein, ${output} raus`,
@@ -352,6 +357,10 @@ export const de: Messages = {
 		summarized: 'Hat das Gespräch bisher zusammengefasst',
 		summaryHint:
 			'Der Chat war zu lang für das Modell geworden, deshalb macht es mit dieser Zusammenfassung weiter.',
+		summaryAsked:
+			'Jemand im Chat hat um diese Zusammenfassung gebeten: Das Modell macht mit ihr weiter.',
+		summaryIdle:
+			'Im Chat wurde es ruhig, deshalb wurde er zusammengefasst: Das Modell macht mit dieser Zusammenfassung weiter.',
 		running: (command: string) => `Führt ${command} aus`,
 		runningACommand: 'Führt einen Befehl aus',
 		ranACommand: 'Hat einen Befehl ausgeführt',
@@ -1297,6 +1306,22 @@ export const de: Messages = {
 			checkerNote:
 				'Ein schnelles, fähiges Modell hält Chats flott: Jeder Befehl, der mehr tut als nachzusehen, kostet eine kurze Anfrage an das Modell.',
 			saved: 'Gespeichert. Gilt ab dem nächsten Befehl.'
+		},
+		idleCompaction: {
+			title: 'Ruhige Chats',
+			hint: 'Wenn es in einem Chat eine Weile ruhig war, kann das Modell ihn zusammenfassen, damit die nächste Antwort die Zusammenfassung liest statt des ganzen Chats: schneller und günstiger. Der Chat zeigt weiter alles. Zusammengefasst werden nur Chats ab etwa 20.000 Tokens und keine im Claude-Abo, dessen Claude Code seine selbst zusammenfasst.',
+			modes: { off: 'Aus', on: 'An' },
+			offStatus:
+				'Chats werden nur zusammengefasst, wenn sie das Fenster des Modells fast füllen oder jemand darum bittet.',
+			onStatus: (minutes: number) =>
+				`Chats werden nach ${p(minutes, { one: `${minutes} ruhigen Minute`, other: `${minutes} ruhigen Minuten` })} zusammengefasst.`,
+			change: 'Ändern',
+			mode: 'Ruhige Chats zusammenfassen',
+			minutes: 'Minuten ohne Nachricht',
+			cacheNote:
+				'Unter 60 Minuten liest die Zusammenfassung den Chat aus dem Prompt-Cache, was wenig kostet; später liest sie den ganzen Chat noch einmal.',
+			invalid: (max: number) => `Eine ganze Zahl von Minuten, von 1 bis ${max}.`,
+			saved: 'Gespeichert. Es gilt für Chats ab ihrer nächsten ruhigen Phase.'
 		}
 	},
 

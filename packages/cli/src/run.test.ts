@@ -473,3 +473,24 @@ describe('update check', () => {
 		expect(readConfig().updateCheck).toBeUndefined();
 	});
 });
+
+describe('quiet chats', () => {
+	it('are summarized after the minutes set, until turned off', async () => {
+		expect((await run(['config'])).out).toContain(
+			'\nquiet chats   summarized only near the window, or on request\n'
+		);
+		expect(await run(['config', 'set', 'compact-when-idle', '55'])).toEqual({
+			code: 0,
+			out: 'Quiet chats: summarized after 55 minutes without a message.\n',
+			err: ''
+		});
+		expect(readConfig().compactWhenIdle).toBe(55);
+		expect((await run(['config', 'set', 'compact-when-idle', 'soon'])).err).toContain(
+			'Minutes are a whole number from 1 to 10080, or off.'
+		);
+		expect(readConfig().compactWhenIdle).toBe(55);
+
+		await run(['config', 'set', 'compact-when-idle', 'off']);
+		expect(readConfig().compactWhenIdle).toBeUndefined();
+	});
+});

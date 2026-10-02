@@ -249,6 +249,11 @@ export const en = {
 			"Some pictures and PDFs in this chat don't carry over to another provider: the new model gets where their files are, and can look at them again.",
 		switch: 'Switch',
 		change: 'Change',
+		compact: 'Summarize the chat',
+		compactTitle: 'Summarize the chat?',
+		compactBody: (tokens: string | null) =>
+			`The model writes a short summary of the chat so far and goes on from it, so each reply reads less${tokens ? ` (about ${tokens} tokens now)` : ''}. Everyone still sees the whole chat, but the model may forget details the summary leaves out.`,
+		compactAction: 'Summarize',
 		/** The models that wrote a reply, in order. */
 		models: (models: string[]) => models.join(', then '),
 		usage: 'Usage',
@@ -279,6 +284,8 @@ export const en = {
 		summarizing: 'Summarizing the conversation so far',
 		summarized: 'Summarized the conversation so far',
 		summaryHint: 'The chat had grown too long for the model, so it goes on from this summary.',
+		summaryAsked: 'Someone in the chat asked for this summary: the model goes on from it.',
+		summaryIdle: 'The chat went quiet, so it was summarized: the model goes on from this.',
 		running: (command: string) => `Running ${command}`,
 		runningACommand: 'Running a command',
 		ranACommand: 'Ran a command',
@@ -1229,6 +1236,22 @@ export const en = {
 			checkerNote:
 				'A fast, capable model keeps chats quick: every command that does more than look costs a short call to it.',
 			saved: 'Saved. It applies from the next command.'
+		},
+		idleCompaction: {
+			title: 'Quiet chats',
+			hint: 'Once a chat has been quiet for a while, the model can summarize it, so its next reply reads the summary rather than the whole chat: faster, and cheaper. The chat still shows everything. Only chats past about 20,000 tokens are summarized, and none on the Claude plan, whose Claude Code summarizes its own.',
+			modes: { off: 'Off', on: 'On' },
+			offStatus:
+				"Chats are summarized only when they near the model's window, or when someone asks.",
+			onStatus: (minutes: number) =>
+				`Chats are summarized after ${p(minutes, { one: `${minutes} quiet minute`, other: `${minutes} quiet minutes` })}.`,
+			change: 'Change',
+			mode: 'Summarize quiet chats',
+			minutes: 'Minutes without a message',
+			cacheNote:
+				'Under 60 minutes, the summary reads the chat from the prompt cache, which costs little; later, it reads the whole chat again.',
+			invalid: (max: number) => `A whole number of minutes, from 1 to ${max}.`,
+			saved: 'Saved. It applies to chats from their next quiet spell.'
 		}
 	},
 

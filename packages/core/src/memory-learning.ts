@@ -393,8 +393,11 @@ function inTurn(conversationId: string): void {
 export function startLearning(): void {
 	if (holder.__noluneLearning) return;
 	holder.__noluneLearning = true;
+	// A summary of the chat (compaction.ts) runs like a turn, without ending one: its timer starts
+	// again here. After a turn it's started again once more at the turn's end, which is the same.
 	onRunningChange((conversationId, running) => {
 		if (running) cancel(conversationId);
+		else later(conversationId);
 	});
 	onLoopEnd((conversationId) => later(conversationId));
 	for (const id of recentConversationIds(new Date(Date.now() - CATCH_UP_MS))) later(id);

@@ -341,6 +341,11 @@ export const es: Messages = {
 			'Algunas imágenes y PDF de este chat no pasan a otro proveedor: el nuevo modelo recibe dónde están sus archivos y puede volver a mirarlos.',
 		switch: 'Cambiar',
 		change: 'Cambiar',
+		compact: 'Resumir el chat',
+		compactTitle: '¿Resumir el chat?',
+		compactBody: (tokens: string | null) =>
+			`El modelo escribe un breve resumen del chat hasta ahora y continúa a partir de él, así que cada respuesta lee menos${tokens ? ` (ahora unos ${tokens} tokens)` : ''}. Todos siguen viendo el chat completo, pero el modelo puede olvidar detalles que el resumen no incluya.`,
+		compactAction: 'Resumir',
 		models: (models: string[]) => models.join(', luego '),
 		usage: 'Uso',
 		tokensInOut: (input: string, output: string) =>
@@ -372,6 +377,9 @@ export const es: Messages = {
 		summarized: 'Resumió la conversación hasta ahora',
 		summaryHint:
 			'La conversación se había vuelto demasiado larga para el modelo, así que continúa a partir de este resumen.',
+		summaryAsked: 'Alguien en el chat pidió este resumen: el modelo continúa a partir de él.',
+		summaryIdle:
+			'El chat quedó tranquilo, así que se resumió: el modelo continúa a partir de esto.',
 		running: (command: string) => `Ejecutando ${command}`,
 		runningACommand: 'Ejecutando un comando',
 		ranACommand: 'Ejecutó un comando',
@@ -1308,6 +1316,22 @@ export const es: Messages = {
 			checkerNote:
 				'Un modelo rápido y capaz mantiene ágiles los chats: cada comando que hace algo más que mirar le cuesta una breve consulta.',
 			saved: 'Guardado. Se aplica desde el próximo comando.'
+		},
+		idleCompaction: {
+			title: 'Chats tranquilos',
+			hint: 'Cuando un chat lleva un rato tranquilo, el modelo puede resumirlo, así su siguiente respuesta lee el resumen en lugar de todo el chat: más rápido y más barato. El chat sigue mostrándolo todo. Solo se resumen los chats de más de unos 20.000 tokens, y ninguno del plan de Claude, cuyo Claude Code resume los suyos.',
+			modes: { off: 'Desactivado', on: 'Activado' },
+			offStatus:
+				'Los chats solo se resumen cuando se acercan a la ventana del modelo o cuando alguien lo pide.',
+			onStatus: (minutes: number) =>
+				`Los chats se resumen tras ${p(minutes, { one: `${minutes} minuto tranquilo`, other: `${minutes} minutos tranquilos` })}.`,
+			change: 'Cambiar',
+			mode: 'Resumir chats tranquilos',
+			minutes: 'Minutos sin mensajes',
+			cacheNote:
+				'Por debajo de 60 minutos, el resumen lee el chat de la caché del prompt, lo que cuesta poco; después, vuelve a leer todo el chat.',
+			invalid: (max: number) => `Un número entero de minutos, de 1 a ${max}.`,
+			saved: 'Guardado. Se aplica a los chats desde su próxima pausa.'
 		}
 	},
 

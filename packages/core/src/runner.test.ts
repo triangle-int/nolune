@@ -4,7 +4,7 @@ import { createMessage, streamTurn, toAnthropicMessages } from './anthropic.ts';
 import { eq } from 'drizzle-orm';
 import { stopBackgroundCommands } from './background.ts';
 import { SAFETY_STOP, saveCommandMode } from './command-safety.ts';
-import { SUMMARY_REQUEST } from './compaction.ts';
+import { summaryRequest } from './compaction.ts';
 import {
 	appendRow,
 	commitQueuedRows,
@@ -17,9 +17,11 @@ import { addMemoryFact } from './memory.ts';
 import { conversation } from './db/schema.ts';
 import { LEGACY_TOOLS, TOOLS, runCommand, type RunCommandResult } from './run-command.ts';
 import {
+	CompactionError,
 	changeCommandMode,
 	changeEffort,
 	changeModel,
+	compactConversation,
 	getSnapshot,
 	kick,
 	onLoopEnd,
@@ -379,7 +381,7 @@ describe('compaction', () => {
 			{ role: 'user', content: [{ type: 'text', text: 'Anna: Files?' }] },
 			{ role: 'assistant', content: [listFiles] },
 			{ role: 'user', content: [listed] },
-			{ role: 'user', content: [{ type: 'text', text: SUMMARY_REQUEST }] }
+			{ role: 'user', content: [{ type: 'text', text: summaryRequest('window') }] }
 		]);
 		const note =
 			'[Earlier in this conversation, summarized to fit the context window:]\n\nAnna asked for the files; ls found a.txt.';
@@ -419,6 +421,93 @@ describe('compaction', () => {
 			live: []
 		});
 		expect(committedRows(chat.id).at(-1)?.kind).toBe('tool_results');
+	});
+});
+
+describe('summarizing on request', () => {
+	const summarized = (text: string) =>
+		modelReply([{ type: 'text', text: `<summary>${text}</summary>` }], 'end_turn');
+
+	/** Resolves when the conversation's agent next stops working. */
+	function idle(conversationId: string): Promise<void> {
+		return new Promise((resolve) => {
+			const off = onRunningChange((id, running) => {
+				if (id !== conversationId || running) return;
+				off();
+				resolve();
+			});
+		});
+	}
+
+	it('has the model summarize the chat, without starting a turn', async () => {
+		const chat = chatAsking(modelReply([{ type: 'text', text: 'Two files.' }], 'end_turn'));
+		await run(chat.id);
+		vi.mocked(streamTurn).mockResolvedValueOnce(summarized('Anna asked for the files: two.'));
+
+		const done = idle(chat.id);
+		compactConversation(chat.id, 'Anna');
+		expect(getSnapshot(chat.id).running).toBe(true);
+		await done;
+
+		expect(vi.mocked(streamTurn)).toHaveBeenCalledTimes(2);
+		const ask = vi.mocked(streamTurn).mock.calls[1][0];
+		expect(ask.compactAt).toBeUndefined();
+		expect(toAnthropicMessages(ask.messages).at(-1)).toEqual({
+			role: 'user',
+			content: [{ type: 'text', text: summaryRequest('asked') }]
+		});
+		expect(committedRows(chat.id).map((row) => row.kind)).toEqual([
+			'human',
+			'assistant',
+			'compaction'
+		]);
+		expect(getSnapshot(chat.id)).toMatchObject({ running: false, error: null, live: [] });
+		// The reply before it was answered: Continue has nothing to answer.
+		await run(chat.id);
+		expect(vi.mocked(streamTurn)).toHaveBeenCalledTimes(2);
+	});
+
+	it('answers a message sent meanwhile from the summary, once it is written', async () => {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Hi' });
+		vi.mocked(streamTurn).mockResolvedValueOnce(
+			modelReply([{ type: 'text', text: 'Hello.' }], 'end_turn')
+		);
+		await run(chat.id);
+		let write!: (reply: Anthropic.Message) => void;
+		vi.mocked(streamTurn).mockReturnValueOnce(new Promise((resolve) => (write = resolve)));
+		vi.mocked(streamTurn).mockResolvedValueOnce(
+			modelReply([{ type: 'text', text: 'Fine, thanks.' }], 'end_turn')
+		);
+
+		compactConversation(chat.id, 'Anna');
+		const answered = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'How are you?');
+		write(summarized('Anna said hi.'));
+		await answered;
+
+		const next = vi.mocked(streamTurn).mock.calls[2][0];
+		expect(toAnthropicMessages(next.messages)).toEqual([
+			{ role: 'user', content: [{ type: 'text', text: expect.stringContaining('Anna said hi.') }] },
+			{ role: 'user', content: [{ type: 'text', text: 'Anna: How are you?' }] }
+		]);
+	});
+
+	it('refuses while the agent works, with nothing new, and on the Claude plan', async () => {
+		const chat = chatAsking(modelReply([{ type: 'text', text: 'Two files.' }], 'end_turn'));
+		expect(() => compactConversation(chat.id, 'Anna')).toThrow('nothing new to summarize');
+		await run(chat.id);
+		vi.mocked(streamTurn).mockResolvedValueOnce(summarized('Anna asked for the files.'));
+		const done = idle(chat.id);
+		compactConversation(chat.id, 'Anna');
+		expect(() => compactConversation(chat.id, 'Anna')).toThrow(CompactionError);
+		await done;
+		expect(() => compactConversation(chat.id, 'Anna')).toThrow('nothing new to summarize');
+
+		const plan = makePreset('Claude plan', 'opus', 'claude-plan');
+		changeModel(chat.id, plan.id);
+		expect(() => compactConversation(chat.id, 'Anna')).toThrow('Claude Code');
 	});
 });
 
