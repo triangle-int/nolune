@@ -530,9 +530,13 @@ chatgpt-plan setup` at a terminal (`finishChatGptSignIn`). An address from anoth
 - **Models** are the plan's catalog, `GET /v1/models` with the plan's token, which answers with
   `models` (`slug`, `display_name`, `visibility`, supported reasoning levels and a context window
   when it says): the admin page offers those with `visibility: "list"`, in ChatGPT's order, and
-  adding a preset checks the model is there. A preset's window is the catalog's, or unknown: the
-  API's windows may not be the plan's. A chat's effort goes as it is, or as the nearest below it
-  the model takes.
+  adding a preset checks the model is there. The catalog is Codex's: it shows a model only to a
+  `client_version` at or past the model's `minimal_client_version`, and without one it answers
+  with an older list that misses new models. So nolune asks as Codex's latest release, which npm
+  says (looked up at most hourly), or as the release it knows when npm doesn't say a newer one;
+  should OpenAI turn the version down (400), it asks again without it. A preset's window is the
+  catalog's, or unknown: the API's windows may not be the plan's. A chat's effort goes as it is, or
+  as the nearest below it the model takes.
 - **Errors.** What the plan says goes wrong is said in words (`describeFailure`): its usage limit
   (the plan's own or the weekly one set for nolune, linking to ChatGPT's usage settings), an
   account that can't use its plan in other apps (it takes Plus or Pro), a check that couldn't be

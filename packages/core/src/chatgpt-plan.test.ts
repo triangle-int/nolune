@@ -33,7 +33,8 @@ vi.mock('./run-command.ts', async (importOriginal) => ({
 /*
  * Chats on the ChatGPT plan against a stand-in for OpenAI: its accounts service (sign-in, token
  * refresh, sign-out, the keys that sign ID tokens) and the Responses API and model catalog the
- * plan's token opens. The browser's part of a sign-in is played by the tests.
+ * plan's token opens, and for npm, which says Codex's latest release. The browser's part of a
+ * sign-in is played by the tests.
  */
 
 // --- a stand-in for OpenAI ---
@@ -41,6 +42,7 @@ vi.mock('./run-command.ts', async (importOriginal) => ({
 interface Seen {
 	method: string;
 	path: string;
+	query: URLSearchParams;
 	headers: IncomingHttpHeaders;
 	form: URLSearchParams | null;
 	json: Record<string, unknown> | null;
@@ -58,6 +60,11 @@ let base = '';
 const seen: Seen[] = [];
 /** The Responses API's answers. */
 let answer: (request: Seen) => Answer;
+/** The model catalog's answers. */
+let modelsAnswer: (request: Seen) => Answer;
+/** npm's answer for Codex's latest release. */
+let codexRelease: () => Answer;
+let lookups = 0;
 /** The token endpoint's answer to a refresh. */
 let refreshAnswer: (form: URLSearchParams) => Answer;
 
@@ -142,6 +149,7 @@ const CATALOG = [
 		display_name: 'GPT-6.1 Sol',
 		description: 'For hard problems.',
 		visibility: 'list',
+		minimal_client_version: '0.159.0',
 		supported_reasoning_levels: [
 			{ effort: 'low' },
 			{ effort: 'medium' },
@@ -153,6 +161,20 @@ const CATALOG = [
 	{ slug: 'gpt-6.1-luna', display_name: 'GPT-6.1 Luna', visibility: 'list' },
 	{ slug: 'gpt-6.1-internal', display_name: 'Internal', visibility: 'hide' }
 ];
+
+/**
+ * The catalog as OpenAI answers it: a model only for a client at or past its
+ * `minimal_client_version`, and without a version, an older list.
+ */
+function gatedCatalog(request: Seen): Answer {
+	const asked = request.query.get('client_version') ?? '0.0.0';
+	const offered = CATALOG.filter(
+		(m) =>
+			!m.minimal_client_version ||
+			m.minimal_client_version.localeCompare(asked, 'en', { numeric: true }) <= 0
+	);
+	return { json: { models: offered } };
+}
 
 beforeAll(async () => {
 	server = createServer(async (req, res) => {
@@ -166,10 +188,12 @@ beforeAll(async () => {
 		} catch {
 			// empty
 		}
-		const path = req.url ?? '';
+		const url = new URL(req.url ?? '', 'http://stand-in');
+		const path = url.pathname;
 		const request: Seen = {
 			method: req.method ?? 'GET',
 			path,
+			query: url.searchParams,
 			headers: req.headers,
 			form: isForm ? new URLSearchParams(body) : null,
 			json
@@ -182,7 +206,8 @@ beforeAll(async () => {
 			};
 		} else if (path === '/api/accounts/oauth/token') reply = tokenEndpoint(request.form!);
 		else if (path === '/api/accounts/oauth/revoke') reply = { json: {} };
-		else if (path === '/v1/models') reply = { json: { models: CATALOG } };
+		else if (path === '/v1/models') reply = modelsAnswer(request);
+		else if (path === '/codex/latest') reply = codexRelease();
 		else if (path === '/v1/responses') reply = answer(request);
 		else reply = { status: 404, json: { error: { message: 'Not found' } } };
 		if (reply.events) {
@@ -208,6 +233,8 @@ afterAll(() => {
 beforeEach(() => {
 	vi.stubEnv('NOLUNE_CHATGPT_AUTH_URL', base);
 	vi.stubEnv('NOLUNE_CHATGPT_API_URL', `${base}/v1`);
+	// A new address each time, so each test asks npm afresh.
+	vi.stubEnv('NOLUNE_CODEX_RELEASE_URL', `${base}/codex/latest?run=${++lookups}`);
 	// The OpenAI key's settings, which the plan's requests never use.
 	vi.stubEnv('OPENAI_BASE_URL', 'http://127.0.0.1:9/v1');
 	vi.stubEnv('OPENAI_ORG_ID', 'org-of-the-key');
@@ -219,6 +246,8 @@ beforeEach(() => {
 	tokens = 0;
 	exchangeIdToken = (grant) => idToken(grant);
 	answer = () => ({ status: 500, json: { error: { message: 'unexpected request' } } });
+	modelsAnswer = gatedCatalog;
+	codexRelease = () => ({ json: { name: '@openai/codex', version: '0.160.0' } });
 	refreshAnswer = () =>
 		issued('chatgpt.tokens.use.direct email offline_access openid profile resource.invoke');
 });
@@ -909,5 +938,54 @@ describe('chats on the ChatGPT plan', () => {
 		await expect(addPreset({ provider: 'chatgpt-plan', model: 'gpt-5' })).rejects.toThrow(
 			'The ChatGPT plan has no model "gpt-5". It has gpt-6.1-sol, gpt-6.1-luna.'
 		);
+	});
+
+	it("asks for the plan's models as Codex's latest release, which new models need", async () => {
+		await signIn();
+		codexRelease = () => ({ json: { name: '@openai/codex', version: '0.161.2' } });
+
+		expect((await listChatGptModels()).map((m) => m.id)).toContain('gpt-6.1-sol');
+		await listChatGptModels();
+
+		expect(requests('/v1/models').map((r) => r.query.get('client_version'))).toEqual([
+			'0.161.2',
+			'0.161.2'
+		]);
+		// npm is asked once an hour at most.
+		expect(requests('/codex/latest')).toHaveLength(1);
+	});
+
+	it("asks as the Codex nolune knows when npm doesn't say a newer one", async () => {
+		await signIn();
+		codexRelease = () => ({ status: 503, json: {} });
+		expect((await listChatGptModels()).map((m) => m.id)).toContain('gpt-6.1-sol');
+
+		vi.stubEnv('NOLUNE_CODEX_RELEASE_URL', `${base}/codex/latest?older`);
+		codexRelease = () => ({ json: { name: '@openai/codex', version: '0.150.0' } });
+		await listChatGptModels();
+
+		vi.stubEnv('NOLUNE_CODEX_RELEASE_URL', `${base}/codex/latest?alpha`);
+		codexRelease = () => ({ json: { name: '@openai/codex', version: '0.170.0-alpha.1' } });
+		await listChatGptModels();
+
+		expect(requests('/v1/models').map((r) => r.query.get('client_version'))).toEqual([
+			'0.160.0',
+			'0.160.0',
+			'0.160.0'
+		]);
+	});
+
+	it("lists the plan's models without a version when OpenAI doesn't take one", async () => {
+		await signIn();
+		modelsAnswer = (request) =>
+			request.query.has('client_version')
+				? { status: 400, json: { error: { message: 'Unknown parameter: client_version' } } }
+				: gatedCatalog(request);
+
+		expect((await listChatGptModels()).map((m) => m.id)).toEqual([
+			'gpt-6.1-luna',
+			'gpt-6.1-internal'
+		]);
+		expect(requests('/v1/models').map((r) => r.query.has('client_version'))).toEqual([true, false]);
 	});
 });
