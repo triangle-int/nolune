@@ -30,23 +30,8 @@ struct BellView: View {
 	var body: some View {
 		NavigationStack {
 			List {
-				Group {
-					if family.bell.items.isEmpty {
-						Text("Nothing yet. Ask nolune for a reminder or a daily check, and what it finds shows up here.")
-							.foregroundStyle(.secondary)
-					}
-					ForEach(items) { item in
-						row(item)
-							.swipeActions(edge: .trailing) {
-								Button(role: .destructive) {
-									Task { await family.dismiss(item) }
-								} label: {
-									Label("Dismiss", systemImage: "xmark")
-								}
-							}
-					}
-				}
-				.listRowBackground(palette.muted)
+				rows
+					.listRowBackground(palette.muted)
 			}
 			.pageBackground(palette)
 			.listStyle(.insetGrouped)
@@ -73,6 +58,24 @@ struct BellView: View {
 			if newAfter == nil { newAfter = family.bell.seenAt }
 			expanded = expand
 			await family.markBellSeen()
+		}
+	}
+
+	/// The rows, apart from `body`, which the compiler then type-checks in time.
+	@ViewBuilder private var rows: some View {
+		if family.bell.items.isEmpty {
+			Text("Nothing yet. Ask nolune for a reminder or a daily check, and what it finds shows up here.")
+				.foregroundStyle(.secondary)
+		}
+		ForEach(items) { item in
+			row(item)
+				.swipeActions(edge: .trailing) {
+					Button(role: .destructive) {
+						Task { await family.dismiss(item) }
+					} label: {
+						Label("Dismiss", systemImage: "xmark")
+					}
+				}
 		}
 	}
 

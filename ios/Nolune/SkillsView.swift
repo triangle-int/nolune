@@ -16,45 +16,8 @@ struct SkillsView: View {
 
 	var body: some View {
 		List {
-			Group {
-				if let skills {
-					if skills.isEmpty {
-						Text("No skills yet. When nolune works out how to do something, it can save that as a skill for next time.")
-							.foregroundStyle(.secondary)
-					}
-					if technical, !skills.isEmpty {
-						let on = skills.filter(\.enabled)
-						Text("\(on.count) of \(skills.count) on · about \(on.map(\.tokens).reduce(0, +)) tokens at the start of every new chat")
-							.font(.footnote)
-							.foregroundStyle(.secondary)
-					}
-					ForEach(["profile", "global", "builtin"], id: \.self) { scope in
-						let group = skills.filter { $0.scope == scope }
-						if !group.isEmpty {
-							Section {
-								ForEach(group) { skill in row(skill) }
-							} header: {
-								HStack {
-									Text(verbatim: title(scope))
-									Spacer()
-									if group.count > 1 {
-										let allOn = group.allSatisfy(\.enabled)
-										Button(allOn ? "Turn all off" : "Turn all on") {
-											set(group.map(\.name), enabled: !allOn)
-										}
-										.font(.caption)
-										.textCase(nil)
-									}
-								}
-							}
-						}
-					}
-				} else if problem == nil {
-					ProgressView()
-						.frame(maxWidth: .infinity)
-				}
-			}
-			.listRowBackground(palette.muted)
+			rows
+				.listRowBackground(palette.muted)
 		}
 		.pageBackground(palette)
 		.navigationTitle("Skills")
@@ -65,6 +28,46 @@ struct SkillsView: View {
 		}
 		.alert(problem ?? "", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
 			Button("OK", role: .cancel) {}
+		}
+	}
+
+	/// The rows, apart from `body`, which the compiler then type-checks in time.
+	@ViewBuilder private var rows: some View {
+		if let skills {
+			if skills.isEmpty {
+				Text("No skills yet. When nolune works out how to do something, it can save that as a skill for next time.")
+					.foregroundStyle(.secondary)
+			}
+			if technical, !skills.isEmpty {
+				let on = skills.filter(\.enabled)
+				Text("\(on.count) of \(skills.count) on · about \(on.map(\.tokens).reduce(0, +)) tokens at the start of every new chat")
+					.font(.footnote)
+					.foregroundStyle(.secondary)
+			}
+			ForEach(["profile", "global", "builtin"], id: \.self) { scope in
+				let group = skills.filter { $0.scope == scope }
+				if !group.isEmpty {
+					Section {
+						ForEach(group) { skill in row(skill) }
+					} header: {
+						HStack {
+							Text(verbatim: title(scope))
+							Spacer()
+							if group.count > 1 {
+								let allOn = group.allSatisfy(\.enabled)
+								Button(allOn ? "Turn all off" : "Turn all on") {
+									set(group.map(\.name), enabled: !allOn)
+								}
+								.font(.caption)
+								.textCase(nil)
+							}
+						}
+					}
+				}
+			}
+		} else if problem == nil {
+			ProgressView()
+				.frame(maxWidth: .infinity)
 		}
 	}
 

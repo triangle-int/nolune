@@ -51,99 +51,8 @@ struct FolderView: View {
 
 	var body: some View {
 		List {
-			Group {
-				if let folder {
-					Section {
-						Button(action: newChat) {
-							Label("New chat in \(folder.name)", systemImage: "square.and.pencil")
-						}
-					}
-					Section {
-						TextField("We're planning two weeks in Japan in April with the kids (7 and 10). Keep plans relaxed and the budget under ¥600,000.", text: $instructions, axis: .vertical)
-							.lineLimit(3...12)
-						if instructions != folder.instructions {
-							HStack {
-								Text(verbatim: "\(instructions.count) / \(folder.maxInstructions)")
-									.font(.caption.monospacedDigit())
-									.foregroundStyle(instructions.count > folder.maxInstructions ? Palette.plain.destructive : Color.secondary)
-								Spacer()
-								Button("Cancel") { instructions = folder.instructions }
-									.buttonStyle(.borderless)
-								Button("Save") { saveInstructions() }
-									.buttonStyle(.borderless)
-									.disabled(instructions.count > folder.maxInstructions)
-							}
-						}
-					} header: {
-						Text("Instructions")
-					} footer: {
-						Text("What nolune should know or do in every chat here.")
-					}
-					Section {
-						if folder.files.isEmpty, uploads.items.isEmpty {
-							Text("No files yet")
-								.foregroundStyle(.secondary)
-						}
-						ForEach(folder.files) { file in
-							fileRow(file)
-						}
-						ForEach(uploads.items) { item in
-							HStack {
-								ProgressView()
-								Text(verbatim: item.name)
-									.foregroundStyle(.secondary)
-								if let problem = item.problem {
-									Text(verbatim: problem)
-										.font(.caption)
-										.foregroundStyle(Palette.plain.destructive)
-								}
-							}
-						}
-						Menu {
-							Button {
-								photosShown = true
-							} label: {
-								Label("Photos", systemImage: "photo.on.rectangle")
-							}
-							Button {
-								filesShown = true
-							} label: {
-								Label("Files", systemImage: "folder")
-							}
-						} label: {
-							Label("Add files", systemImage: "plus")
-						}
-						.disabled(folder.files.count >= folder.maxFiles)
-					} header: {
-						Text("Files")
-					} footer: {
-						Text("Pictures, documents, anything. nolune gets where they're saved and opens them when they matter.")
-					}
-					Section("Chats") {
-						if chats.isEmpty {
-							Text("Chats you start here show up here. You can also drag chats onto the folder in the sidebar.")
-								.foregroundStyle(.secondary)
-						}
-						ForEach(chats) { chat in
-							Button {
-								open(.chat(chat.id))
-							} label: {
-								HStack {
-									ChatRow(title: chat.title.isEmpty ? String(localized: "New chat") : chat.title, running: family.running.contains(chat.id))
-										.foregroundStyle(Palette.plain.foreground)
-									Text(chat.updated, format: .relative(presentation: .named))
-										.font(.caption)
-										.foregroundStyle(.secondary)
-								}
-							}
-						}
-					}
-				} else if problem == nil {
-					ProgressView()
-						.frame(maxWidth: .infinity)
-				}
-			}
-			.listRowBackground(palette.muted)
+			rows
+				.listRowBackground(palette.muted)
 		}
 		.pageBackground(palette)
 		.navigationTitle(folder?.name ?? family.folders.first { $0.id == id }?.name ?? "")
@@ -217,6 +126,100 @@ struct FolderView: View {
 		}
 		.alert(problem ?? "", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
 			Button("OK", role: .cancel) {}
+		}
+	}
+
+	/// The rows, apart from `body`, which the compiler then type-checks in time.
+	@ViewBuilder private var rows: some View {
+		if let folder {
+			Section {
+				Button(action: newChat) {
+					Label("New chat in \(folder.name)", systemImage: "square.and.pencil")
+				}
+			}
+			Section {
+				TextField("We're planning two weeks in Japan in April with the kids (7 and 10). Keep plans relaxed and the budget under ¥600,000.", text: $instructions, axis: .vertical)
+					.lineLimit(3...12)
+				if instructions != folder.instructions {
+					HStack {
+						Text(verbatim: "\(instructions.count) / \(folder.maxInstructions)")
+							.font(.caption.monospacedDigit())
+							.foregroundStyle(instructions.count > folder.maxInstructions ? Palette.plain.destructive : Color.secondary)
+						Spacer()
+						Button("Cancel") { instructions = folder.instructions }
+							.buttonStyle(.borderless)
+						Button("Save") { saveInstructions() }
+							.buttonStyle(.borderless)
+							.disabled(instructions.count > folder.maxInstructions)
+					}
+				}
+			} header: {
+				Text("Instructions")
+			} footer: {
+				Text("What nolune should know or do in every chat here.")
+			}
+			Section {
+				if folder.files.isEmpty, uploads.items.isEmpty {
+					Text("No files yet")
+						.foregroundStyle(.secondary)
+				}
+				ForEach(folder.files) { file in
+					fileRow(file)
+				}
+				ForEach(uploads.items) { item in
+					HStack {
+						ProgressView()
+						Text(verbatim: item.name)
+							.foregroundStyle(.secondary)
+						if let problem = item.problem {
+							Text(verbatim: problem)
+								.font(.caption)
+								.foregroundStyle(Palette.plain.destructive)
+						}
+					}
+				}
+				Menu {
+					Button {
+						photosShown = true
+					} label: {
+						Label("Photos", systemImage: "photo.on.rectangle")
+					}
+					Button {
+						filesShown = true
+					} label: {
+						Label("Files", systemImage: "folder")
+					}
+				} label: {
+					Label("Add files", systemImage: "plus")
+				}
+				.disabled(folder.files.count >= folder.maxFiles)
+			} header: {
+				Text("Files")
+			} footer: {
+				Text("Pictures, documents, anything. nolune gets where they're saved and opens them when they matter.")
+			}
+			Section("Chats") {
+				if chats.isEmpty {
+					Text("Chats you start here show up here. You can also drag chats onto the folder in the sidebar.")
+						.foregroundStyle(.secondary)
+				}
+				ForEach(chats) { chat in
+					Button {
+						open(.chat(chat.id))
+					} label: {
+						HStack {
+							ChatRow(title: chat.title.isEmpty ? String(localized: "New chat") : chat.title, running: family.running.contains(chat.id))
+								.foregroundStyle(Palette.plain.foreground)
+							Text(chat.updated, format: .relative(presentation: .named))
+								.font(.caption)
+								.foregroundStyle(.secondary)
+						}
+					}
+				}
+			}
+		} else if problem == nil {
+			ProgressView()
+				.frame(maxWidth: .infinity)
 		}
 	}
 

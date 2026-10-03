@@ -223,75 +223,8 @@ private struct TemplateSheet: View {
 	var body: some View {
 		NavigationStack {
 			Form {
-				Group {
-					Section {
-						Text(verbatim: template.description)
-							.foregroundStyle(.secondary)
-						Text(verbatim: template.sentence(with: values, picture: pictures.items.isEmpty ? "" : (template.imageLabel ?? String(localized: "Picture")).lowercased()))
-							.font(.title3.weight(.semibold))
-					}
-					if template.image != "none" {
-						Section(template.imageLabel ?? String(localized: "Picture")) {
-							ForEach(pictures.items) { item in
-								HStack {
-									if let preview = item.preview {
-										Image(uiImage: preview)
-											.resizable()
-											.scaledToFill()
-											.frame(width: 56, height: 56)
-											.clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-									}
-									Text(verbatim: item.problem ?? item.name)
-										.foregroundStyle(item.problem == nil ? Palette.plain.foreground : Palette.plain.destructive)
-									Spacer()
-									if item.upload == nil, item.problem == nil { ProgressView() }
-									Button {
-										pictures.remove(item.id)
-									} label: {
-										Image(systemName: "xmark.circle.fill")
-											.foregroundStyle(.secondary)
-									}
-									.buttonStyle(.borderless)
-								}
-							}
-							if pictures.items.count < template.maxImages {
-								if drawn {
-									Button("Start drawing") { drawing = true }
-									Button("Use a photo of a drawing") { photosShown = true }
-								} else {
-									if UIImagePickerController.isSourceTypeAvailable(.camera) {
-										Button("Take a photo") { cameraShown = true }
-									}
-									Button("Choose a photo") { photosShown = true }
-								}
-							}
-						}
-					}
-					if !template.settings.isEmpty {
-						Section {
-							ForEach(template.settings, id: \.id) { setting in
-								row(setting)
-							}
-						}
-					}
-					Section {
-						TextField("Add anything else…", text: $extra, axis: .vertical)
-						Picker("Shape", selection: $shape) {
-							Text("Square").tag("square")
-							Text("Portrait").tag("portrait")
-							Text("Landscape").tag("landscape")
-							Text("Auto").tag("auto")
-						}
-					} footer: {
-						if let problem {
-							Text(verbatim: problem)
-								.foregroundStyle(Palette.plain.destructive)
-						} else if missingPicture {
-							Text(drawn ? "Add a drawing first." : "Add a photo first.")
-						}
-					}
-				}
-				.listRowBackground(palette.muted)
+				rows
+					.listRowBackground(palette.muted)
 			}
 			.pageBackground(palette)
 			.navigationTitle(template.title)
@@ -322,6 +255,76 @@ private struct TemplateSheet: View {
 			}
 			.fullScreenCover(isPresented: $drawing) {
 				DrawingView { png in pictures.add(png, named: "drawing.png") }
+			}
+		}
+	}
+
+	/// The rows, apart from `body`, which the compiler then type-checks in time.
+	@ViewBuilder private var rows: some View {
+		Section {
+			Text(verbatim: template.description)
+				.foregroundStyle(.secondary)
+			Text(verbatim: template.sentence(with: values, picture: pictures.items.isEmpty ? "" : (template.imageLabel ?? String(localized: "Picture")).lowercased()))
+				.font(.title3.weight(.semibold))
+		}
+		if template.image != "none" {
+			Section(template.imageLabel ?? String(localized: "Picture")) {
+				ForEach(pictures.items) { item in
+					HStack {
+						if let preview = item.preview {
+							Image(uiImage: preview)
+								.resizable()
+								.scaledToFill()
+								.frame(width: 56, height: 56)
+								.clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+						}
+						Text(verbatim: item.problem ?? item.name)
+							.foregroundStyle(item.problem == nil ? Palette.plain.foreground : Palette.plain.destructive)
+						Spacer()
+						if item.upload == nil, item.problem == nil { ProgressView() }
+						Button {
+							pictures.remove(item.id)
+						} label: {
+							Image(systemName: "xmark.circle.fill")
+								.foregroundStyle(.secondary)
+						}
+						.buttonStyle(.borderless)
+					}
+				}
+				if pictures.items.count < template.maxImages {
+					if drawn {
+						Button("Start drawing") { drawing = true }
+						Button("Use a photo of a drawing") { photosShown = true }
+					} else {
+						if UIImagePickerController.isSourceTypeAvailable(.camera) {
+							Button("Take a photo") { cameraShown = true }
+						}
+						Button("Choose a photo") { photosShown = true }
+					}
+				}
+			}
+		}
+		if !template.settings.isEmpty {
+			Section {
+				ForEach(template.settings, id: \.id) { setting in
+					row(setting)
+				}
+			}
+		}
+		Section {
+			TextField("Add anything else…", text: $extra, axis: .vertical)
+			Picker("Shape", selection: $shape) {
+				Text("Square").tag("square")
+				Text("Portrait").tag("portrait")
+				Text("Landscape").tag("landscape")
+				Text("Auto").tag("auto")
+			}
+		} footer: {
+			if let problem {
+				Text(verbatim: problem)
+					.foregroundStyle(Palette.plain.destructive)
+			} else if missingPicture {
+				Text(drawn ? "Add a drawing first." : "Add a photo first.")
 			}
 		}
 	}

@@ -19,54 +19,8 @@ struct MemoryView: View {
 
 	var body: some View {
 		List {
-			Group {
-				if let memory {
-					Section {
-						Toggle("Learn from chats", isOn: Binding(get: { memory.learnFromChats }, set: { learn($0) }))
-					} footer: {
-						Text("When a chat has been quiet for a couple of minutes, nolune reads it over and saves what's worth remembering. That's one short extra request to the chat's model each time. When this is off, nolune saves only what it thinks of while chatting.")
-					}
-					if !memory.recent.isEmpty {
-						Section {
-							ForEach(allChanges ? memory.recent : Array(memory.recent.prefix(4))) { change in
-								ChangeRow(change: change, me: family.me?.id, title: title(of: change.note)) { await undo(change) }
-							}
-							if !allChanges, memory.recent.count > 4 {
-								Button("Show all \(memory.recent.count)") { allChanges = true }
-							}
-						} header: {
-							Text("Saved from chats")
-						} footer: {
-							Text("What nolune noted by itself after chats went quiet, in the last two weeks.")
-						}
-					}
-					Section {
-						noteRow(core(memory), pinned: true)
-					} header: {
-						Text("Core")
-					}
-					if !memory.cards.isEmpty {
-						Section {
-							ForEach(memory.cards) { card in
-								cardRow(card)
-							}
-						} header: {
-							Text("Cards")
-						} footer: {
-							Text("Each member's card says what they told nolune about themselves that they'd tell anyone. It goes with them into every profile they're in, and every chat starts with it. Only they change it.")
-						}
-					}
-					ForEach(groups(memory)) { group in
-						Section(group.title) {
-							ForEach(group.notes) { note in noteRow(note) }
-						}
-					}
-				} else if problem == nil {
-					ProgressView()
-						.frame(maxWidth: .infinity)
-				}
-			}
-			.listRowBackground(palette.muted)
+			rows
+				.listRowBackground(palette.muted)
 		}
 		.pageBackground(palette)
 		.navigationTitle("Memory")
@@ -74,6 +28,55 @@ struct MemoryView: View {
 		.task { await load() }
 		.alert(problem ?? "", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
 			Button("OK", role: .cancel) {}
+		}
+	}
+
+	/// The rows, apart from `body`, which the compiler then type-checks in time.
+	@ViewBuilder private var rows: some View {
+		if let memory {
+			Section {
+				Toggle("Learn from chats", isOn: Binding(get: { memory.learnFromChats }, set: { learn($0) }))
+			} footer: {
+				Text("When a chat has been quiet for a couple of minutes, nolune reads it over and saves what's worth remembering. That's one short extra request to the chat's model each time. When this is off, nolune saves only what it thinks of while chatting.")
+			}
+			if !memory.recent.isEmpty {
+				Section {
+					ForEach(allChanges ? memory.recent : Array(memory.recent.prefix(4))) { change in
+						ChangeRow(change: change, me: family.me?.id, title: title(of: change.note)) { await undo(change) }
+					}
+					if !allChanges, memory.recent.count > 4 {
+						Button("Show all \(memory.recent.count)") { allChanges = true }
+					}
+				} header: {
+					Text("Saved from chats")
+				} footer: {
+					Text("What nolune noted by itself after chats went quiet, in the last two weeks.")
+				}
+			}
+			Section {
+				noteRow(core(memory), pinned: true)
+			} header: {
+				Text("Core")
+			}
+			if !memory.cards.isEmpty {
+				Section {
+					ForEach(memory.cards) { card in
+						cardRow(card)
+					}
+				} header: {
+					Text("Cards")
+				} footer: {
+					Text("Each member's card says what they told nolune about themselves that they'd tell anyone. It goes with them into every profile they're in, and every chat starts with it. Only they change it.")
+				}
+			}
+			ForEach(groups(memory)) { group in
+				Section(group.title) {
+					ForEach(group.notes) { note in noteRow(note) }
+				}
+			}
+		} else if problem == nil {
+			ProgressView()
+				.frame(maxWidth: .infinity)
 		}
 	}
 
@@ -505,36 +508,8 @@ private struct MoveNote: View {
 	var body: some View {
 		NavigationStack {
 			Form {
-				Group {
-					Section {
-						ForEach(MemoryCategory.notes.filter { $0 != .projects }, id: \.self) { category in
-							option(category.name, "\(category.rawValue).md")
-						}
-					} header: {
-						Text("Categories")
-					} footer: {
-						Text("Choose where it belongs. If that note is there already, the two become one.")
-					}
-					Section(MemoryCategory.people.name) {
-						ForEach(notes.filter { MemoryCategory.of($0.path) == .people && $0.path != note.path }) { person in
-							option(MemoryCategory.title(of: person), person.path)
-						}
-						option(String(localized: "Someone new…"), Self.newPerson)
-						if target == Self.newPerson {
-							TextField("Their name", text: $newName)
-						}
-					}
-					Section(MemoryCategory.projects.name) {
-						ForEach(notes.filter { MemoryCategory.of($0.path) == .projects && $0.path != note.path }) { project in
-							option(MemoryCategory.title(of: project), project.path)
-						}
-						option(String(localized: "A new project…"), Self.newProject)
-						if target == Self.newProject {
-							TextField("Project name", text: $newName)
-						}
-					}
-				}
-				.listRowBackground(palette.muted)
+				rows
+					.listRowBackground(palette.muted)
 			}
 			.pageBackground(palette)
 			.navigationTitle("Move \"\(MemoryCategory.title(of: note))\"")
@@ -555,6 +530,37 @@ private struct MoveNote: View {
 					}
 					.disabled(path == nil || path == note.path || working)
 				}
+			}
+		}
+	}
+
+	/// The rows, apart from `body`, which the compiler then type-checks in time.
+	@ViewBuilder private var rows: some View {
+		Section {
+			ForEach(MemoryCategory.notes.filter { $0 != .projects }, id: \.self) { category in
+				option(category.name, "\(category.rawValue).md")
+			}
+		} header: {
+			Text("Categories")
+		} footer: {
+			Text("Choose where it belongs. If that note is there already, the two become one.")
+		}
+		Section(MemoryCategory.people.name) {
+			ForEach(notes.filter { MemoryCategory.of($0.path) == .people && $0.path != note.path }) { person in
+				option(MemoryCategory.title(of: person), person.path)
+			}
+			option(String(localized: "Someone new…"), Self.newPerson)
+			if target == Self.newPerson {
+				TextField("Their name", text: $newName)
+			}
+		}
+		Section(MemoryCategory.projects.name) {
+			ForEach(notes.filter { MemoryCategory.of($0.path) == .projects && $0.path != note.path }) { project in
+				option(MemoryCategory.title(of: project), project.path)
+			}
+			option(String(localized: "A new project…"), Self.newProject)
+			if target == Self.newProject {
+				TextField("Project name", text: $newName)
 			}
 		}
 	}

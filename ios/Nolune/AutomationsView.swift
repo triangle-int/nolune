@@ -20,57 +20,8 @@ struct AutomationsView: View {
 
 	var body: some View {
 		List {
-			Group {
-				if let overview {
-					if overview.triggers.isEmpty {
-						Section {
-							Text("No automations yet. Ask nolune in a chat, for example:")
-							Text("\"Every weekday at 7:30, check the weather and tell us if we need umbrellas.\"")
-								.foregroundStyle(.secondary)
-							Text("\"Remind Anna tomorrow at 17:00 to pick up the parcel.\"")
-								.foregroundStyle(.secondary)
-						}
-					} else {
-						Section {
-							MonthView(calendar: overview.calendar, day: $day) { month = $0 }
-						} footer: {
-							Text("Times are in the computer's time zone (\(overview.timeZone)).")
-						}
-						if let cell = overview.calendar.cells.first(where: { $0.key == (day ?? overview.calendar.selected) }) {
-							Section(cell.relative.map { "\($0) · \(cell.title)" } ?? cell.title) {
-								if cell.entries.isEmpty {
-									Text(cell.isPast ? "Nothing ran on this day." : "Nothing runs on this day.")
-										.foregroundStyle(.secondary)
-								}
-								ForEach(Array(cell.entries.enumerated()), id: \.offset) { _, entry in
-									entryRow(entry)
-								}
-							}
-						}
-						Section("All automations") {
-							ForEach(overview.triggers) { automation in
-								NavigationLink {
-									AutomationView(
-										automation: automation,
-										slug: slug,
-										client: client,
-										openChat: openChat,
-										ran: { chat in family.startLiveActivity(chat, title: automation.name) }
-									) {
-										await load()
-									}
-								} label: {
-									AutomationRow(automation: automation)
-								}
-							}
-						}
-					}
-				} else if problem == nil {
-					ProgressView()
-						.frame(maxWidth: .infinity)
-				}
-			}
-			.listRowBackground(palette.muted)
+			rows
+				.listRowBackground(palette.muted)
 		}
 		.pageBackground(palette)
 		.navigationTitle("Automations")
@@ -79,6 +30,58 @@ struct AutomationsView: View {
 		.task(id: month) { await load() }
 		.alert(problem ?? "", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
 			Button("OK", role: .cancel) {}
+		}
+	}
+
+	/// The rows, apart from `body`, which the compiler then type-checks in time.
+	@ViewBuilder private var rows: some View {
+		if let overview {
+			if overview.triggers.isEmpty {
+				Section {
+					Text("No automations yet. Ask nolune in a chat, for example:")
+					Text("\"Every weekday at 7:30, check the weather and tell us if we need umbrellas.\"")
+						.foregroundStyle(.secondary)
+					Text("\"Remind Anna tomorrow at 17:00 to pick up the parcel.\"")
+						.foregroundStyle(.secondary)
+				}
+			} else {
+				Section {
+					MonthView(calendar: overview.calendar, day: $day) { month = $0 }
+				} footer: {
+					Text("Times are in the computer's time zone (\(overview.timeZone)).")
+				}
+				if let cell = overview.calendar.cells.first(where: { $0.key == (day ?? overview.calendar.selected) }) {
+					Section(cell.relative.map { "\($0) · \(cell.title)" } ?? cell.title) {
+						if cell.entries.isEmpty {
+							Text(cell.isPast ? "Nothing ran on this day." : "Nothing runs on this day.")
+								.foregroundStyle(.secondary)
+						}
+						ForEach(Array(cell.entries.enumerated()), id: \.offset) { _, entry in
+							entryRow(entry)
+						}
+					}
+				}
+				Section("All automations") {
+					ForEach(overview.triggers) { automation in
+						NavigationLink {
+							AutomationView(
+								automation: automation,
+								slug: slug,
+								client: client,
+								openChat: openChat,
+								ran: { chat in family.startLiveActivity(chat, title: automation.name) }
+							) {
+								await load()
+							}
+						} label: {
+							AutomationRow(automation: automation)
+						}
+					}
+				}
+			}
+		} else if problem == nil {
+			ProgressView()
+				.frame(maxWidth: .infinity)
 		}
 	}
 
@@ -257,71 +260,8 @@ private struct AutomationView: View {
 
 	var body: some View {
 		Form {
-			Group {
-				Section {
-					Text(verbatim: automation.schedule)
-					if let next = automation.next {
-						Text("next \(next)")
-							.foregroundStyle(.secondary)
-					}
-					Button("Run now") {
-						act {
-							if let chat = try await client.runAutomation(slug, automation.id) { ran(chat) }
-						}
-					}
-					if automation.state != "done" {
-						Button(automation.state == "on" ? "Pause" : "Resume") {
-							act { try await client.setAutomation(slug, automation.id, enabled: automation.state != "on") }
-						}
-					}
-				} footer: {
-					if let message {
-						Text(verbatim: message)
-					}
-				}
-				Section("Description") {
-					TextField("What it does, in one sentence", text: $summary, axis: .vertical)
-				}
-				Section {
-					TextField("", text: $text, axis: .vertical)
-						.font(automation.action == "script" ? .callout.monospaced() : .body)
-						.lineLimit(3...12)
-					if edited {
-						Button("Save") {
-							act { try await client.editAutomation(slug, automation.id, summary: summary, text: text) }
-						}
-						.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-					}
-				} header: {
-					Text("Instructions for nolune")
-				} footer: {
-					if automation.action == "script" {
-						Text("Script: runs without the model and calls \("nolune wake") when nolune is needed")
-					}
-				}
-				if let webhook = automation.webhookUrl {
-					Section {
-						Text(verbatim: webhook)
-							.font(.caption.monospaced())
-							.textSelection(.enabled)
-					} footer: {
-						Text("Webhook URL. Keep it secret: anyone with it can start a run. POST JSON to it.")
-					}
-				}
-				Section("Recent runs (\(automation.runs.count))") {
-					if automation.runs.isEmpty {
-						Text("No runs yet")
-							.foregroundStyle(.secondary)
-					}
-					ForEach(automation.runs) { run in
-						RunRow(run: run, script: automation.action == "script") { openChat($0) }
-					}
-				}
-				Section {
-					Button("Delete", role: .destructive) { deleting = true }
-				}
-			}
-			.listRowBackground(palette.muted)
+			rows
+				.listRowBackground(palette.muted)
 		}
 		.pageBackground(palette)
 		.navigationTitle(automation.name)
@@ -335,6 +275,72 @@ private struct AutomationView: View {
 			Button("Delete", role: .destructive) {
 				act(leave: true) { try await client.deleteAutomation(slug, automation.id) }
 			}
+		}
+	}
+
+	/// The rows, apart from `body`, which the compiler then type-checks in time.
+	@ViewBuilder private var rows: some View {
+		Section {
+			Text(verbatim: automation.schedule)
+			if let next = automation.next {
+				Text("next \(next)")
+					.foregroundStyle(.secondary)
+			}
+			Button("Run now") {
+				act {
+					if let chat = try await client.runAutomation(slug, automation.id) { ran(chat) }
+				}
+			}
+			if automation.state != "done" {
+				Button(automation.state == "on" ? "Pause" : "Resume") {
+					act { try await client.setAutomation(slug, automation.id, enabled: automation.state != "on") }
+				}
+			}
+		} footer: {
+			if let message {
+				Text(verbatim: message)
+			}
+		}
+		Section("Description") {
+			TextField("What it does, in one sentence", text: $summary, axis: .vertical)
+		}
+		Section {
+			TextField("", text: $text, axis: .vertical)
+				.font(automation.action == "script" ? .callout.monospaced() : .body)
+				.lineLimit(3...12)
+			if edited {
+				Button("Save") {
+					act { try await client.editAutomation(slug, automation.id, summary: summary, text: text) }
+				}
+				.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+			}
+		} header: {
+			Text("Instructions for nolune")
+		} footer: {
+			if automation.action == "script" {
+				Text("Script: runs without the model and calls \("nolune wake") when nolune is needed")
+			}
+		}
+		if let webhook = automation.webhookUrl {
+			Section {
+				Text(verbatim: webhook)
+					.font(.caption.monospaced())
+					.textSelection(.enabled)
+			} footer: {
+				Text("Webhook URL. Keep it secret: anyone with it can start a run. POST JSON to it.")
+			}
+		}
+		Section("Recent runs (\(automation.runs.count))") {
+			if automation.runs.isEmpty {
+				Text("No runs yet")
+					.foregroundStyle(.secondary)
+			}
+			ForEach(automation.runs) { run in
+				RunRow(run: run, script: automation.action == "script") { openChat($0) }
+			}
+		}
+		Section {
+			Button("Delete", role: .destructive) { deleting = true }
 		}
 	}
 
