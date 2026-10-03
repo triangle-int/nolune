@@ -23,6 +23,8 @@ final class Family: ObservableObject {
 	/// The chats nolune is working in right now, in the open profile.
 	@Published private(set) var running: Set<String> = []
 	@Published private(set) var bell = Bell.empty
+	/// What a chat in the open profile can use, and its new chats start with.
+	@Published private(set) var options: ChatOptions?
 	/// Loaded once, at least.
 	@Published private(set) var loaded = false
 	/// What went wrong with something the person did, to show them.
@@ -142,7 +144,7 @@ final class Family: ObservableObject {
 		guard profile != slug, profiles.contains(where: { $0.slug == profile }) else { return }
 		slug = profile
 		defaults.set(profile, forKey: profileKey)
-		(chats, more, folders, running) = ([], nil, [], [])
+		(chats, more, folders, running, options) = ([], nil, [], [], nil)
 		listenToRunning()
 		await reloadProfile()
 	}
@@ -287,6 +289,25 @@ final class Family: ObservableObject {
 	func move(_ chat: ChatSummary, to folder: String?) async -> Bool {
 		if let i = chats.firstIndex(where: { $0.id == chat.id }) { chats[i].folderId = folder }
 		return await act { try await client.moveChat(chat.id, to: folder) }
+	}
+
+	/// Starts a chat, with its first message when there is one; it goes first in the list.
+	func startChat(_ chat: Client.NewChat) async -> ChatSummary? {
+		guard let slug else { return nil }
+		var started: ChatSummary?
+		_ = await act {
+			let summary = try await client.startChat(slug, chat)
+			chats.removeAll { $0.id == summary.id }
+			chats.insert(summary, at: 0)
+			started = summary
+		}
+		return started
+	}
+
+	/// The models, reasoning levels and chips for the open profile's chats.
+	func loadOptions() async {
+		guard let slug, let options = try? await client.chatOptions(slug), slug == self.slug else { return }
+		self.options = options
 	}
 
 	/// A chat by its id, among those loaded.

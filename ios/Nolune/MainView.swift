@@ -2,8 +2,9 @@ import SwiftUI
 
 /**
  * The family's nolune, natively: the sidebar (SidebarView) and what it opens beside it on an
- * iPad, or pushed on an iPhone. Screens that aren't native yet are their web pages under the
- * app's navigation (WebScreen); a link in one to a chat or another screen opens it here.
+ * iPad, or pushed on an iPhone: a new chat (NewChatView), a chat (ChatView), settings. Screens that
+ * aren't native yet are their web pages under the app's navigation (WebScreen); a link in one to a
+ * chat or another screen opens it here.
  */
 struct MainView: View {
 	@ObservedObject var family: Family
@@ -13,6 +14,8 @@ struct MainView: View {
 	@Environment(\.horizontalSizeClass) private var sizeClass
 	@State private var selection: Destination?
 	@State private var bell: BellSheet?
+	/// The folder a new chat starts in, from a folder page's "New chat in" link.
+	@State private var newChatFolder: String?
 
 	/// The bell, with a notification to expand in it.
 	private struct BellSheet: Identifiable {
@@ -34,7 +37,7 @@ struct MainView: View {
 				if let selection {
 					// Again for another profile: a profile's page is that profile's.
 					screen(selection)
-						.id([family.slug ?? "", String(describing: selection)])
+						.id([family.slug ?? "", String(describing: selection), newChatFolder ?? ""])
 				} else {
 					Text("Pick a chat, or start a new one.")
 						.foregroundStyle(.secondary)
@@ -74,11 +77,20 @@ struct MainView: View {
 		let slug = family.slug ?? ""
 		switch destination {
 		case .newChat:
-			web("/p/\(slug)", for: destination)
-				.navigationTitle("New chat")
+			NewChatView(family: family, folder: newChatFolder) { id in
+				newChatFolder = nil
+				selection = .chat(id)
+			}
+			.navigationTitle("New chat")
+			.navigationBarTitleDisplayMode(.inline)
 		case .chat(let id):
-			web("/p/\(slug)/c/\(id)", for: destination)
-				.navigationTitle(chatTitle(id))
+			ChatView(
+				id: id,
+				family: family,
+				open: { url in open(url, from: destination) },
+				deleted: { selection = sizeClass == .regular ? .newChat : nil }
+			)
+			.navigationBarTitleDisplayMode(.inline)
 		case .folder(let id):
 			web("/p/\(slug)/f/\(id)", for: destination)
 				.navigationTitle(family.folders.first { $0.id == id }?.name ?? "")
@@ -103,19 +115,16 @@ struct MainView: View {
 		.navigationBarTitleDisplayMode(.inline)
 	}
 
-	private func chatTitle(_ id: String) -> String {
-		guard let chat = family.chat(id) else { return "" }
-		return chat.title.isEmpty ? String(localized: "New chat") : chat.title
-	}
-
 	/// A link on a web screen, to something shown natively: true when it opens here.
 	private func open(_ url: URL, from current: Destination) -> Bool {
 		guard Address.sameOrigin(url, family.client.origin), let found = Destination.of(path: url.path) else {
 			return false
 		}
 		let slug = found.slug ?? family.slug
-		guard found.destination != current || slug != family.slug else { return false }
+		let folder = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "folder" }?.value
+		guard found.destination != current || slug != family.slug || folder != nil else { return false }
 		Task {
+			if found.destination == .newChat { newChatFolder = folder }
 			if let slug, slug != family.slug { await family.open(profile: slug) }
 			if case .chat(let id) = found.destination, family.chat(id) == nil { await family.reloadProfile() }
 			selection = found.destination

@@ -218,6 +218,8 @@ extension Client {
 		var folder: String?
 		var text: String?
 		var uploads: [String]?
+		/// How its commands run, `auto` or `unrestricted`; left out, as Models & keys says.
+		var commands: String?
 	}
 
 	func startChat(_ slug: String, _ chat: NewChat = NewChat()) async throws -> ChatSummary {
