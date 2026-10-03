@@ -11,10 +11,9 @@
 	import type { McpKind, McpServerResult } from './mcp-servers';
 
 	/**
-	 * The Connected services page's servers: the MCP servers whose tools the agent uses through
-	 * `nolune mcp`, each a row, and a form to connect another, open from the start while there are
-	 * none. `profiles`: those a server can be kept to. `result`: the last save's, check's or
-	 * removal's.
+	 * The Connected services page's servers: the MCP servers whose tools chats get, each a row, and
+	 * a form to connect another, open from the start while there are none. `profiles`: those a
+	 * server can be kept to. `result`: the last save's, check's, sign-in's or removal's.
 	 */
 	let {
 		servers,

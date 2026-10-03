@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Anthropic from '@anthropic-ai/sdk';
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+import { UnauthorizedError, auth } from '@modelcontextprotocol/sdk/client/auth.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport, SseError } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -21,6 +21,15 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { readConfig, updateConfig } from './config.ts';
 import { viewImage } from './images.ts';
+import {
+	McpSignIn,
+	forgetMcpSignIn,
+	mcpSignInState,
+	dropPendingSignIn,
+	pendingSignIn,
+	signInRedirectUrl,
+	signOutOf
+} from './mcp-auth.ts';
 import { paths } from './paths.ts';
 import { commandEnv, commandShell, resolveCwd } from './run-command.ts';
 import { NOLUNE_VERSION } from './updates.ts';
@@ -73,6 +82,12 @@ export interface McpRemoteServer extends McpServerBase {
 	url: string;
 	/** Sent with every request, like `Authorization: Bearer …`. */
 	headers?: Record<string, string>;
+	/**
+	 * For a server someone signs in to (mcp-auth.ts): the client an admin registered with its
+	 * authorization server, for one that doesn't let nolune register itself, and the scope to ask
+	 * for when the server doesn't say.
+	 */
+	oauth?: { clientId?: string; clientSecret?: string; scope?: string };
 }
 
 export type McpServerConfig = McpStdioServer | McpRemoteServer;
@@ -134,6 +149,27 @@ function stringMap(
 	return Object.keys(map).length ? map : undefined;
 }
 
+/** A server's `oauth`, as config.json has it. */
+function parseOAuth(value: unknown): McpRemoteServer['oauth'] {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) {
+		throw new McpServerError(
+			'Its oauth is an object, like {"clientId": "…", "clientSecret": "…"}.'
+		);
+	}
+	const oauth: NonNullable<McpRemoteServer['oauth']> = {};
+	for (const key of ['clientId', 'clientSecret', 'scope'] as const) {
+		const item = value[key];
+		if (item === undefined) continue;
+		if (typeof item !== 'string') throw new McpServerError(`Its oauth ${key} is text.`);
+		if (item.trim()) oauth[key] = item.trim();
+	}
+	if (oauth.clientSecret && !oauth.clientId) {
+		throw new McpServerError('Its oauth clientSecret goes with a clientId.');
+	}
+	return Object.keys(oauth).length ? oauth : undefined;
+}
+
 export function isMcpAddress(value: string): boolean {
 	try {
 		const url = new URL(value.trim());
@@ -146,8 +182,8 @@ export function isMcpAddress(value: string): boolean {
 /**
  * A server's settings from JSON as MCP clients write it (Claude's, Cursor's, VS Code's...): a
  * `command` with `args`, `env` and `cwd`, or a `url` (`type` `http`, the default for one, or
- * `sse`) with `headers`. What nolune doesn't use is left out. Throws an McpServerError saying
- * what's wrong.
+ * `sse`) with `headers` and nolune's `oauth`. What nolune doesn't use is left out. Throws an
+ * McpServerError saying what's wrong.
  */
 export function parseMcpServer(value: unknown): McpServerConfig {
 	if (!isRecord(value)) throw new McpServerError(`A server is a JSON object, like ${SHAPES}.`);
@@ -174,10 +210,12 @@ export function parseMcpServer(value: unknown): McpServerConfig {
 			throw new McpServerError('Its url is an address starting with http:// or https://.');
 		}
 		const headers = stringMap(value.headers, 'A header', HEADER_NAME);
+		const oauth = parseOAuth(value.oauth);
 		return {
 			type: type === 'sse' ? 'sse' : 'http',
 			url: url.trim(),
 			...(headers && { headers }),
+			...(oauth && { oauth }),
 			...base
 		};
 	}
@@ -271,6 +309,14 @@ export interface McpServerStatus {
 	profiles: string[] | null;
 	/** What's wrong with its settings in config.json, when something is. */
 	problem: string | null;
+	/**
+	 * For one at an address: someone signed in to it (OAuth), it wants someone to, or it signs in
+	 * some other way as far as nolune knows (null).
+	 */
+	signIn: 'signed-in' | 'needed' | null;
+	/** The client an admin registered with its sign-in, and whether its secret is saved. */
+	oauthClientId: string | null;
+	oauthSecret: boolean;
 }
 
 function status(name: string, raw: unknown): McpServerStatus {
@@ -286,7 +332,10 @@ function status(name: string, raw: unknown): McpServerStatus {
 			secrets: [],
 			description: null,
 			profiles: null,
-			problem: (err as Error).message
+			problem: (err as Error).message,
+			signIn: null,
+			oauthClientId: null,
+			oauthSecret: false
 		};
 	}
 	const shared = {
@@ -301,9 +350,20 @@ function status(name: string, raw: unknown): McpServerStatus {
 				...shared,
 				target: joinCommandLine([server.command, ...(server.args ?? [])]),
 				cwd: server.cwd ?? null,
-				secrets: Object.keys(server.env ?? {})
+				secrets: Object.keys(server.env ?? {}),
+				signIn: null,
+				oauthClientId: null,
+				oauthSecret: false
 			}
-		: { ...shared, target: server.url, cwd: null, secrets: Object.keys(server.headers ?? {}) };
+		: {
+				...shared,
+				target: server.url,
+				cwd: null,
+				secrets: Object.keys(server.headers ?? {}),
+				signIn: mcpSignInState(name, server.url),
+				oauthClientId: server.oauth?.clientId ?? null,
+				oauthSecret: !!server.oauth?.clientSecret
+			};
 }
 
 /** Every server, or those `profile` (a slug) has. */
@@ -344,7 +404,9 @@ export function findMcpServer(name: string, profile?: string): McpServerConfig {
 /**
  * Adds a server, or replaces the one of that name. `keepSecrets`: a server being changed that
  * has no environment variables or headers in `server` keeps the saved ones, as long as it stays
- * a command or an address (a form never has them). Returns whether it replaced one.
+ * a command or an address (a form never has them), and so does its sign-in's client secret while
+ * the client stays the same. A server that gets another address loses its sign-in. Returns
+ * whether it replaced one.
  */
 export function saveMcpServer(
 	name: string,
@@ -366,7 +428,16 @@ export function saveMcpServer(
 		}
 		if (options.keepSecrets && old) {
 			if (next.type === 'stdio' && old.type === 'stdio') next.env ??= old.env;
-			else if (next.type !== 'stdio' && old.type !== 'stdio') next.headers ??= old.headers;
+			else if (next.type !== 'stdio' && old.type !== 'stdio') {
+				next.headers ??= old.headers;
+				const client = next.oauth?.clientId;
+				if (client && client === old.oauth?.clientId && !next.oauth?.clientSecret) {
+					next.oauth = { ...next.oauth, clientSecret: old.oauth.clientSecret };
+				}
+			}
+		}
+		if (old && (old.type === 'stdio' || next.type === 'stdio' || old.url !== next.url)) {
+			forgetMcpSignIn(name);
 		}
 		all[name] = parseMcpServer(next);
 		config.mcpServers = all;
@@ -383,6 +454,7 @@ export function removeMcpServer(name: string): void {
 		if (Object.keys(all).length) config.mcpServers = all;
 		else delete config.mcpServers;
 	});
+	forgetMcpSignIn(name);
 	const known = remembered();
 	if (Object.hasOwn(known, name)) {
 		delete known[name];
@@ -474,12 +546,32 @@ async function stdioTransport(
 	return transport;
 }
 
-function remoteTransport(server: McpRemoteServer): Transport {
+/**
+ * A connection to a server at an address. `signIn`: its OAuth, which adds the tokens someone
+ * signed in with and refreshes them, for a server that wants it.
+ */
+function remoteTransport(server: McpRemoteServer, signIn: McpSignIn | null): Transport {
 	const url = new URL(server.url);
 	const requestInit: RequestInit = server.headers ? { headers: server.headers } : {};
+	const authProvider = signIn ?? undefined;
 	return server.type === 'sse'
-		? new SSEClientTransport(url, { requestInit })
-		: new StreamableHTTPClientTransport(url, { requestInit });
+		? new SSEClientTransport(url, { requestInit, authProvider })
+		: new StreamableHTTPClientTransport(url, { requestInit, authProvider });
+}
+
+/**
+ * The OAuth a connection to the server uses: none for one this computer runs, nor for one given
+ * its key as an Authorization header.
+ */
+function connectionSignIn(name: string, server: McpServerConfig): McpSignIn | null {
+	if (server.type === 'stdio') return null;
+	const headers = Object.keys(server.headers ?? {}).map((h) => h.toLowerCase());
+	if (headers.includes('authorization')) return null;
+	return new McpSignIn(name, server, signInRedirectUrl(), false);
+}
+
+function signInNeeded(name: string): string {
+	return `${name} needs someone to sign in to it: an admin presses Sign in on the Connected services page, or runs \`nolune mcp login ${name}\`.`;
 }
 
 /** Why connecting to a server failed, in words that say what to do. */
@@ -487,7 +579,8 @@ function connectError(
 	name: string,
 	server: McpServerConfig,
 	err: unknown,
-	stderr: string
+	stderr: string,
+	signIn: McpSignIn | null = null
 ): McpServerError {
 	const said = stderr.trim() ? ` It said: ${stderr.trim().split('\n').slice(-5).join('\n')}` : '';
 	if (err instanceof McpError && err.code === ErrorCode.RequestTimeout) {
@@ -508,11 +601,22 @@ function connectError(
 		return new McpServerError(`couldn't start ${name}: ${message}.${said}`);
 	}
 	const code = err instanceof StreamableHTTPError || err instanceof SseError ? err.code : undefined;
-	if (code === 401 || code === 403 || err instanceof UnauthorizedError) {
+	if (signIn?.authorizationUrl || (signIn && err instanceof UnauthorizedError)) {
+		return new McpServerError(signInNeeded(name));
+	}
+	// Turned away (a 401), and nolune went looking for its sign-in.
+	const turnedAway = !!signIn?.tried && code === undefined;
+	if (turnedAway && signIn?.offersSignIn) {
+		const why = (err instanceof Error ? err.message : String(err)).replace(/\.$/, '');
+		return new McpServerError(
+			`${name} turned nolune away, and signing in to it didn't start (${why}). If it takes a key or token instead, give it as a header like "Authorization: Bearer …".`
+		);
+	}
+	if (code === 401 || code === 403 || err instanceof UnauthorizedError || turnedAway) {
 		return new McpServerError(
 			server.headers
-				? `${name} turned nolune away (${code ?? 'unauthorized'}): its key or token wasn't accepted.`
-				: `${name} turned nolune away (${code ?? 'unauthorized'}): it wants a key or token, given as a header like "Authorization: Bearer …". Servers that only sign in through a browser (OAuth) can't be connected yet.`
+				? `${name} turned nolune away (${code ?? 401}): its key or token wasn't accepted.`
+				: `${name} turned nolune away (${code ?? 401}): it wants a key or token, given as a header like "Authorization: Bearer …".`
 		);
 	}
 	if (code === 404 || code === 405) {
@@ -536,15 +640,18 @@ async function connect(
 	const stderr = { text: '' };
 	let transport: Transport | undefined;
 	const client = new Client({ name: 'nolune', version: NOLUNE_VERSION }, { capabilities: {} });
+	const signIn = connectionSignIn(name, server);
 	try {
 		transport =
-			server.type === 'stdio' ? await stdioTransport(server, stderr) : remoteTransport(server);
+			server.type === 'stdio'
+				? await stdioTransport(server, stderr)
+				: remoteTransport(server, signIn);
 		await client.connect(transport, { timeout: CONNECT_TIMEOUT_MS, signal });
 	} catch (err) {
 		await client.close().catch(() => {});
 		await transport?.close().catch(() => {});
 		if (signal?.aborted) throw signal.reason;
-		throw connectError(name, server, err, stderr.text);
+		throw connectError(name, server, err, stderr.text, signIn);
 	}
 	const pid = transport instanceof StdioClientTransport ? transport.pid : null;
 	return { client, pid };
@@ -560,6 +667,16 @@ async function close(name: string, connection: Connection): Promise<void> {
 	connection.closed = true;
 	if (connection.idle) clearTimeout(connection.idle);
 	await connection.client.close().catch(() => {});
+}
+
+/** Closes the gateway's connection to a server, once nothing uses it: the next one is new. */
+async function dropConnection(name: string): Promise<void> {
+	const connection = await pool.open.get(name)?.catch(() => null);
+	if (!connection || connection.closed) return;
+	if (connection.users) {
+		connection.stale = true;
+		forget(name, connection);
+	} else await close(name, connection);
 }
 
 /** The connection to a server, opened if needed; one with other settings is closed first. */
@@ -666,6 +783,14 @@ async function withMcpServer<T>(
 	connection.idle = null;
 	try {
 		return await use(connection.client, server);
+	} catch (err) {
+		// Its sign-in stopped working, and refreshing it didn't help: the next one asks again.
+		if (err instanceof UnauthorizedError) {
+			connection.stale = true;
+			forget(name, connection);
+			throw new McpServerError(signInNeeded(name));
+		}
+		throw err;
 	} finally {
 		release(name, connection);
 	}
@@ -802,6 +927,104 @@ export function describeFromServer(found: McpServerTools): string | undefined {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Signing in (OAuth, mcp-auth.ts)
+
+/** The server called `name`, which must be at an address to sign in to. */
+function signInServer(name: string): McpRemoteServer {
+	const server = findMcpServer(name);
+	if (server.type === 'stdio') {
+		throw new McpServerError(
+			`${name} runs on this computer: it gets its keys as environment variables, not a sign-in.`
+		);
+	}
+	return server;
+}
+
+/** Why signing in to a server didn't work, in words. */
+function signInError(name: string, err: unknown): McpServerError {
+	if (err instanceof McpServerError) return err;
+	const why = (err instanceof Error ? err.message : String(err)).replace(/\.$/, '');
+	return new McpServerError(`couldn't sign in to ${name}: ${why}.`);
+}
+
+/**
+ * Starts signing in to the server called `name`: the page of its authorization server to send
+ * someone's browser to, which sends it back to `origin` (where they have nolune open; else the
+ * address people open it at) to finish (finishMcpSignIn). nolune registers itself with the
+ * authorization server first when it hasn't for that address, unless the server has a client of
+ * its own (`oauth.clientId`). Throws an McpServerError.
+ */
+export async function startMcpSignIn(name: string, origin?: string): Promise<URL> {
+	const server = signInServer(name);
+	const signIn = new McpSignIn(name, server, signInRedirectUrl(origin), true);
+	try {
+		await auth(signIn, { serverUrl: server.url });
+	} catch (err) {
+		throw signInError(name, err);
+	}
+	if (!signIn.authorizationUrl) {
+		throw new McpServerError(`${name} didn't give a page to sign in at.`);
+	}
+	return signIn.authorizationUrl;
+}
+
+/**
+ * Finishes a sign-in startMcpSignIn started, with what the browser brought back to nolune
+ * (`state` and `code`): trades the code for tokens, and asks the server for its tools with them,
+ * for chats. Returns the server's name and its tools, or null when it couldn't list them. Throws
+ * an McpServerError.
+ */
+export async function finishMcpSignIn(
+	state: string,
+	code: string
+): Promise<{ name: string; tools: McpServerTools | null }> {
+	const pending = pendingSignIn(state);
+	if (!pending) {
+		throw new McpServerError(
+			'this sign-in expired or was already finished. Start it again from Connected services.'
+		);
+	}
+	const { name } = pending;
+	const server = signInServer(name);
+	if (server.url !== pending.url) {
+		throw new McpServerError(`${name} has another address now. Sign in to it again.`);
+	}
+	const signIn = new McpSignIn(name, server, pending.redirectUrl, true);
+	try {
+		await auth(signIn, { serverUrl: server.url, authorizationCode: code });
+	} catch (err) {
+		signIn.invalidateCredentials('verifier');
+		throw signInError(name, err);
+	}
+	// A connection made before had no tokens.
+	await dropConnection(name);
+	let tools: McpServerTools | null = null;
+	try {
+		tools = await listMcpTools(name);
+	} catch {
+		// Signed in all the same; Check on the page says what's wrong.
+	}
+	return { name, tools };
+}
+
+/**
+ * A sign-in the service sent back without a code (turned down, canceled): the server it was for,
+ * whose sign-in is dropped, or null when `state` isn't one nolune started.
+ */
+export function abandonMcpSignIn(state: string): string | null {
+	const pending = pendingSignIn(state);
+	if (pending) dropPendingSignIn(pending.name);
+	return pending?.name ?? null;
+}
+
+/** Signs out of the server called `name`: nolune forgets its tokens, and closes its connection. */
+export async function signOutMcpServer(name: string): Promise<void> {
+	const server = signInServer(name);
+	signOutOf(name, server.url);
+	await dropConnection(name);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Tools for chats
 
 /** What a server said its tools are when nolune last asked (mcp-tools.json), by server name. */
@@ -851,7 +1074,9 @@ export async function refreshMcpTools(names?: string[]): Promise<void> {
 	const known = remembered();
 	const stale = listMcpServers().filter((s) => {
 		if (s.problem || (names && !names.includes(s.name))) return false;
-		return names || known[s.name]?.key !== connectionKey(findMcpServer(s.name));
+		// Asked by name, or known with other settings: one waiting for a sign-in isn't asked.
+		if (names) return true;
+		return s.signIn !== 'needed' && known[s.name]?.key !== connectionKey(findMcpServer(s.name));
 	});
 	await Promise.allSettled(stale.map((s) => listMcpTools(s.name)));
 }
@@ -923,8 +1148,10 @@ export function mcpChatTools(profile: string): Anthropic.Tool[] {
 	for (const server of listMcpServers(profile)) {
 		if (server.problem) continue;
 		const found = known[server.name];
-		if (!found) unknown.push(server.name);
-		else if (tools.length + found.tools.length <= MAX_CHAT_MCP_TOOLS) {
+		if (!found) {
+			// One waiting for a sign-in is asked once someone signs in.
+			if (server.signIn !== 'needed') unknown.push(server.name);
+		} else if (tools.length + found.tools.length <= MAX_CHAT_MCP_TOOLS) {
 			tools.push(...found.tools.map((tool) => toolDefinition(server.name, tool)));
 		}
 	}

@@ -139,14 +139,19 @@ TOKENS|auto]`: change what's given; a new model is checked like add's. Chats alr
 Other apps' and services' tools, which chats get next to nolune's own. See
 [Connected services](/docs/guides/connected-services/).
 
-- `nolune mcp add <name> <url> [--transport http|sse] [--header "Name: value"]... [--description D]
-[--profile SLUG]...`: connect a server at an address
+- `nolune mcp add <name> <url> [--transport http|sse] [--header "Name: value"]... [--client-id ID
+[--client-secret S]] [--scope S] [--description D] [--profile SLUG]...`: connect a server at an
+  address. `--client-id`: the app a service had you register for its sign-in
 - `nolune mcp add <name> [--env NAME=value]... [--cwd DIR] [--description D] [--profile SLUG]... --
 <command> [args...]`: connect one this computer runs. nolune connects to check it; the same name
   again changes it. `--profile`: only in those profiles (every profile without it)
 - `nolune mcp add-json <name> '<json>'`: the same, as MCP clients' settings write a server
 - `nolune mcp rm <name>`
-- `nolune mcp list`: the servers, and the names of their keys (never the keys)
+- `nolune mcp list`: the servers, the names of their keys (never the keys), and whether someone
+  signed in to them
+- `nolune mcp login <name>`: sign in to a server that wants it (OAuth): prints the page to open,
+  which comes back to nolune's web address
+- `nolune mcp logout <name>`: forget its sign-in
 - `nolune mcp tools [<server> [<tool>]]`: their tools; with a tool, what it does and takes
 - `nolune mcp call <server> <tool> [<json>|-]`: call a tool with a JSON object of arguments (`-`
   reads stdin); pictures it returns are attached for the agent

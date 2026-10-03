@@ -5,6 +5,18 @@
 
 	let { data, form } = $props();
 	const { m } = getI18n();
+
+	/** What the last action said, or how a sign-in that just came back went. */
+	const result = $derived(
+		form ??
+			(data.signedIn && {
+				mcpServer: data.signedIn.name,
+				mcpMessage:
+					data.signedIn.tools === null
+						? m.services.signedInNoTools
+						: m.services.signedIn(data.signedIn.tools)
+			})
+	);
 </script>
 
 <div class="flex h-full flex-col">
@@ -18,7 +30,7 @@
 				<p class="text-muted-foreground">{m.services.hint}</p>
 			</div>
 
-			<McpServers servers={data.servers} profiles={data.profiles} result={form} />
+			<McpServers servers={data.servers} profiles={data.profiles} {result} />
 		</div>
 	</main>
 </div>

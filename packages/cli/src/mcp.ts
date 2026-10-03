@@ -13,6 +13,9 @@ import {
 	parseMcpServer,
 	removeMcpServer,
 	saveMcpServer,
+	signInRedirectUrl,
+	signOutMcpServer,
+	startMcpSignIn,
 	type McpServerConfig,
 	type McpServerTools
 } from '@nolune/core';
@@ -23,7 +26,8 @@ type ToolResult = Awaited<ReturnType<typeof callMcpTool>>;
 
 export const MCP_HELP = `MCP servers (other apps' and services' tools, which chats get next to run_command)
   nolune mcp add <name> <url> [--transport http|sse] [--header "Name: value"]...
-                 [--description D] [--profile SLUG]...
+                 [--client-id ID [--client-secret S]] [--scope S] [--description D]
+                 [--profile SLUG]...
   nolune mcp add <name> [--env NAME=value]... [--cwd DIR] [--description D] [--profile SLUG]...
                  -- <command> [args...]
                                              connect a server at an address, or one this computer
@@ -36,12 +40,17 @@ export const MCP_HELP = `MCP servers (other apps' and services' tools, which cha
                                              {"type": "http", "url": …, "headers": {…}}
   nolune mcp rm <name>
   nolune mcp list                               the servers (and the names of their keys, never
-                                             the keys)
+                                             the keys), and whether someone signed in to them
+  nolune mcp login <name>                       sign in to a server at an address that wants it
+                                             (OAuth): prints the page to open, which comes back
+                                             to nolune's web address. --client-id: the app the
+                                             service had you register, for one that wants that
+  nolune mcp logout <name>                      forget its sign-in
   nolune mcp tools [<server> [<tool>]]          their tools; with a tool, what it does and takes
   nolune mcp call <server> <tool> [<json>|-]    call a tool with a JSON object of arguments (- reads
                                              stdin); pictures it returns are attached for the agent`;
 
-const USAGE = 'usage: nolune mcp add|add-json|rm|list|tools|call. See `nolune help`.';
+const USAGE = 'usage: nolune mcp add|add-json|rm|list|login|logout|tools|call. See `nolune help`.';
 
 /** How much of a tool's description the list shows, and of a server's instructions. */
 const SHORT_DESCRIPTION = 200;
@@ -98,6 +107,12 @@ async function store(io: Io, name: string, server: McpServerConfig): Promise<voi
 	if (found && !parsed.description) parsed.description = describeFromServer(found);
 	const { replaced } = saveMcpServer(name, parsed);
 	const done = replaced ? 'Changed' : 'Added';
+	if (!found && listMcpServers().find((s) => s.name === name)?.signIn === 'needed') {
+		io.log(
+			`${done} ${name}. It needs someone to sign in: \`nolune mcp login ${name}\`, or Sign in on the Connected services page.`
+		);
+		return;
+	}
 	if (!found) {
 		io.log(`${done} ${name}, but couldn't connect to it: ${unreachable}`);
 		return;
@@ -136,16 +151,28 @@ async function add(io: Io, args: string[]): Promise<void> {
 		if (transport !== undefined && transport !== 'http' && transport !== 'sse') {
 			fail('--transport is http (the default) or sse, for older servers.');
 		}
+		if (values['client-secret'] && !values['client-id']) {
+			fail('--client-secret goes with the --client-id it belongs to.');
+		}
 		const headers = pairs(values.header, ':', 'A header');
+		const oauth = {
+			...(values['client-id'] && { clientId: values['client-id'] }),
+			...(values['client-secret'] && { clientSecret: values['client-secret'] }),
+			...(values.scope && { scope: values.scope })
+		};
 		await store(io, name, {
 			type: transport === 'sse' ? 'sse' : 'http',
 			url: words[0],
 			...(Object.keys(headers).length && { headers }),
+			...(Object.keys(oauth).length && { oauth }),
 			...shared
 		});
 		return;
 	}
 	if (values.header) fail('--header is for a server at an address (http:// or https://).');
+	if (values['client-id'] || values['client-secret'] || values.scope) {
+		fail('--client-id, --client-secret and --scope are for signing in to a server at an address.');
+	}
 	if (transport !== undefined && transport !== 'stdio') {
 		fail(`${words[0]} isn't an address: a server at one starts with http:// or https://.`);
 	}
@@ -169,6 +196,9 @@ function parseAdd(args: string[]) {
 			header: { type: 'string', short: 'H', multiple: true },
 			env: { type: 'string', short: 'e', multiple: true },
 			cwd: { type: 'string' },
+			'client-id': { type: 'string' },
+			'client-secret': { type: 'string' },
+			scope: { type: 'string' },
 			description: { type: 'string', short: 'd' },
 			profile: { type: 'string', multiple: true }
 		}
@@ -215,7 +245,13 @@ function list(io: Io): void {
 		const kind = s.type === 'stdio' ? 'env' : 'headers';
 		const keys = s.secrets.length ? `${kind}: ${s.secrets.join(', ')}` : `no ${kind}`;
 		const where = s.profiles ? `profiles: ${s.profiles.join(', ')}` : 'every profile';
-		io.log(`${s.name}\t${s.type}\t${s.target}\t${keys}\t${where}`);
+		const signIn =
+			s.signIn === 'signed-in'
+				? '\tsigned in'
+				: s.signIn === 'needed'
+					? `\tneeds sign-in (nolune mcp login ${s.name})`
+					: '';
+		io.log(`${s.name}\t${s.type}\t${s.target}\t${keys}\t${where}${signIn}`);
 		if (s.description) io.log(`  ${s.description}`);
 	}
 }
@@ -339,6 +375,20 @@ async function call(io: Io, args: string[]): Promise<number> {
 	return 0;
 }
 
+/**
+ * Starts signing in to a server: the page to open, in a browser that reaches nolune's web
+ * address, which the sign-in comes back to. The agent can pass the link on to someone.
+ */
+async function login(io: Io, args: string[]): Promise<void> {
+	const [name] = args;
+	if (!name) fail('usage: nolune mcp login <name>');
+	const page = await startMcpSignIn(name);
+	const back = new URL(signInRedirectUrl()).origin;
+	io.log(
+		`To sign in to ${name}, open this page and sign in:\n${page.href}\n\nIt comes back to nolune at ${back}, so it works in a browser that can open that, within 15 minutes. Then \`nolune mcp tools ${name}\` lists its tools.`
+	);
+}
+
 /** `nolune mcp`: the exit code. */
 export async function mcpCommand(
 	io: Io,
@@ -360,6 +410,15 @@ export async function mcpCommand(
 		case undefined:
 		case 'list':
 			return list(io);
+		case 'login':
+			return login(io, args);
+		case 'logout': {
+			const [name] = args;
+			if (!name) fail('usage: nolune mcp logout <name>');
+			await signOutMcpServer(name);
+			io.log(`Signed out of ${name}: nolune forgot its tokens.`);
+			return;
+		}
 		case 'tools':
 			return tools(io, args);
 		case 'call':

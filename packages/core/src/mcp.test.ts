@@ -146,7 +146,10 @@ describe('saving servers', () => {
 			secrets: ['Authorization'],
 			description: 'Issues and pull requests',
 			profiles: null,
-			problem: null
+			problem: null,
+			signIn: null,
+			oauthClientId: null,
+			oauthSecret: false
 		});
 		expect(JSON.stringify(listed)).not.toContain('Bearer');
 		expect(listed[1]).toMatchObject({ secrets: ['HASS_TOKEN'], profiles: ['family'] });

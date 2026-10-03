@@ -1469,8 +1469,36 @@ export const fr: Messages = {
 		disconnect: 'Déconnecter',
 		removeTitle: (name: string) => `Déconnecter ${name} ?`,
 		removeBody:
-			'L’agent ne peut plus utiliser ses outils, et nolune oublie ses réglages et ses clés.',
-		removed: 'Déconnecté.'
+			'L’agent ne peut plus utiliser ses outils, et nolune oublie ses réglages, ses clés et sa connexion.',
+		removed: 'Déconnecté.',
+		signIn: 'Se connecter',
+		signOut: 'Se déconnecter',
+		signedInState: 'connecté',
+		needsSignIn: 'quelqu’un doit se connecter',
+		signInFirst:
+			'Enregistré. Quelqu’un doit se connecter : appuyez sur Se connecter, et l’agent aura ses outils.',
+		signedIn: (n: number) => `Connecté. Il a ${n} ${p(n, { one: 'outil', other: 'outils' })}.`,
+		signedInNoTools:
+			'Connecté, mais nolune n’a pas encore pu lister ses outils. Appuyez sur Vérifier pour savoir pourquoi.',
+		signedOut: 'Déconnecté : nolune a oublié ses jetons.',
+		signInApp: 'Application de connexion',
+		signInAppHint:
+			'Seulement pour un service qui demande d’enregistrer d’abord une application : son identifiant client et son secret. La plupart laissent nolune s’enregistrer lui-même.',
+		clientId: 'Identifiant client',
+		clientSecret: 'Secret client',
+		clientSecretKept: 'Enregistré. Laissez vide pour le garder.'
+	},
+
+	/** The page signing in to an MCP server comes back to, for someone who isn't an admin here. */
+	mcpSignIn: {
+		doneTitle: (name: string) => `Connecté à ${name}`,
+		done: (n: number) =>
+			`nolune peut maintenant utiliser ${n} ${p(n, { one: 'outil', other: 'outils' })} de ce service. Vous pouvez fermer cet onglet.`,
+		doneNoTools:
+			'nolune n’a pas encore pu lister ses outils : un administrateur peut le vérifier dans Services connectés. Vous pouvez fermer cet onglet.',
+		failedTitle: 'La connexion n’a pas abouti',
+		denied: 'La connexion a été refusée ou annulée.',
+		back: 'Aller aux Services connectés'
 	},
 
 	people: {

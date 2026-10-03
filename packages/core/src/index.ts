@@ -319,12 +319,14 @@ export {
 	MAX_CHAT_MCP_TOOLS,
 	MCP_TRANSPORTS,
 	McpServerError,
+	abandonMcpSignIn,
 	callMcpTool,
 	checkMcpServer,
 	closeMcpConnections,
 	describeFromServer,
 	findMcpServer,
 	findMcpTool,
+	finishMcpSignIn,
 	holdMcpConnections,
 	isMcpAddress,
 	joinCommandLine,
@@ -339,12 +341,15 @@ export {
 	refreshMcpTools,
 	removeMcpServer,
 	saveMcpServer,
+	signOutMcpServer,
 	splitCommandLine,
+	startMcpSignIn,
 	type McpServerConfig,
 	type McpServerStatus,
 	type McpServerTools,
 	type McpTransport
 } from './mcp.ts';
+export { MCP_SIGN_IN_PATH, signInRedirectUrl } from './mcp-auth.ts';
 export { buildSystemPrompt } from './prompt.ts';
 export {
 	MAX_ACTIVE_SUBAGENTS,

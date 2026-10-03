@@ -1374,8 +1374,35 @@ export const en = {
 		broken: (problem: string) => `Its settings in config.json are broken: ${problem}`,
 		disconnect: 'Disconnect',
 		removeTitle: (name: string) => `Disconnect ${name}?`,
-		removeBody: "The agent can't use its tools any more, and nolune forgets its settings and keys.",
-		removed: 'Disconnected.'
+		removeBody:
+			"The agent can't use its tools any more, and nolune forgets its settings, keys and sign-in.",
+		removed: 'Disconnected.',
+		signIn: 'Sign in',
+		signOut: 'Sign out',
+		signedInState: 'signed in',
+		needsSignIn: 'needs someone to sign in',
+		signInFirst: 'Saved. It needs someone to sign in: press Sign in, and the agent gets its tools.',
+		signedIn: (n: number) => `Signed in. It has ${n} ${p(n, { one: 'tool', other: 'tools' })}.`,
+		signedInNoTools: "Signed in, but nolune couldn't list its tools yet. Press Check to see why.",
+		signedOut: 'Signed out: nolune forgot its tokens.',
+		signInApp: 'Sign-in app',
+		signInAppHint:
+			'Only for a service that makes you register an app with it first: the app’s client ID and secret. Most let nolune register itself.',
+		clientId: 'Client ID',
+		clientSecret: 'Client secret',
+		clientSecretKept: 'Saved. Leave empty to keep it.'
+	},
+
+	/** The page signing in to an MCP server comes back to, for someone who isn't an admin here. */
+	mcpSignIn: {
+		doneTitle: (name: string) => `Signed in to ${name}`,
+		done: (n: number) =>
+			`nolune can use its ${n} ${p(n, { one: 'tool', other: 'tools' })} now. You can close this tab.`,
+		doneNoTools:
+			"nolune couldn't list its tools yet: an admin can check it on Connected services. You can close this tab.",
+		failedTitle: "Signing in didn't work",
+		denied: 'The sign-in was turned down or canceled.',
+		back: 'Go to Connected services'
 	},
 
 	/** Everyone with an account, for admins: adding people, invite links, passwords. */

@@ -34,6 +34,32 @@ nolune mcp rm github
 `add-json` takes a server as MCP clients' settings write it, so the snippet from a server's README
 can be pasted, `"mcpServers"` and all.
 
+### Signing in
+
+Many services at an address ask you to sign in instead of giving a key, like Notion's, Linear's or
+Sentry's. Connect it with just its address: nolune says it needs someone to sign in, and its row
+gets **Sign in**. That opens the service's sign-in page, and once you've signed in and allowed
+nolune, it comes back to Connected services with the server's tools. **Sign out** forgets the
+sign-in.
+
+- The account you sign in with is the server's, for every profile that has it. To connect
+  someone's own account, sign in with theirs and keep the server to their profile.
+- nolune registers itself with the service, so there's nothing to set up. A few services want you
+  to register an app with them first: give its client ID and secret under **Sign-in app**.
+- The sign-in comes back to the address you have nolune open at. Services accept
+  `http://localhost` and `https` addresses; at another `http://` address, sign in from the
+  computer nolune runs on, or turn on [remote access](/docs/guides/remote-access/).
+- nolune keeps the sign-in fresh by itself. When the service ends it (a password changed, access
+  taken back), the agent hears that someone has to sign in again, and so does the page.
+
+From a terminal, `nolune mcp login <name>` prints the page to open, which comes back to nolune's
+web address, and `nolune mcp logout <name>` signs out:
+
+```sh
+nolune mcp add notion https://mcp.notion.com/mcp
+nolune mcp login notion
+```
+
 ### Who gets it
 
 Every profile gets a server unless you choose some under **Profiles** (`--profile <slug>` in the
@@ -75,7 +101,6 @@ the chat to have asked for it. In the chat, a call shows as what it does, like "
   programs (`npx`, `uvx`, `docker`) where they do. Connect only servers you trust.
 - nolune keeps each server running while it's used, and stops it after 10 minutes without a call
   or when the gateway stops.
-- Servers, with their keys, are kept in `~/.nolune/config.json`. The page and `nolune mcp list` show
-  the keys' names, never the keys.
-- Servers that only sign in through a web page (OAuth) can't be connected yet. Use one that takes a
-  key or token instead, when the service offers it.
+- Servers, with their keys, are kept in `~/.nolune/config.json`, and their sign-ins in
+  `~/.nolune/mcp-auth.json`, both readable by your account only. The page and `nolune mcp list` show
+  the keys' names, never the keys, and never the sign-ins' tokens.

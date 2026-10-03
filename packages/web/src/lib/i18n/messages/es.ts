@@ -1456,8 +1456,37 @@ export const es: Messages = {
 		disconnect: 'Desconectar',
 		removeTitle: (name: string) => `¿Desconectar ${name}?`,
 		removeBody:
-			'El agente ya no puede usar sus herramientas, y nolune olvida su configuración y sus claves.',
-		removed: 'Desconectado.'
+			'El agente ya no puede usar sus herramientas, y nolune olvida su configuración, sus claves y su inicio de sesión.',
+		removed: 'Desconectado.',
+		signIn: 'Iniciar sesión',
+		signOut: 'Cerrar sesión',
+		signedInState: 'sesión iniciada',
+		needsSignIn: 'alguien tiene que iniciar sesión',
+		signInFirst:
+			'Guardado. Alguien tiene que iniciar sesión: pulsa Iniciar sesión y el agente tendrá sus herramientas.',
+		signedIn: (n: number) =>
+			`Sesión iniciada. Tiene ${n} ${p(n, { one: 'herramienta', other: 'herramientas' })}.`,
+		signedInNoTools:
+			'Sesión iniciada, pero nolune aún no pudo ver sus herramientas. Pulsa Comprobar para saber por qué.',
+		signedOut: 'Sesión cerrada: nolune olvidó sus tokens.',
+		signInApp: 'App de inicio de sesión',
+		signInAppHint:
+			'Solo para un servicio que te pide registrar una app primero: el ID de cliente y el secreto de la app. La mayoría deja que nolune se registre solo.',
+		clientId: 'ID de cliente',
+		clientSecret: 'Secreto de cliente',
+		clientSecretKept: 'Guardado. Déjalo vacío para conservarlo.'
+	},
+
+	/** The page signing in to an MCP server comes back to, for someone who isn't an admin here. */
+	mcpSignIn: {
+		doneTitle: (name: string) => `Sesión iniciada en ${name}`,
+		done: (n: number) =>
+			`nolune ya puede usar ${n} ${p(n, { one: 'herramienta', other: 'herramientas' })} de este servicio. Puedes cerrar esta pestaña.`,
+		doneNoTools:
+			'nolune aún no pudo ver sus herramientas: un administrador puede comprobarlo en Servicios conectados. Puedes cerrar esta pestaña.',
+		failedTitle: 'No se pudo iniciar sesión',
+		denied: 'El inicio de sesión fue rechazado o cancelado.',
+		back: 'Ir a Servicios conectados'
 	},
 
 	people: {

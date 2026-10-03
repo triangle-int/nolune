@@ -1448,8 +1448,37 @@ export const de: Messages = {
 		disconnect: 'Trennen',
 		removeTitle: (name: string) => `${name} trennen?`,
 		removeBody:
-			'Der Agent kann seine Werkzeuge nicht mehr nutzen, und nolune vergisst seine Einstellungen und Schlüssel.',
-		removed: 'Getrennt.'
+			'Der Agent kann seine Werkzeuge nicht mehr nutzen, und nolune vergisst seine Einstellungen, Schlüssel und Anmeldung.',
+		removed: 'Getrennt.',
+		signIn: 'Anmelden',
+		signOut: 'Abmelden',
+		signedInState: 'angemeldet',
+		needsSignIn: 'jemand muss sich anmelden',
+		signInFirst:
+			'Gespeichert. Jemand muss sich anmelden: Drücke Anmelden, dann bekommt der Agent seine Werkzeuge.',
+		signedIn: (n: number) =>
+			`Angemeldet. Er hat ${n} ${p(n, { one: 'Werkzeug', other: 'Werkzeuge' })}.`,
+		signedInNoTools:
+			'Angemeldet, aber nolune konnte seine Werkzeuge noch nicht abrufen. Drücke Prüfen, um zu sehen, warum.',
+		signedOut: 'Abgemeldet: nolune hat seine Tokens vergessen.',
+		signInApp: 'Anmelde-App',
+		signInAppHint:
+			'Nur für einen Dienst, bei dem du zuerst eine App registrieren musst: Client-ID und Secret der App. Bei den meisten registriert sich nolune selbst.',
+		clientId: 'Client-ID',
+		clientSecret: 'Client-Secret',
+		clientSecretKept: 'Gespeichert. Leer lassen, um es zu behalten.'
+	},
+
+	/** The page signing in to an MCP server comes back to, for someone who isn't an admin here. */
+	mcpSignIn: {
+		doneTitle: (name: string) => `Bei ${name} angemeldet`,
+		done: (n: number) =>
+			`nolune kann jetzt ${n} ${p(n, { one: 'Werkzeug', other: 'Werkzeuge' })} davon nutzen. Du kannst diesen Tab schließen.`,
+		doneNoTools:
+			'nolune konnte seine Werkzeuge noch nicht abrufen: Ein Admin kann es unter Verbundene Dienste prüfen. Du kannst diesen Tab schließen.',
+		failedTitle: 'Die Anmeldung hat nicht geklappt',
+		denied: 'Die Anmeldung wurde abgelehnt oder abgebrochen.',
+		back: 'Zu Verbundene Dienste'
 	},
 
 	people: {

@@ -9,8 +9,9 @@
 	/**
 	 * An MCP server's settings, to connect one (`server` null, with its name) or change it: how
 	 * nolune reaches it, its command or address, its keys (never shown: left empty, the saved ones
-	 * stay), what it's for and the profiles that have it. `kind`, `transport` and `chosen` are
-	 * bound, so whoever opens the form starts them from what's saved.
+	 * stay), for one at an address the app its sign-in uses when the service wants one registered,
+	 * what it's for and the profiles that have it. `kind`, `transport` and `chosen` are bound, so
+	 * whoever opens the form starts them from what's saved.
 	 */
 	let {
 		server,
@@ -153,6 +154,34 @@
 		{kind === 'stdio' ? t.envHint : t.headersHint}
 	</p>
 </div>
+
+{#if kind === 'remote'}
+	<fieldset class="space-y-2" aria-describedby="{uid}-app-hint">
+		<legend class="font-medium">
+			{t.signInApp} <span class="font-normal text-muted-foreground">{t.optional}</span>
+		</legend>
+		<div class="flex flex-col gap-2 sm:flex-row">
+			<Input
+				name="clientId"
+				value={server?.oauthClientId ?? ''}
+				autocomplete="off"
+				spellcheck="false"
+				placeholder={t.clientId}
+				aria-label={t.clientId}
+				class="h-10 rounded-full px-4 font-mono placeholder:font-sans sm:flex-1"
+			/>
+			<Input
+				name="clientSecret"
+				type="password"
+				autocomplete="new-password"
+				placeholder={server?.oauthSecret ? t.clientSecretKept : t.clientSecret}
+				aria-label={t.clientSecret}
+				class="h-10 rounded-full px-4 font-mono placeholder:font-sans sm:flex-1"
+			/>
+		</div>
+		<p id="{uid}-app-hint" class="text-muted-foreground">{t.signInAppHint}</p>
+	</fieldset>
+{/if}
 
 <div class="space-y-2">
 	<label for="{uid}-description" class="block font-medium">
