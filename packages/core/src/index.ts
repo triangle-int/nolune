@@ -530,6 +530,7 @@ export {
 	describeWhen,
 	findTrigger,
 	formatLocalTime,
+	getRun,
 	getTrigger,
 	isFinished,
 	listRuns,
@@ -574,6 +575,7 @@ export {
 	type NotificationItem
 } from './notifications.ts';
 export { forgetSessionPushDevice, isDeviceToken, registerPushDevice } from './push.ts';
+export { followLiveActivity, forgetLiveActivity } from './live-activities.ts';
 export {
 	MAX_PAYLOAD_BYTES,
 	fireWebhook,

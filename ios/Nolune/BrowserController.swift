@@ -10,9 +10,23 @@ import WebKit
  * it (with a status bar that reads on it), and it bridges to the app: notifications (Push.swift)
  * and the `nolune` messages the page sends (packages/web/src/lib/ios.ts). With the native screens
  * on (NativeController.swift), it may have a note above it, and leaves signing in to them.
+ *
+ * It also shows a single page inside a native screen (`page:`), under the app's navigation: its
+ * web views say so in the user agent, and the page leaves out its own header and sidebar. A link
+ * to what the app shows natively (a chat, another of its screens) goes to the app instead.
  */
 final class BrowserController: UIViewController {
+	/// A page inside a native screen, and what the app opens itself, true when it does.
+	struct Embedded {
+		let path: String
+		let open: (URL) -> Bool
+	}
+
+	/// The user agent's mark for web views inside native screens (packages/web/src/lib/ios.ts).
+	static let embeddedAgent = "nolune-embedded"
+
 	private let origin: URL
+	private let embedded: Embedded?
 	/// A line above the page, which its × closes (NoteBar).
 	private let note: String?
 	/// Signed in natively: called instead of showing the sign-in page, once someone signs out.
@@ -33,7 +47,17 @@ final class BrowserController: UIViewController {
 
 	init(origin: URL, note: String? = nil, signedOut: (() -> Void)? = nil) {
 		self.origin = origin
+		self.embedded = nil
 		self.note = note
+		self.signedOut = signedOut
+		super.init(nibName: nil, bundle: nil)
+	}
+
+	/// One page, inside a native screen.
+	init(origin: URL, page: Embedded, signedOut: (() -> Void)? = nil) {
+		self.origin = origin
+		self.embedded = page
+		self.note = nil
 		self.signedOut = signedOut
 		super.init(nibName: nil, bundle: nil)
 	}
@@ -50,6 +74,7 @@ final class BrowserController: UIViewController {
 		let configuration = WKWebViewConfiguration()
 		// Safari's, and the app's: the page can tell, though it asks for `nolune` messages instead.
 		configuration.applicationNameForUserAgent = "Mobile/15E148 nolune/\(Bundle.main.version)"
+			+ (embedded == nil ? "" : " \(BrowserController.embeddedAgent)")
 		configuration.allowsInlineMediaPlayback = true
 		configuration.userContentController.add(ScriptHandler(self), name: "nolune")
 		configuration.userContentController.addUserScript(
@@ -106,6 +131,16 @@ final class BrowserController: UIViewController {
 			}
 		]
 
+		if let embedded {
+			// The native screens open what's pending, and register for notifications themselves.
+			load(embedded.path)
+			model.$activations
+				.dropFirst()
+				.receive(on: DispatchQueue.main)
+				.sink { [weak self] _ in self?.becameActive() }
+				.store(in: &subscriptions)
+			return
+		}
 		load(model.takePending() ?? "/")
 
 		// After each change has landed (@Published tells before), on the main queue.
@@ -163,6 +198,11 @@ final class BrowserController: UIViewController {
 			return
 		}
 		guard !errorPage else { return }
+		if let embedded {
+			// The page moved on by itself (the router, not a link) to something the app shows.
+			if embedded.open(url), webView.canGoBack { webView.goBack() }
+			return
+		}
 		// Not in the middle of a profile's welcome, which asks enough already.
 		if !url.path.hasSuffix("/welcome") { Push.start() }
 		registerDevice()
@@ -177,7 +217,7 @@ final class BrowserController: UIViewController {
 
 	/// Sends the token Apple gave the app to the nolune the page is signed in to, once.
 	private func registerDevice() {
-		guard let token = model.deviceToken, registered != token, !errorPage,
+		guard embedded == nil, let token = model.deviceToken, registered != token, !errorPage,
 			let webView, !webView.isLoading, let url = webView.url, isFamily(url), !isSignIn(url)
 		else { return }
 		registered = token
@@ -316,6 +356,10 @@ extension BrowserController: WKNavigationDelegate {
 			// Signed out (`/logout` goes on to it), with the native screens to sign in again.
 			if frame?.isMainFrame == true, url.path == "/login", signedOut != nil {
 				leftForSignIn()
+				return decisionHandler(.cancel)
+			}
+			// Inside a native screen, a link to what the app shows natively goes to the app.
+			if frame?.isMainFrame == true, let embedded, embedded.open(url) {
 				return decisionHandler(.cancel)
 			}
 			decisionHandler(.allow)

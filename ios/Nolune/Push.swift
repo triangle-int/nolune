@@ -13,9 +13,10 @@ import WebKit
 enum Push {
 	private static var started = false
 
-	/// Asks to show notifications, the first time, and registers with Apple, once a launch.
+	/// Asks to show notifications, the first time, and registers with Apple, once a launch. Not when
+	/// launched with `-push NO`, as CI is for its screens, which the question would cover.
 	static func start() {
-		guard !started else { return }
+		guard !started, UserDefaults.standard.object(forKey: "push") == nil || UserDefaults.standard.bool(forKey: "push") else { return }
 		started = true
 		Task {
 			let center = UNUserNotificationCenter.current()

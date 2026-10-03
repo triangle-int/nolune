@@ -61,7 +61,33 @@ export type Push = {
 	path?: string;
 };
 
-/** What `POST <path>/<name>/push` answers. */
+/**
+ * A Live Activity's change, on the lock screen and in the Dynamic Island of the family's iPhones:
+ * a reply nolune is working on (nolune for iOS starts it). `POST <path>/<name>/activity` with the
+ * gateway's token. Each activity has its own token from Apple, which the app gave its nolune.
+ */
+export const ACTIVITY = 'activity';
+
+export type ActivityPush = {
+	/** Each activity's token from Apple, in hex, and whether it's a development build's. */
+	activities: { token: string; sandbox?: boolean }[];
+	/** `update` while the work goes on; `end` once it's done. */
+	event: 'update' | 'end';
+	/** What the activity shows (the app's `ReplyActivity.State`). */
+	state: ActivityState;
+	/** When an ended activity leaves the lock screen, in seconds since 1970; Apple's 4 hours without. */
+	dismissAt?: number;
+};
+
+export type ActivityState = {
+	/** The chat's title. */
+	title: string;
+	/** What nolune does now ("Checking the forecast"), or the reply's first words once it's done. */
+	step: string;
+	running: boolean;
+};
+
+/** What `POST <path>/<name>/push` and `/activity` answer. */
 export type PushResult = {
 	/** How many iPhones Apple took it for. */
 	sent: number;

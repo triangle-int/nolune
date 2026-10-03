@@ -1,9 +1,22 @@
 import { error, json } from '@sveltejs/kit';
 import { renameUser } from '@nolune/core';
 import { translations } from '$lib/i18n';
+import { pictureUrl } from '$lib/pictures';
 import { requireUser } from '$lib/server/access';
 import { accountProblem } from '$lib/server/accounts';
 import type { RequestHandler } from './$types';
+
+/** Who is signed in, as the account menu shows them. */
+export const GET: RequestHandler = ({ locals }) => {
+	const user = requireUser(locals);
+	return json({
+		id: user.id,
+		name: user.name,
+		email: user.email,
+		isAdmin: user.isAdmin === true,
+		picture: pictureUrl(user.picture)
+	});
+};
 
 /** Changes the signed-in person's name: `{ name }`. */
 export const PATCH: RequestHandler = async ({ locals, request }) => {

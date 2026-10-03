@@ -8,6 +8,7 @@ final class AppModel: ObservableObject {
 	private static let originKey = "origin"
 	private static let previousKey = "previous"
 	private static let nativeKey = "native"
+	private static let openKey = "open"
 
 	/// The family's nolune, as the person connected to it; nil until they have (ConnectView).
 	@Published private(set) var origin: URL?
@@ -15,13 +16,15 @@ final class AppModel: ObservableObject {
 	@Published private(set) var previous: URL?
 	/// A page to open there next: a link's, like an invite, or a tapped notification's.
 	@Published var pending: String?
+	/// What Siri was asked to ask nolune, for a new chat (`ask`).
+	@Published private(set) var question: String?
 	/// The token Apple gave the app for notifications, in hex, once it has (Push.swift).
 	@Published var deviceToken: String?
 	/// Counts the times the app came back to the front, for the page to check it's still there.
 	@Published private(set) var activations = 0
 	/**
-	 * Whether the native screens are on (NativeController.swift). Off until they're whole: today's
-	 * web app is the one that ships. Xcode's scheme turns them on with `-native YES`.
+	 * Whether the native screens are on (NativeController.swift), as they are unless launched with
+	 * `-native NO`, which opens today's web app instead.
 	 */
 	let native: Bool
 
@@ -32,7 +35,9 @@ final class AppModel: ObservableObject {
 		self.defaults = defaults
 		origin = defaults.string(forKey: Self.originKey).flatMap(URL.init(string:))
 		previous = defaults.string(forKey: Self.previousKey).flatMap(URL.init(string:))
-		native = defaults.bool(forKey: Self.nativeKey)
+		native = defaults.object(forKey: Self.nativeKey) == nil || defaults.bool(forKey: Self.nativeKey)
+		// A page to open first, as `-open /p/smiths/c/<id>` (CI's screens).
+		pending = defaults.string(forKey: Self.openKey).flatMap { Address.isPath($0) ? $0 : nil }
 	}
 
 	func connect(to address: Address) {
@@ -62,6 +67,27 @@ final class AppModel: ObservableObject {
 		guard let origin, let path, Address.isPath(path) else { return }
 		if let source, !Address.sameOrigin(source, origin) { return }
 		pending = path
+	}
+
+	/// A widget's or a Live Activity's link (`nolune://open?path=…`, Shared.swift): its page.
+	func open(link url: URL) {
+		open(path: Shared.path(of: url), from: nil)
+	}
+
+	/**
+	 * "Ask nolune" from Siri or Shortcuts (AskNolune.swift): a new chat with it, in the profile last
+	 * open, once the screens are there.
+	 */
+	func ask(_ question: String) {
+		let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard origin != nil, !text.isEmpty else { return }
+		self.question = text
+	}
+
+	/// The question to start a chat with, which is then no longer waiting.
+	func takeQuestion() -> String? {
+		defer { question = nil }
+		return question
 	}
 
 	func becameActive() {

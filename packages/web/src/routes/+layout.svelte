@@ -85,8 +85,13 @@
 		the sidebar, the composer and the end of what scrolls pad themselves above the home
 		indicator, so the page still runs under it.
 	-->
+	<!--
+		Inside nolune for iOS's own screens, links load their pages, rather than the router, so the
+		app sees them go and opens what it has natively (a chat, another of its screens).
+	-->
 	<div
 		class="h-dvh pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)]"
+		data-sveltekit-reload={data.embedded ? '' : undefined}
 	>
 		{@render children()}
 	</div>

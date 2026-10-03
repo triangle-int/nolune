@@ -1,0 +1,46 @@
+{
+	"skills": [
+		{
+			"name": "automations",
+			"description": "Do things later, on a schedule, or when something happens (a webhook, new email, a price change) with background triggers whose results reach the family as notifications. Use for reminders, recurring checks and \"tell me when ...\" requests.",
+			"scope": "builtin",
+			"enabled": true,
+			"tokens": 116
+		},
+		{
+			"name": "generate-images",
+			"description": "Make or change pictures with `nolune generate image`, from a description, a detailed prompt or photos (restyle, edit, combine, turn into stickers, a storybook page, a postcard...). Use whenever someone asks to make, draw, design, generate or edit a picture, including the prompts the Images page's templates send.",
+			"scope": "builtin",
+			"enabled": true,
+			"tokens": 140
+		},
+		{
+			"name": "nolune",
+			"description": "Change nolune's own setup with the `nolune` command, including models, API keys, the ChatGPT sign-in, environment variables for your commands, connected services (MCP servers), which skills are on, whether it saves what it learns from chats by itself, the avatar the family sees in the chat (\"switch to the comet\"), family accounts and passwords, the web address and the background service (status, logs, restarts, updates), and whether commands are checked before they run (auto mode). Use whenever someone asks you to configure yourself or change how nolune is set up, or asks how it is set up.",
+			"scope": "builtin",
+			"enabled": true,
+			"tokens": 215
+		},
+		{
+			"name": "subagents",
+			"description": "Hand a task to a subagent, another nolune that works on it in the background in a conversation of its own and reports back, so you can do other things meanwhile or run several jobs at once. Use for big, independent jobs that would fill this conversation with reading (research across many pages, going through lots of files, emails or photos) and for long jobs you don't want to wait on.",
+			"scope": "builtin",
+			"enabled": true,
+			"tokens": 157
+		},
+		{
+			"name": "view-images",
+			"description": "Look at pictures yourself with `nolune view`, which attaches them to a command's result. Photos, screenshots, scans, PDF pages, video frames, web pages or the screen. Use whenever what something looks like matters, e.g. reading a receipt or a letter, checking or finding a photo, or seeing what is on the screen.",
+			"scope": "builtin",
+			"enabled": true,
+			"tokens": 137
+		},
+		{
+			"name": "web",
+			"description": "Search the web and read web pages with `nolune web search` and `nolune web read`. Use whenever an answer depends on what's on the web now (news, prices, opening hours, schedules, reviews, how-tos, anything that may have changed since your training) and whenever someone sends a link.",
+			"scope": "builtin",
+			"enabled": true,
+			"tokens": 124
+		}
+	]
+}

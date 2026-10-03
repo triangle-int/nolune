@@ -8,7 +8,18 @@ import type { ConversationCursor } from '@nolune/core';
 export const API_LEVEL = 1;
 
 /** What an app can show natively from this nolune, as `/api/version` lists it signed in. */
-export const CAPABILITIES = ['chats', 'notifications', 'transcript'] as const;
+export const CAPABILITIES = [
+	'chats',
+	'notifications',
+	'transcript',
+	'memory',
+	'automations',
+	'skills',
+	'profile',
+	'folders',
+	'images',
+	'activities'
+] as const;
 
 /** A page of chats at most, and when the app doesn't say. */
 export const MAX_CHATS = 100;

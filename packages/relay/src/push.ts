@@ -1,6 +1,6 @@
 import { createPrivateKey, sign, type KeyObject } from 'node:crypto';
 import http2, { type ClientHttp2Session, type ClientHttp2Stream } from 'node:http2';
-import type { Push } from './protocol.ts';
+import type { ActivityPush, Push } from './protocol.ts';
 
 /*
  * Notifications on the family's iPhones (nolune for iOS, ios/ in the repository). Apple's push
@@ -34,6 +34,11 @@ export interface Apns {
 	send(
 		device: { token: string; sandbox?: boolean },
 		notification: ApnsNotification
+	): Promise<ApnsOutcome>;
+	/** A Live Activity's change, to the activity whose token it is. */
+	sendActivity(
+		activity: { token: string; sandbox?: boolean },
+		change: Omit<ActivityPush, 'activities'>
 	): Promise<ApnsOutcome>;
 	close(): void;
 }
@@ -85,6 +90,55 @@ export function readPush(body: unknown): Push | null {
 		...(thread ? { thread } : {}),
 		...(path ? { path } : {})
 	};
+}
+
+/** A gateway's Live Activity change, checked: null when it isn't one. */
+export function readActivity(body: unknown): ActivityPush | null {
+	if (!body || typeof body !== 'object') return null;
+	const { activities, event, state, dismissAt } = body as Record<string, unknown>;
+	if (
+		!Array.isArray(activities) ||
+		activities.length === 0 ||
+		activities.length > MAX_PUSH_DEVICES
+	) {
+		return null;
+	}
+	const parsed: ActivityPush['activities'] = [];
+	for (const activity of activities as unknown[]) {
+		const { token, sandbox } = (activity ?? {}) as Record<string, unknown>;
+		if (typeof token !== 'string' || !DEVICE_TOKEN.test(token)) return null;
+		parsed.push({ token, sandbox: sandbox === true });
+	}
+	if (event !== 'update' && event !== 'end') return null;
+	const { title, step, running } = (state ?? {}) as Record<string, unknown>;
+	if (typeof title !== 'string' || typeof step !== 'string' || typeof running !== 'boolean') {
+		return null;
+	}
+	if (dismissAt !== undefined && (typeof dismissAt !== 'number' || !Number.isFinite(dismissAt))) {
+		return null;
+	}
+	return {
+		activities: parsed,
+		event,
+		// A line each on the lock screen: the rest is cut.
+		state: { title: cut(title, 200), step: cut(step, 300), running },
+		...(dismissAt !== undefined ? { dismissAt: Math.floor(dismissAt) } : {})
+	};
+}
+
+/** What Apple gets for a Live Activity: its new state, with when it changed. */
+export function activityPayload(
+	change: Omit<ActivityPush, 'activities'>,
+	now = Date.now()
+): string {
+	return JSON.stringify({
+		aps: {
+			timestamp: Math.floor(now / 1000),
+			event: change.event,
+			'content-state': change.state,
+			...(change.dismissAt !== undefined ? { 'dismissal-date': change.dismissAt } : {})
+		}
+	});
 }
 
 /** `text` cut to at most `bytes` of UTF-8, with an ellipsis where it was cut. */
@@ -179,6 +233,42 @@ export function createApns(options: ApnsOptions): Apns {
 		device: { token: string; sandbox?: boolean },
 		notification: ApnsNotification
 	): Promise<ApnsOutcome> {
+		return request(
+			device,
+			{
+				'apns-topic': options.topic,
+				'apns-push-type': 'alert',
+				'apns-priority': '10',
+				'apns-expiration': String(Math.floor(Date.now() / 1000) + KEEP_FOR_S)
+			},
+			payload(notification)
+		);
+	}
+
+	/**
+	 * A Live Activity's change. Apple takes few at the high priority, which wakes the iPhone: an
+	 * update goes at the low one, which it shows when it next can, and the end at the high one.
+	 */
+	function sendActivity(
+		activity: { token: string; sandbox?: boolean },
+		change: Omit<ActivityPush, 'activities'>
+	): Promise<ApnsOutcome> {
+		return request(
+			activity,
+			{
+				'apns-topic': `${options.topic}.push-type.liveactivity`,
+				'apns-push-type': 'liveactivity',
+				'apns-priority': change.event === 'end' ? '10' : '5'
+			},
+			activityPayload(change)
+		);
+	}
+
+	function request(
+		device: { token: string; sandbox?: boolean },
+		headers: Record<string, string>,
+		body: string
+	): Promise<ApnsOutcome> {
 		return new Promise((resolve) => {
 			let stream: ClientHttp2Stream;
 			try {
@@ -186,10 +276,7 @@ export function createApns(options: ApnsOptions): Apns {
 					':method': 'POST',
 					':path': `/3/device/${device.token}`,
 					authorization: authorization(),
-					'apns-topic': options.topic,
-					'apns-push-type': 'alert',
-					'apns-priority': '10',
-					'apns-expiration': String(Math.floor(Date.now() / 1000) + KEEP_FOR_S),
+					...headers,
 					'content-type': 'application/json'
 				});
 			} catch (err) {
@@ -218,12 +305,13 @@ export function createApns(options: ApnsOptions): Apns {
 				log(`Apple didn't take a notification: ${status || 'no answer'} ${reason}`.trim());
 				resolve('failed');
 			});
-			stream.end(payload(notification));
+			stream.end(body);
 		});
 	}
 
 	return {
 		send,
+		sendActivity,
 		close() {
 			for (const open of sessions.values()) open.close();
 			sessions.clear();

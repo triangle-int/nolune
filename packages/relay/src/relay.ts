@@ -10,6 +10,7 @@ import { endToEnd } from './headers.ts';
 import { isReservedName, randomName } from './names.ts';
 import { page, type PageKind } from './pages.ts';
 import {
+	ACTIVITY,
 	CLOSE,
 	CONNECT_PATH,
 	GATEWAYS_PATH,
@@ -22,7 +23,7 @@ import {
 	type Ready,
 	type Registration
 } from './protocol.ts';
-import { MAX_PUSH_REQUEST_BYTES, readPush, type Apns } from './push.ts';
+import { MAX_PUSH_REQUEST_BYTES, readActivity, readPush, type Apns } from './push.ts';
 import { GatewayStore, currentMonth, network, type GatewayRecord } from './store.ts';
 import { webSocketStream } from './stream.ts';
 
@@ -369,6 +370,35 @@ export function createRelay(options: RelayOptions): Relay {
 		} satisfies PushResult);
 	}
 
+	/** Sends a gateway's Live Activity change to the activities it names, through Apple. */
+	async function activity(name: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+		if (req.method !== 'POST') return json(res, 405, { error: 'POST a change' });
+		const blocked = store.get(name)?.blocked;
+		if (blocked) return json(res, 403, { error: blocked.reason });
+		if (!options.apns) {
+			return json(res, 501, { error: "this relay doesn't send notifications to iPhones" });
+		}
+		const message = await readJson(req, MAX_PUSH_REQUEST_BYTES).then(readActivity, () => null);
+		if (!message) {
+			return json(res, 400, {
+				error:
+					'send JSON like {"activities": [{"token": "<hex>"}], "event": "update", "state": {"title": "…", "step": "…", "running": true}}'
+			});
+		}
+		if (!mayPush(name, message.activities.length)) {
+			return json(res, 429, {
+				error: `this address sent ${pushesPerHour} notifications this hour, as many as it may`
+			});
+		}
+		const { activities, ...change } = message;
+		const apns = options.apns;
+		const outcomes = await Promise.all(activities.map((a) => apns.sendActivity(a, change)));
+		json(res, 200, {
+			sent: outcomes.filter((outcome) => outcome === 'sent').length,
+			gone: activities.filter((_, i) => outcomes[i] === 'gone').map((a) => a.token)
+		} satisfies PushResult);
+	}
+
 	async function api(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		const { pathname } = new URL(req.url ?? '/', 'http://relay');
 		if (pathname === GATEWAYS_PATH) {
@@ -378,13 +408,14 @@ export function createRelay(options: RelayOptions): Relay {
 		if (pathname.startsWith(`${GATEWAYS_PATH}/`)) {
 			const [encoded, action, ...rest] = pathname.slice(GATEWAYS_PATH.length + 1).split('/');
 			const name = decodeURIComponent(encoded);
-			if (rest.length || (action !== undefined && action !== PUSH)) {
+			if (rest.length || (action !== undefined && action !== PUSH && action !== ACTIVITY)) {
 				return json(res, 404, { error: 'not found' });
 			}
 			if (!store.verify(name, bearer(req))) {
 				return json(res, 401, { error: 'no such gateway, or the wrong token' });
 			}
 			if (action === PUSH) return push(name, req, res);
+			if (action === ACTIVITY) return activity(name, req, res);
 			if (req.method === 'GET') {
 				const blocked = store.get(name)?.blocked;
 				return json(res, 200, {

@@ -9,7 +9,8 @@
 </script>
 
 <Sidebar.Provider bind:open={sidebarOpen} class="h-full min-h-0">
-	{#if data.user}
+	<!-- Inside nolune for iOS's screens, the app's own navigation takes the sidebar's place. -->
+	{#if data.user && !data.embedded}
 		<AppSidebar
 			profile={data.profile}
 			profiles={data.profiles}

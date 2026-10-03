@@ -5,9 +5,13 @@ import { createNotification } from '../../../../core/src/notifications.ts';
 import { addMember, createProfile } from '../../../../core/src/profiles.ts';
 import { makeFamily, makePreset, makeUser } from '../../../../core/src/test/fixtures.ts';
 import * as chat from '../../routes/api/c/[id]/+server';
+import * as activity from '../../routes/api/c/[id]/activity/+server';
 import * as notifications from '../../routes/api/notifications/+server';
 import * as chats from '../../routes/api/p/[slug]/chats/+server';
 import * as folders from '../../routes/api/p/[slug]/folders/+server';
+import * as folder from '../../routes/api/p/[slug]/folders/[folder]/+server';
+import * as me from '../../routes/api/me/+server';
+import * as newChat from '../../routes/api/p/[slug]/new-chat/+server';
 import * as profiles from '../../routes/api/profiles/+server';
 import * as version from '../../routes/api/version/+server';
 import { decodeCursor, encodeCursor } from './api';
@@ -56,7 +60,18 @@ describe('/api/version', () => {
 		expect((await answer(version.GET, request(user))).body).toEqual({
 			version: NOLUNE_VERSION,
 			api: 1,
-			capabilities: ['chats', 'notifications', 'transcript']
+			capabilities: [
+				'chats',
+				'notifications',
+				'transcript',
+				'memory',
+				'automations',
+				'skills',
+				'profile',
+				'folders',
+				'images',
+				'activities'
+			]
 		});
 	});
 });
@@ -162,12 +177,99 @@ describe('/api/p/<slug>/chats', () => {
 	});
 });
 
+describe('/api/p/<slug>/new-chat', () => {
+	it('says what a new chat starts with: the models, the default one, and the reasoning levels', async () => {
+		const { user, profile } = makeFamily();
+		const preset = makePreset();
+		const { status, body } = await answer(
+			newChat.GET,
+			request(user, { params: { slug: profile.slug } })
+		);
+		expect(status).toBe(200);
+		expect(body).toMatchObject({
+			presets: [{ id: preset.id, name: preset.name, provider: 'anthropic' }],
+			defaultPresetId: preset.id,
+			efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+			commandMode: 'auto'
+		});
+		expect(Array.isArray(body.suggestions)).toBe(true);
+		const stranger = makeUser('Stranger');
+		expect(
+			(await answer(newChat.GET, request(stranger, { params: { slug: profile.slug } }))).status
+		).toBe(404);
+	});
+});
+
 describe('/api/p/<slug>/folders', () => {
 	it("lists the profile's folders", async () => {
 		const { user, profile } = makeFamily();
 		const folder = createFolder({ profile, name: 'Trips', userId: user.id });
 		const { body } = await answer(folders.GET, request(user, { params: { slug: profile.slug } }));
 		expect(body).toEqual({ folders: [{ id: folder.id, name: 'Trips' }] });
+	});
+});
+
+describe('/api/p/<slug>/folders/<folder>', () => {
+	it('renames a folder, answering with the name as kept, and deletes it, leaving its chats', async () => {
+		const { user, profile } = makeFamily();
+		makePreset();
+		const trips = createFolder({ profile, name: 'Trips', userId: user.id });
+		const started = await answer(
+			chats.POST,
+			request(user, { method: 'POST', params: { slug: profile.slug }, body: { folder: trips.id } })
+		);
+		const params = { slug: profile.slug, folder: trips.id };
+		expect(
+			await answer(
+				folder.PATCH,
+				request(user, { method: 'PATCH', params, body: { name: '  Rome ' } })
+			)
+		).toEqual({ status: 200, body: { id: trips.id, name: 'Rome', instructions: '' } });
+		expect(
+			await answer(folder.PATCH, request(user, { method: 'PATCH', params, body: { name: 3 } }))
+		).toMatchObject({ status: 400 });
+
+		expect(await answer(folder.DELETE, request(user, { method: 'DELETE', params }))).toEqual({
+			status: 204,
+			body: null
+		});
+		expect(
+			(await answer(folders.GET, request(user, { params: { slug: profile.slug } }))).body
+		).toEqual({ folders: [] });
+		expect(listConversations(profile.id).map((c) => [c.id, c.folderId])).toEqual([
+			[started.body.id, null]
+		]);
+	});
+
+	it("is only for the profile's own folders and members", async () => {
+		const { user, profile } = makeFamily();
+		const elsewhere = createProfile('Elsewhere', user.id);
+		const theirs = createFolder({ profile: elsewhere, name: 'Theirs', userId: user.id });
+		const stranger = makeUser('Stranger');
+		const mine = createFolder({ profile, name: 'Mine', userId: user.id });
+		expect(
+			await answer(
+				folder.DELETE,
+				request(user, { method: 'DELETE', params: { slug: profile.slug, folder: theirs.id } })
+			)
+		).toMatchObject({ status: 404 });
+		expect(
+			await answer(
+				folder.DELETE,
+				request(stranger, { method: 'DELETE', params: { slug: profile.slug, folder: mine.id } })
+			)
+		).toMatchObject({ status: 404 });
+	});
+});
+
+describe('/api/me', () => {
+	it('says who is signed in', async () => {
+		const { user } = makeFamily('Anna');
+		expect(await answer(me.GET, request({ ...user, isAdmin: true }))).toEqual({
+			status: 200,
+			body: { id: user.id, name: 'Anna', email: '', isAdmin: true, picture: null }
+		});
+		expect(await answer(me.GET, request(null))).toMatchObject({ status: 401 });
 	});
 });
 
@@ -207,6 +309,31 @@ describe('/api/c/<id>', () => {
 			body: null
 		});
 		expect(listConversations(profile.id)).toEqual([]);
+	});
+});
+
+describe('/api/c/<id>/activity', () => {
+	it("follows a chat for an iPhone's Live Activity, for the chat's members", async () => {
+		const { user, profile } = makeFamily();
+		makePreset();
+		const started = await answer(
+			chats.POST,
+			request(user, { method: 'POST', params: { slug: profile.slug }, body: {} })
+		);
+		const id = started.body.id as string;
+		const call = (method: string, body: unknown, person: Person = user) =>
+			answer(
+				method === 'POST' ? activity.POST : activity.DELETE,
+				request(person, { method, params: { id }, body })
+			);
+		const token = 'a1'.repeat(32);
+		expect((await call('POST', { token: 'not hex' })).status).toBe(400);
+		expect(await call('POST', { token, sandbox: true })).toEqual({
+			status: 200,
+			body: { ok: true }
+		});
+		expect((await call('POST', { token }, makeUser('Stranger'))).status).toBe(404);
+		expect((await call('DELETE', { token })).status).toBe(204);
 	});
 });
 

@@ -1,0 +1,3 @@
+/* Siri's phrases for "Ask nolune" (AskNolune.swift), in this language. */
+"Ask ${applicationName}" = "Pregúntale a ${applicationName}";
+"Start a chat in ${applicationName}" = "Empieza un chat en ${applicationName}";

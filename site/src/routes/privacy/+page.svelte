@@ -6,7 +6,7 @@
 	// nolune plan, ios/ for the app.
 	const GITHUB = 'https://github.com/triangle-int/nolune';
 	const EMAIL = 'timur@triangleint.com';
-	const UPDATED = 'October 2, 2026';
+	const UPDATED = 'October 3, 2026';
 </script>
 
 <svelte:head>
@@ -35,8 +35,9 @@
 		<li>There are no ads, analytics or trackers in nolune, its apps or this website.</li>
 		<li>
 			Three things pass through a server we run, and only when you use them: the relay, when your
-			family's nolune has an address on <code>nolune.family</code>, notifications in the iPhone app,
-			and requests on the nolune plan. We keep none of what passes through.
+			family's nolune has an address on <code>nolune.family</code>, notifications and Live
+			Activities in the iPhone app, and requests on the nolune plan. We keep none of what passes
+			through.
 		</li>
 		<li>
 			If you subscribe to the nolune plan, we keep your email address and what's left of your plan,
@@ -136,8 +137,9 @@
 	</p>
 	<h2>The iPhone and iPad app</h2>
 	<p>
-		The app keeps the address of your family's nolune on your device. Everything else it shows is
-		your family's nolune, from your family's computer.
+		The app keeps the address of your family's nolune on your device, and what its widgets and share
+		sheet need: your sign-in, your profiles' names and your latest notifications, which stay on your
+		device. Everything else it shows is your family's nolune, from your family's computer.
 	</p>
 	<ul>
 		<li>
@@ -149,6 +151,16 @@
 			your family's nolune. For each notification, your family's nolune sends its title and text,
 			the profile's name and that token to the relay, which passes them to Apple to deliver. The
 			relay keeps none of it. Signing out, or connecting to another nolune, stops them.
+		</li>
+		<li>
+			While nolune writes a reply you asked for, the app can show it on your lock screen as a Live
+			Activity, if you allow them. Your family's nolune then sends the chat's title and what nolune
+			does, then the reply's first words, with the activity's token from Apple, through the relay to
+			Apple in the same way. The relay keeps none of it.
+		</li>
+		<li>
+			Asking nolune with Siri goes through Apple's Siri like any app's: the app gets your words and
+			sends them to your family's nolune.
 		</li>
 		<li>
 			If you share analytics with app developers in your device's settings, Apple may send us crash
