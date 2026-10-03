@@ -60,7 +60,18 @@ describe('/api/version', () => {
 		expect((await answer(version.GET, request(user))).body).toEqual({
 			version: NOLUNE_VERSION,
 			api: 1,
-			capabilities: ['chats', 'notifications', 'transcript']
+			capabilities: [
+				'chats',
+				'notifications',
+				'transcript',
+				'memory',
+				'automations',
+				'skills',
+				'profile',
+				'folders',
+				'images',
+				'activities'
+			]
 		});
 	});
 });
@@ -213,7 +224,7 @@ describe('/api/p/<slug>/folders/<folder>', () => {
 				folder.PATCH,
 				request(user, { method: 'PATCH', params, body: { name: '  Rome ' } })
 			)
-		).toEqual({ status: 200, body: { id: trips.id, name: 'Rome' } });
+		).toEqual({ status: 200, body: { id: trips.id, name: 'Rome', instructions: '' } });
 		expect(
 			await answer(folder.PATCH, request(user, { method: 'PATCH', params, body: { name: 3 } }))
 		).toMatchObject({ status: 400 });
