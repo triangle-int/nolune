@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
 	@Published private(set) var previous: URL?
 	/// A page to open there next: a link's, like an invite, or a tapped notification's.
 	@Published var pending: String?
+	/// What Siri was asked to ask nolune, for a new chat (`ask`).
+	@Published private(set) var question: String?
 	/// The token Apple gave the app for notifications, in hex, once it has (Push.swift).
 	@Published var deviceToken: String?
 	/// Counts the times the app came back to the front, for the page to check it's still there.
@@ -65,6 +67,27 @@ final class AppModel: ObservableObject {
 		guard let origin, let path, Address.isPath(path) else { return }
 		if let source, !Address.sameOrigin(source, origin) { return }
 		pending = path
+	}
+
+	/// A widget's or a Live Activity's link (`nolune://open?path=…`, Shared.swift): its page.
+	func open(link url: URL) {
+		open(path: Shared.path(of: url), from: nil)
+	}
+
+	/**
+	 * "Ask nolune" from Siri or Shortcuts (AskNolune.swift): a new chat with it, in the profile last
+	 * open, once the screens are there.
+	 */
+	func ask(_ question: String) {
+		let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard origin != nil, !text.isEmpty else { return }
+		self.question = text
+	}
+
+	/// The question to start a chat with, which is then no longer waiting.
+	func takeQuestion() -> String? {
+		defer { question = nil }
+		return question
 	}
 
 	func becameActive() {

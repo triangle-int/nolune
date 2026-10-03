@@ -108,6 +108,13 @@ struct Client {
 	}
 }
 
+extension Error {
+	/// A request nobody waits for any longer, as its screen went away: nothing to tell anyone.
+	var isCancellation: Bool {
+		self is CancellationError || (self as? URLError)?.code == .cancelled
+	}
+}
+
 // MARK: - JSON
 
 /// What the nolune said went wrong: the `{ message }` its JSON errors carry, or its status alone.

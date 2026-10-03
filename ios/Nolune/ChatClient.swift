@@ -118,6 +118,24 @@ extension Client {
 		return try JSONDecoder().decode(Upload.self, from: answer)
 	}
 
+	/**
+	 * Has the nolune send what nolune does in a chat to a Live Activity: its token from Apple, in
+	 * hex, and whether this is a development build's (LiveActivities.swift).
+	 */
+	func followActivity(_ chat: String, token: String, sandbox: Bool) async throws {
+		struct Body: Encodable {
+			let token: String
+			let sandbox: Bool
+		}
+		try await call("POST", "api/c/\(chat)/activity", body: Body(token: token, sandbox: sandbox))
+	}
+
+	/// The Live Activity ended, or its person swiped it away: the nolune stops sending to it.
+	func forgetActivity(_ chat: String, token: String) async {
+		struct Body: Encodable { let token: String }
+		_ = try? await call("DELETE", "api/c/\(chat)/activity", body: Body(token: token))
+	}
+
 	/// A file uploaded and then taken off the message.
 	func deleteUpload(_ slug: String, _ id: String) async {
 		_ = try? await call("DELETE", "api/p/\(slug)/uploads/\(id)")
@@ -133,7 +151,8 @@ extension Client {
 
 	/// As JavaScript's `encodeURIComponent`, which the gateway decodes.
 	static func uriComponent(_ text: String) -> String {
-		let unreserved = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.!~*'()"))
+		// ASCII's letters and digits only: `alphanumerics` has every language's.
+		let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
 		return text.addingPercentEncoding(withAllowedCharacters: unreserved) ?? text
 	}
 }

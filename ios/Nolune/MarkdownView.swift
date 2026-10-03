@@ -118,6 +118,40 @@ private struct MarkdownBlockView: View, Equatable {
 
 // MARK: - Inline
 
+extension Markdown {
+	/**
+	 * Markdown as text without its markup, for a widget or a Live Activity: a line for each
+	 * paragraph, heading, list item or table row, and a picture's description.
+	 */
+	static func plain(_ markdown: String) -> String {
+		blocks(markdown).flatMap(plainLines).joined(separator: "\n")
+	}
+
+	private static func plainLines(_ block: MarkdownBlock) -> [String] {
+		func inline(_ text: String) -> String {
+			String(MarkdownInline.text(text, links: .plain).characters)
+		}
+		switch block {
+		case .paragraph(let text), .heading(_, let text):
+			return [inline(text)]
+		case .code(_, let text):
+			return [text]
+		case .quote(let blocks):
+			return blocks.flatMap(plainLines)
+		case .list(let list):
+			return list.items.map { item in
+				"• " + item.blocks.flatMap(plainLines).joined(separator: " ")
+			}
+		case .table(let table):
+			return ([table.header] + table.rows).map { $0.map(inline).joined(separator: " · ") }
+		case .image(let alt, _):
+			return alt.isEmpty ? [] : [alt]
+		case .rule:
+			return []
+		}
+	}
+}
+
 enum MarkdownInline {
 	/**
 	 * A block's text: Markdown's emphasis, inline code and links. Its lines run on as one, and break

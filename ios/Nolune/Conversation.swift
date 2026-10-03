@@ -58,6 +58,13 @@ final class Conversation: ObservableObject {
 						guard let event = try? JSONDecoder().decode(ChatEvent.self, from: data) else { continue }
 						self.state.apply(event)
 						self.revision += 1
+						switch event {
+						case .snapshot, .transcript, .status, .title:
+							// Its Live Activity, if it has one, while the app sees it.
+							LiveActivities.update(chat: id, state: self.state)
+						default:
+							break
+						}
 					}
 				} catch {
 					// Dropped; tried again below.

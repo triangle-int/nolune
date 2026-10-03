@@ -49,6 +49,21 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- nolune://open?path=/p/smiths: a widget or a Live Activity opening a page (Shared/Shared.swift). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.nolune.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nolune</string>
+			</array>
+		</dict>
+	</array>
+	<!-- A reply nolune writes, on the lock screen and in the Dynamic Island (LiveActivities.swift). -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<!-- Only HTTPS, which Apple's export rules exempt: no question about it at each upload. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>

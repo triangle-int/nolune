@@ -2,9 +2,10 @@ name: iOS app
 
 # Builds nolune for iOS (ios/) and runs its tests on a simulator, builds it for a device as the App
 # Store gets it (unsigned: signing is Xcode's, ios/README.md), and keeps its screens as PNGs: the
-# first one; the native screens (sign-in, sidebar, chat, new chat, bell and a profile's pages)
-# from a pretend nolune (ios/ci/nolune.py); the note an older nolune gets; and today's web app (`-native NO`) with a page
-# open. It builds the macOS app's Sky.swift and Theme.swift too.
+# first one; the native screens (sign-in, sidebar, chat, new chat, bell and a profile's pages,
+# and one a widget's link opens) from a pretend nolune (ios/ci/nolune.py); the note an older nolune
+# gets; and today's web app (`-native NO`) with a page open. It builds the app's widgets and share
+# extension with it, and the macOS app's Sky.swift and Theme.swift.
 # The runner's Xcode is 26, with iOS 26's SDK: the app wears its look, Liquid Glass.
 
 on:
@@ -109,6 +110,10 @@ jobs:
           screen people -origin http://localhost:5781 -open /p/smiths/settings
           screen images -origin http://localhost:5781 -open /p/smiths/images
           screen folder -origin http://localhost:5781 -open /p/smiths/f/japan
+          # A widget's link, to the app as it runs: its page opens.
+          step xcrun simctl openurl "$udid" 'nolune://open?path=/p/smiths/skills'
+          sleep 6
+          step xcrun simctl io "$udid" screenshot "$screens/link.png"
           # Today's web app with the note, from a nolune that doesn't say which it is.
           screen update -origin https://www.nolune.dev
           # And without the native screens, a page open.

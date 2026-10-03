@@ -38,6 +38,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 		window.rootViewController = RootController()
 		window.makeKeyAndVisible()
 		self.window = window
+		if let url = connectionOptions.urlContexts.first?.url { AppModel.shared.open(link: url) }
+	}
+
+	/// A widget or a Live Activity tapped while the app was running: `nolune://open?path=…`.
+	func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+		if let url = URLContexts.first?.url { AppModel.shared.open(link: url) }
 	}
 
 	func sceneDidBecomeActive(_ scene: UIScene) {

@@ -2705,10 +2705,11 @@ when they like, so an app asks each one what it serves.
   someone, answering `{ choose }` when memory may know them already; `PATCH` and `DELETE` on one),
   `DELETE /api/p/<slug>` for the profile, a folder's instructions and `files`, and `images` (its
   templates; `POST` starts a picture's chat, answering with it).
-- **Live Activities.** An iPhone gives its activity's token for a chat (`POST /api/c/<id>/activity`)
-  and the gateway follows the chat (`live-activities.ts` in core), sending what nolune does through
-  the relay (`POST /api/gateways/<name>/activity`, an ActivityKit push) at most every 10 seconds,
-  then the reply's first words once it's done.
+- **Live Activities.** An iPhone gives its activity's token for a chat (`POST /api/c/<id>/activity`,
+  `DELETE` once it's over) and the gateway follows the chat (`live-activities.ts` in core), sending
+  what nolune does through the relay (`POST /api/gateways/<name>/activity`, an ActivityKit push) at
+  most every 10 seconds, then the reply's first words once it's done. An automation's `/run`
+  answers with the chat its agent works in, when it started right away, for the same.
 - **Pages inside an app.** An app can show a page of the family's nolune inside its own screens
   until it has a native one. Its web view adds `nolune-embedded` to the user agent
   (`isEmbedded` in `packages/web/src/lib/ios.ts`), and the page then leaves out its top bar,
@@ -2722,7 +2723,9 @@ notifications on the lock screen. Its screens are SwiftUI, reading the [API for
 apps](#the-api-for-apps) (the native screens, below); pages it has no screen of its own for yet
 are the web app's, in a WKWebView, and a nolune from before that API gets today's web app whole.
 It's built with Xcode 26 (`ios/Nolune.xcodeproj`, whose
-folders Xcode reads as they are, so a new file needs no change to the project), checked by
+folders Xcode reads as they are, so a new file needs no change to the project: `Nolune` for the
+app, `NoluneWidgets` and `NoluneShare` for its extensions, `Shared` for what all three build),
+checked by
 `.github/workflows/ios.yml`, and published to the App Store from Xcode: see `ios/README.md`. It
 runs on iOS 16 and later, and iOS 26's SDK gives it that version's look there, Liquid Glass: the
 system's own parts (bars, sheets, alerts, menus) wear it by themselves, so native screens use them
@@ -2818,15 +2821,39 @@ rather than chrome of their own, and controls of their own that float over conte
   - **Pages without a native screen** (your card, all profiles, the admin's) are the web app's,
     inside the native navigation (`WebScreen.swift`, as [pages inside an app](#the-api-for-apps)):
     a link in one to a chat or another screen opens it natively.
+- **Beyond the app** ([#138](https://github.com/triangle-int/nolune/issues/138)). The app leaves
+  what its extensions need in their app group, `group.dev.nolune.app` (`Shared/Shared.swift`,
+  written by `Sharing.swift`): the session's cookies in the group's keychain, the person's
+  profiles, the last one open first, and the bell's latest notifications as text, and takes them
+  away when someone signs out. A widget or a Live Activity opens a page with
+  `nolune://open?path=…`, which the app opens as it opens a tapped notification.
+  - **Widgets** (`NoluneWidgets/`): the bell's latest notifications, on the Home Screen and the
+    lock screen, and "Ask nolune", a new chat in the profile last open. The app draws them again
+    when what they show changes.
+  - **Live Activities.** Sending a message (or a new chat's first, or running an automation) starts
+    one on the lock screen and in the Dynamic Island, if the nolune serves them (`activities`) and
+    the person allows them: the profile's assistant, the chat's title, and the command nolune runs,
+    in the model's words (`ReplyActivity` in `Shared/`, drawn in `NoluneWidgets/`). Its token goes
+    to the nolune, which sends the changes through the relay ([the API for
+    apps](#the-api-for-apps)), as the app does itself while the chat is open
+    (`LiveActivities.swift`); once the reply is done it shows its first words, for a while on the
+    lock screen, or not at all when the person watched it in the app. One a scheduled automation
+    starts by itself would need push-to-start tokens (iOS 17.2) and, as it would wake every
+    member's lock screen for every run, isn't done: the run's notification says when it's done.
+  - **The share sheet** (`NoluneShare/`): photos, videos, files (ten, as a message takes), a link or
+    text from any app, into a new chat or one of the latest, in any of the person's profiles. It
+    sends as the person, with the app's cookies, and uploads as the composer does.
+  - **Siri and Shortcuts** (`AskNolune.swift`): "Ask nolune" asks what to ask, then opens the app
+    on a new chat with it, in the profile last open.
 - **When it can't be reached** (no network, an address that's gone), a screen says so, with Try
   again and Connect to another nolune, and it tries again when the app comes back to the front. A
   family computer that's off is the relay's page, which reloads itself.
 - **Privacy.** The app collects nothing and tracks no one (`PrivacyInfo.xcprivacy`): what people
-  write goes to their family's nolune. A notification's text passes through the relay and Apple,
-  as any app's notifications pass through Apple; neither keeps it. The privacy policy, at
-  `nolune.dev/privacy` (`site/src/routes/privacy`), covers nolune, the apps, the relay, the
-  nolune plan's API and the site; the first screen links it, as the App Store asks. Keep it to what
-  the code does. The plan's terms, at `nolune.dev/terms`, say what a subscription gives, how it
+  write goes to their family's nolune. A notification's text, and a Live Activity's, passes through
+  the relay and Apple, as any app's notifications pass through Apple; neither keeps it. The
+  privacy policy, at `nolune.dev/privacy` (`site/src/routes/privacy`), covers nolune, the apps, the
+  relay, the nolune plan's API and the site; the first screen links it, as the App Store asks.
+  Keep it to what the code does. The plan's terms, at `nolune.dev/terms`, say what a subscription gives, how it
   renews, ends and is refunded, and how it may be used; Checkout, the customer portal and the
   account page link them.
 

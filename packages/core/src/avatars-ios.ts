@@ -1,7 +1,7 @@
 import { AVATARS, GLYPHS, eyePath, type Avatar } from './avatars.ts';
 
 /**
- * The avatars for nolune for iOS (ios/Nolune/Avatars.swift), which draws them with SwiftUI's
+ * The avatars for nolune for iOS (ios/Shared/Avatars.swift), which draws them with SwiftUI's
  * paths: those have no elliptical arcs, so each `A` becomes cubic curves, and every path is left
  * with absolute M, L, C and Z. `node scripts/ios-avatars.ts` writes the file; a test checks it's
  * current.

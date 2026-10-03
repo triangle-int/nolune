@@ -462,6 +462,30 @@ struct ChatState: Equatable {
 		return reply
 	}
 
+	/// The reply to the last message, unless the last message has none yet.
+	var lastReply: Reply? {
+		for entry in entries.reversed() {
+			switch entry {
+			case .reply(let reply): return reply
+			case .message: return nil
+			case .memory, .compaction, .unknown: continue
+			}
+		}
+		return nil
+	}
+
+	/**
+	 * The command nolune runs now, in the model's words, as a Live Activity shows it; nil between
+	 * commands, and once it's done. As the gateway has it (`activityState` in core's
+	 * live-activities.ts).
+	 */
+	var runningCommand: String? {
+		guard running, case .activity(let activity)? = lastReply?.parts.last,
+			case .command(let command)? = activity.steps.last, results[command.id] == nil
+		else { return nil }
+		return command.summary
+	}
+
 	/// The model's context used by the last call, for the technical details.
 	var lastUsage: Usage? {
 		for entry in entries.reversed() {

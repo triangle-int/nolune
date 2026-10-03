@@ -178,6 +178,18 @@ describe('/api/p/<slug>/automations', () => {
 		expect(
 			(await answer(automationRun.POST, request(stranger, { method: 'POST', params }))).status
 		).toBe(404);
+		// A script's run has no chat for a Live Activity.
+		const script = createTrigger({
+			profileId: profile.id,
+			name: 'Backup',
+			when: { kind: 'cron', cron: '0 3 * * *' },
+			what: { action: 'script', command: 'true' }
+		});
+		const ran = await answer(
+			automationRun.POST,
+			request(user, { method: 'POST', params: { slug: profile.slug, id: script.id } })
+		);
+		expect(ran).toMatchObject({ status: 200, body: { conversationId: null } });
 		expect(
 			(await answer(automation.DELETE, request(user, { method: 'DELETE', params }))).status
 		).toBe(200);

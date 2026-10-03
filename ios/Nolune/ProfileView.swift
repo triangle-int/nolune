@@ -196,7 +196,8 @@ struct ProfileView: View {
 			name = loaded.name
 			soul = loaded.soul
 		} catch {
-			problem = error.localizedDescription
+			// The screen went away while it loaded: it loads again when it's back.
+			if !error.isCancellation { problem = error.localizedDescription }
 		}
 	}
 

@@ -12,9 +12,13 @@ import UIKit
 final class Family: ObservableObject {
 	let client: Client
 	@Published private(set) var me: Me?
-	@Published private(set) var profiles: [Profile] = []
+	@Published private(set) var profiles: [Profile] = [] {
+		didSet { Sharing.update(profiles: profiles, open: slug) }
+	}
 	/// The open profile, kept for the next launch.
-	@Published private(set) var slug: String?
+	@Published private(set) var slug: String? {
+		didSet { Sharing.update(profiles: profiles, open: slug) }
+	}
 	/// The open profile's chats, most recently active first, as many pages as were loaded.
 	@Published private(set) var chats: [ChatSummary] = []
 	/// Where the next page of chats starts; nil when they're all here.
@@ -22,7 +26,9 @@ final class Family: ObservableObject {
 	@Published private(set) var folders: [Folder] = []
 	/// The chats nolune is working in right now, in the open profile.
 	@Published private(set) var running: Set<String> = []
-	@Published private(set) var bell = Bell.empty
+	@Published private(set) var bell = Bell.empty {
+		didSet { Sharing.update(bell: bell) }
+	}
 	/// What a chat in the open profile can use, and its new chats start with.
 	@Published private(set) var options: ChatOptions?
 	/// Loaded once, at least.
@@ -59,6 +65,8 @@ final class Family: ObservableObject {
 
 	/// Loads everything, then keeps it current until `stop`.
 	func start() async {
+		// The widgets and the share extension, as this person (Sharing.swift).
+		Sharing.signedIn(client.origin)
 		await reload()
 		listen()
 		// Notifications on this iPhone, for whoever signed in natively (Push.swift).
@@ -232,6 +240,7 @@ final class Family: ObservableObject {
 
 	/// Back to the front: the streams may have dropped while the app was away.
 	private func becameActive() {
+		Sharing.signedIn(client.origin)
 		Task {
 			await reload()
 			listen()
@@ -311,7 +320,19 @@ final class Family: ObservableObject {
 			chats.insert(summary, at: 0)
 			started = summary
 		}
+		if let started, chat.text?.isEmpty == false || chat.uploads?.isEmpty == false {
+			startLiveActivity(started.id, title: started.title)
+		}
 		return started
+	}
+
+	/**
+	 * A Live Activity for the reply nolune writes in a chat of the open profile, when the nolune
+	 * sends it what nolune does (LiveActivities.swift).
+	 */
+	func startLiveActivity(_ chat: String, title: String) {
+		guard can("activities"), let profile else { return }
+		LiveActivities.start(chat: chat, title: title, profile: profile, client: client)
 	}
 
 	/// The models, reasoning levels and chips for the open profile's chats.

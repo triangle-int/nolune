@@ -525,6 +525,7 @@ export {
 	describeWhen,
 	findTrigger,
 	formatLocalTime,
+	getRun,
 	getTrigger,
 	isFinished,
 	listRuns,

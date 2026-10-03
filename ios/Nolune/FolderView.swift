@@ -257,7 +257,8 @@ struct FolderView: View {
 			folder = loaded
 			instructions = loaded.instructions
 		} catch {
-			problem = error.localizedDescription
+			// The screen went away while it loaded: it loads again when it's back.
+			if !error.isCancellation { problem = error.localizedDescription }
 		}
 	}
 

@@ -512,8 +512,11 @@ extension Client {
 		try await call("PATCH", "api/p/\(slug)/automations/\(id)", body: Body(enabled: enabled))
 	}
 
-	func runAutomation(_ slug: String, _ id: String) async throws {
-		try await call("POST", "api/p/\(slug)/automations/\(id)/run")
+	/// Runs an automation now, giving back the chat its agent works in, when it started right away.
+	@discardableResult
+	func runAutomation(_ slug: String, _ id: String) async throws -> String? {
+		struct Run: Decodable { let conversationId: String? }
+		return try await call("POST", "api/p/\(slug)/automations/\(id)/run", as: Run.self).conversationId
 	}
 
 	func deleteAutomation(_ slug: String, _ id: String) async throws {

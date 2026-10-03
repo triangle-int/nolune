@@ -48,7 +48,13 @@ struct AutomationsView: View {
 					Section("All automations") {
 						ForEach(overview.triggers) { automation in
 							NavigationLink {
-								AutomationView(automation: automation, slug: slug, client: client, openChat: openChat) {
+								AutomationView(
+									automation: automation,
+									slug: slug,
+									client: client,
+									openChat: openChat,
+									ran: { chat in family.startLiveActivity(chat, title: automation.name) }
+								) {
 									await load()
 								}
 							} label: {
@@ -97,7 +103,8 @@ struct AutomationsView: View {
 		do {
 			overview = try await client.automations(slug, month: month)
 		} catch {
-			problem = error.localizedDescription
+			// The screen went away while it loaded: it loads again when it's back.
+			if !error.isCancellation { problem = error.localizedDescription }
 		}
 	}
 }
@@ -230,6 +237,8 @@ private struct AutomationView: View {
 	let slug: String
 	let client: Client
 	let openChat: (String) -> Void
+	/// Its run started, in this chat.
+	let ran: (String) -> Void
 	let changed: () async -> Void
 	@Environment(\.dismiss) private var dismiss
 	@State private var summary = ""
@@ -248,7 +257,11 @@ private struct AutomationView: View {
 					Text("next \(next)")
 						.foregroundStyle(.secondary)
 				}
-				Button("Run now") { act { try await client.runAutomation(slug, automation.id) } }
+				Button("Run now") {
+					act {
+						if let chat = try await client.runAutomation(slug, automation.id) { ran(chat) }
+					}
+				}
 				if automation.state != "done" {
 					Button(automation.state == "on" ? "Pause" : "Resume") {
 						act { try await client.setAutomation(slug, automation.id, enabled: automation.state != "on") }

@@ -134,6 +134,8 @@ struct ChatComposer: View {
 				text = ""
 				attachments.sent()
 				toBottom()
+				// The reply on the lock screen, should the person leave before it's done.
+				family.startLiveActivity(chat.id, title: chat.state.title)
 			}
 			sending = false
 		}

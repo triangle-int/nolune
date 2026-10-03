@@ -130,6 +130,8 @@ final class NativeController: UIViewController {
 			controller = BrowserController(origin: origin, note: note ? update : nil)
 		}
 		spinner.stopAnimating()
+		// Nobody signed in: no widgets, nothing to share to. (A nolune that didn't answer keeps them.)
+		if next == .signIn { Sharing.signedOut() }
 		// An invite's sheet, say, once someone turned out to be signed in.
 		if next != .signIn, presentedViewController != nil { dismiss(animated: true) }
 		let previous = current
@@ -178,6 +180,7 @@ final class NativeController: UIViewController {
 	private func connectElsewhere() {
 		Task {
 			await client.forgetPush()
+			Sharing.signedOut()
 			model.disconnect()
 		}
 	}

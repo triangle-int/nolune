@@ -8,7 +8,7 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 describe('the avatars for iOS', () => {
 	it('are as avatars.ts and the colors make them: run `node scripts/ios-avatars.ts` if not', () => {
 		const css = readFileSync(`${root}packages/web/src/routes/layout.css`, 'utf8');
-		const swift = readFileSync(`${root}ios/Nolune/Avatars.swift`, 'utf8');
+		const swift = readFileSync(`${root}ios/Shared/Avatars.swift`, 'utf8');
 		expect(swift).toBe(iosAvatarSource(parseAvatarColors(css)));
 	});
 

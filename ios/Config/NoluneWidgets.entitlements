@@ -1,14 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<!--
-	Notifications: Xcode makes it production when it exports a build for TestFlight or the App Store.
-	And the app group, where the app leaves what its widgets and share extension read
-	(Shared/Shared.swift).
--->
+<!-- The app group, where the app leaves what this extension reads (Shared/Shared.swift). -->
 <dict>
-	<key>aps-environment</key>
-	<string>development</string>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.dev.nolune.app</string>

@@ -46,10 +46,22 @@ struct MainView: View {
 			await family.start()
 			if sizeClass == .regular, selection == nil { selection = .newChat }
 			openPending()
+			ask()
 		}
 		.onDisappear { family.stop() }
 		.onReceive(model.$pending.compactMap { $0 }.receive(on: DispatchQueue.main)) { _ in
+			// Before the first load, `.task` opens it once it's done: its profile is known then.
+			if family.loaded { openPending() }
+		}
+		.onReceive(model.$question.compactMap { $0 }.receive(on: DispatchQueue.main)) { _ in
+			// Before the first load, `.task` asks once it's done.
+			if family.loaded { ask() }
+		}
+		.onChange(of: family.loaded) { loaded in
+			// Loaded at last, after the first try failed.
+			guard loaded else { return }
 			openPending()
+			ask()
 		}
 		.onChange(of: family.slug) { _ in
 			// Another profile: a chat or folder that was open was the last one's.
@@ -165,6 +177,16 @@ struct MainView: View {
 			selection = found.destination
 		}
 		return true
+	}
+
+	/// "Ask nolune" from Siri (AskNolune.swift): a new chat with the question, opened.
+	private func ask() {
+		guard let question = model.takeQuestion() else { return }
+		Task {
+			if let chat = await family.startChat(Client.NewChat(text: question)) {
+				selection = .chat(chat.id)
+			}
+		}
 	}
 
 	/**

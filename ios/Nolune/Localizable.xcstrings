@@ -5819,6 +5819,34 @@
         }
       }
     },
+    "Question" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frage"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pregunta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Question"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вопрос"
+          }
+        }
+      }
+    },
     "Ran %lld commands" : {
       "localizations" : {
         "de" : {
@@ -7263,6 +7291,34 @@
         }
       }
     },
+    "Starts a chat with nolune with your question." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Startet einen Chat mit nolune mit deiner Frage."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empieza un chat con nolune con tu pregunta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Commence une discussion avec nolune avec votre question."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Начинает чат с nolune с вашим вопросом."
+          }
+        }
+      }
+    },
     "Stop" : {
       "localizations" : {
         "de" : {
@@ -8631,6 +8687,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Что nolune должен знать или делать в каждом чате этой папки."
+          }
+        }
+      }
+    },
+    "What should nolune do?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Was soll nolune tun?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Qué debe hacer nolune?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Que doit faire nolune ?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Что сделать nolune?"
           }
         }
       }

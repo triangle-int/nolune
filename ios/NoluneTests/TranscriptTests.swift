@@ -104,6 +104,25 @@ final class TranscriptTests: XCTestCase {
 		XCTAssertFalse(chat.unanswered)
 	}
 
+	/// What a chat's Live Activity shows (LiveActivities.swift), as the gateway's.
+	func testWhatALiveActivityShows() throws {
+		var chat = ChatState()
+		chat.apply(try XCTUnwrap(events().first))
+		XCTAssertEqual(chat.lastReply?.text, "Looking")
+		XCTAssertNil(chat.runningCommand, "writing")
+		let working = #"{"type":"transcript","order":["m1","reply-1","memory-4","m5","m6","reply-7"],"entries":[{"type":"reply","key":"reply-7","parts":[{"type":"activity","key":"reply-7-0","steps":[{"type":"command","id":"t7","command":"ls","summary":"Looking at the files"}],"startedAt":1,"endedAt":2}],"messageIds":[],"usage":null,"stopReasons":[],"models":[],"live":true}],"results":{}}"#
+		chat.apply(try JSONDecoder().decode(ChatEvent.self, from: Data(working.utf8)))
+		XCTAssertEqual(chat.runningCommand, "Looking at the files")
+		chat.apply(.transcript(order: chat.entries.map(\.id), entries: [], results: ["t7": CommandResult(output: "a b", isError: false, pictures: [])]))
+		XCTAssertNil(chat.runningCommand, "it ran")
+		// A note saved after the reply doesn't count; a message with none yet does.
+		chat.apply(.transcript(order: ["m1", "reply-1", "memory-4"], entries: [], results: [:]))
+		XCTAssertEqual(chat.lastReply?.parts.count, 2)
+		chat.apply(try XCTUnwrap(events().first))
+		chat.apply(.transcript(order: ["m1", "reply-1", "memory-4", "m5"], entries: [], results: [:]))
+		XCTAssertNil(chat.lastReply)
+	}
+
 	func testHowACommandEnded() {
 		XCTAssertEqual(CommandResult(output: "ok", isError: false, pictures: []).status, .done)
 		XCTAssertEqual(CommandResult(output: "Blocked by auto mode: it deletes files", isError: true, pictures: []).status, .blocked)
