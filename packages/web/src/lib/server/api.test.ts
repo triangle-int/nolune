@@ -56,7 +56,7 @@ describe('/api/version', () => {
 		expect((await answer(version.GET, request(user))).body).toEqual({
 			version: NOLUNE_VERSION,
 			api: 1,
-			capabilities: ['chats', 'notifications']
+			capabilities: ['chats', 'notifications', 'transcript']
 		});
 	});
 });
