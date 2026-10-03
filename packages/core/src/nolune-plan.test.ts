@@ -445,8 +445,13 @@ describe('chats on the nolune plan', () => {
 		await ended;
 
 		const time = resetsAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+		// Two hours from late evening is tomorrow, which the message names.
+		const day =
+			resetsAt.toDateString() === new Date().toDateString()
+				? ''
+				: `on ${resetsAt.toLocaleDateString('en-GB', { weekday: 'long' })} `;
 		expect(getSnapshot(chat.id).error).toContain(
-			`The nolune plan's 5-hour limit is reached. Chats start again at ${time}.`
+			`The nolune plan's 5-hour limit is reached. Chats start again ${day}at ${time}.`
 		);
 		// Asked once: the SDK doesn't retry a refusal.
 		expect(chatCalls()).toHaveLength(1);
