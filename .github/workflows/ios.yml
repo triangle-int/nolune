@@ -85,8 +85,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/nolune/api"
           echo '{"version":"0.6.0","api":1}' > "$RUNNER_TEMP/nolune/api/version"
           /usr/bin/python3 -m http.server 5780 --directory "$RUNNER_TEMP/nolune" > /dev/null 2>&1 &
-          sleep 2
-          curl -sS -m 5 http://localhost:5780/api/version || true
+          # It takes a while to start the first time.
+          for _ in $(seq 30); do curl -fsS -m 2 http://localhost:5780/api/version 2> /dev/null && break; sleep 1; done
           step xcrun simctl terminate "$udid" dev.nolune.app
           step xcrun simctl launch "$udid" dev.nolune.app -origin http://localhost:5780 -native YES
           sleep 10
