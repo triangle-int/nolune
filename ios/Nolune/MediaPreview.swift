@@ -51,8 +51,9 @@ struct MediaPreview: View {
 
 	private func download() async {
 		var components = URLComponents(url: item.url, resolvingAgainstBaseURL: false)
-		if !(components?.queryItems ?? []).contains(where: { $0.name == "download" }) {
-			components?.queryItems = (components?.queryItems ?? []) + [URLQueryItem(name: "download", value: nil)]
+		let query = components?.queryItems ?? []
+		if !query.contains(where: { $0.name == "download" }) {
+			components?.queryItems = query + [URLQueryItem(name: "download", value: nil)]
 		}
 		do {
 			let (downloaded, response) = try await URLSession.shared.download(from: components?.url ?? item.url)
