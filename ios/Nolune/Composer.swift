@@ -280,14 +280,15 @@ private struct AttachmentStrip: View {
 }
 
 /// The camera, for a photo or a video to attach.
-private struct CameraPicker: UIViewControllerRepresentable {
+struct CameraPicker: UIViewControllerRepresentable {
 	let taken: (Data, String) -> Void
 	let close: () -> Void
+	var photosOnly = false
 
 	func makeUIViewController(context: Context) -> UIImagePickerController {
 		let picker = UIImagePickerController()
 		picker.sourceType = .camera
-		picker.mediaTypes = [UTType.image.identifier, UTType.movie.identifier]
+		picker.mediaTypes = photosOnly ? [UTType.image.identifier] : [UTType.image.identifier, UTType.movie.identifier]
 		picker.delegate = context.coordinator
 		return picker
 	}

@@ -2649,7 +2649,9 @@ when they like, so an app asks each one what it serves.
 
 - **`GET /api/version`** answers anyone with `{ version, api }`: nolune's version and the level of
   this JSON (`API_LEVEL` in `packages/web/src/lib/server/api.ts`). Signed in, it adds
-  `capabilities`: what an app can show natively, `chats`, `notifications` and `transcript` so far. A change an app
+  `capabilities`: what an app can show natively: `chats`, `notifications`, `transcript`, a
+  profile's pages (`memory`, `automations`, `skills`, `profile`, `folders`, `images`), and Live
+  Activities (`activities`). A change an app
   would notice, to an endpoint below or to what it answers, raises the level, and an app shows
   natively only what a nolune's level and capabilities cover, the web page otherwise. Adding a
   field doesn't raise it: apps ignore what they don't know.
@@ -2694,6 +2696,19 @@ when they like, so an app asks each one what it serves.
   with the status: 400 for what doesn't check out, 401 signed out, 403 for what isn't theirs to do,
   404 for what isn't there or isn't theirs to see.
 - **Changes** reach apps as they reach pages, through `/api/events`.
+- **A profile's pages.** Each page's load is JSON too, from the same code (`lib/server/memory.ts`,
+  `automations.ts`, `images.ts`), and each of its forms an endpoint, under `/api/p/<slug>/`:
+  `memory` (with `notes`, `PUT` to write one against the `updatedAt` it opened with, 409 when it
+  changed since, and `DELETE`; `moves`; `learning`), `automations` (`?month=`; `PATCH`, `DELETE`
+  and `/run` on one), `skills` (`PATCH` turns some on or off), `settings` (the profile's name,
+  avatar and soul, its members with whose note is theirs; `PATCH`), `members` (`POST` adds
+  someone, answering `{ choose }` when memory may know them already; `PATCH` and `DELETE` on one),
+  `DELETE /api/p/<slug>` for the profile, a folder's instructions and `files`, and `images` (its
+  templates; `POST` starts a picture's chat, answering with it).
+- **Live Activities.** An iPhone gives its activity's token for a chat (`POST /api/c/<id>/activity`)
+  and the gateway follows the chat (`live-activities.ts` in core), sending what nolune does through
+  the relay (`POST /api/gateways/<name>/activity`, an ActivityKit push) at most every 10 seconds,
+  then the reply's first words once it's done.
 - **Pages inside an app.** An app can show a page of the family's nolune inside its own screens
   until it has a native one. Its web view adds `nolune-embedded` to the user agent
   (`isEmbedded` in `packages/web/src/lib/ios.ts`), and the page then leaves out its top bar,
@@ -2793,10 +2808,16 @@ rather than chrome of their own, and controls of their own that float over conte
   - **The bell** (`BellView.swift`) is a sheet, the new ones first; a tapped notification opens it
     with that one in full. **Settings** (`Settings.swift`) has the person's name and the pages'
     preferences, kept in the `nolune-prefs` cookie the pages read.
-  - **Pages without a native screen yet** (images, automations, memory, skills, the profile's
-    people, admin pages) are the web app's, inside the native navigation (`WebScreen.swift`, as
-    [pages inside an app](#the-api-for-apps)): a link in one to a chat or another screen opens it
-    natively.
+  - **A profile's pages** are native when the nolune serves them (its capabilities): Memory
+    (`MemoryView.swift`: the notes by category, to edit, move or merge and forget, the cards, and
+    what was saved from chats, to undo), Automations (`AutomationsView.swift`: the month's
+    calendar, and each one to run, pause, change or delete), Skills, People & profile
+    (`ProfileView.swift`), a folder (`FolderView.swift`), and Images (`ImagesView.swift`: the
+    templates, a drawing on PencilKit's canvas, or a description). Their models are in
+    `ProfilePages.swift`.
+  - **Pages without a native screen** (your card, all profiles, the admin's) are the web app's,
+    inside the native navigation (`WebScreen.swift`, as [pages inside an app](#the-api-for-apps)):
+    a link in one to a chat or another screen opens it natively.
 - **When it can't be reached** (no network, an address that's gone), a screen says so, with Try
   again and Connect to another nolune, and it tries again when the app comes back to the front. A
   family computer that's off is the relay's page, which reloads itself.

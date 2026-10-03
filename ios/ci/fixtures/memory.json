@@ -1,0 +1,80 @@
+{
+	"files": [
+		{
+			"path": "core.md",
+			"text": "We live in Berlin.",
+			"size": 18,
+			"updatedAt": 1791024237759.223,
+			"facts": [
+				{
+					"text": "We live in Berlin.",
+					"learnedAt": 1791024237759
+				}
+			]
+		},
+		{
+			"path": "home.md",
+			"text": "# Home\n\n- The wifi password is on the fridge.\n- Bins go out on Tuesday.",
+			"size": 71,
+			"updatedAt": 1791024237755.2397,
+			"facts": [
+				{
+					"text": "The wifi password is on the fridge.",
+					"learnedAt": 1791024237755
+				},
+				{
+					"text": "Bins go out on Tuesday.",
+					"learnedAt": 1791024237755
+				}
+			]
+		},
+		{
+			"path": "people/leo.md",
+			"text": "# Leo\n\n- Likes trains.",
+			"size": 22,
+			"updatedAt": 1791024237757.8772,
+			"facts": [
+				{
+					"text": "Likes trains.",
+					"learnedAt": 1791024237758
+				}
+			]
+		}
+	],
+	"cards": [
+		{
+			"path": "cards/anna.md",
+			"owner": "Anna",
+			"ownerId": "2d9be426-63fc-4b6f-b119-cb4946dbdf5c",
+			"mine": true,
+			"file": null
+		},
+		{
+			"path": "cards/max.md",
+			"owner": "Max",
+			"ownerId": "14a052e0-0c8e-4007-883b-24137ca25ea3",
+			"mine": false,
+			"file": null
+		}
+	],
+	"myProfiles": ["Family"],
+	"toBringIn": 0,
+	"recent": [],
+	"core": {
+		"path": "core.md",
+		"maxChars": 4000
+	},
+	"members": [
+		{
+			"id": "2d9be426-63fc-4b6f-b119-cb4946dbdf5c",
+			"name": "Anna",
+			"note": "people/anna.md"
+		},
+		{
+			"id": "14a052e0-0c8e-4007-883b-24137ca25ea3",
+			"name": "Max",
+			"note": "people/max.md"
+		}
+	],
+	"learnFromChats": true
+}

@@ -3,14 +3,23 @@ A pretend family's nolune for the iOS app's screens in CI (.github/workflows/ios
 and event streams the native screens read (DESIGN.md, "The API for apps"), with one profile, a few
 chats, the bell, and a chat with a reply that ran a command. Signed out, it only says which nolune
 it is, for the sign-in. Run with the runner's own python3: `python3 nolune.py <port> [signed-in]`.
+A profile's pages answer as a real nolune did (fixtures/, from packages/web's endpoints).
 """
 
 import json
+import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SIGNED_IN = len(sys.argv) > 2 and sys.argv[2] == "signed-in"
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+
+
+def fixture(name):
+    with open(os.path.join(FIXTURES, name + ".json"), encoding="utf-8") as f:
+        return json.load(f)
+
 NOW = int(time.time() * 1000)
 MINUTE = 60_000
 
@@ -163,7 +172,10 @@ class Nolune(BaseHTTPRequestHandler):
         if path == "/api/version":
             server = {"version": "0.6.0", "api": 1}
             if SIGNED_IN:
-                server["capabilities"] = ["chats", "notifications", "transcript"]
+                server["capabilities"] = [
+                    "chats", "notifications", "transcript", "memory", "automations",
+                    "skills", "profile", "folders", "images", "activities",
+                ]
             return self.answer(server)
         if not SIGNED_IN:
             return self.answer({"message": "Not signed in"}, 401)
@@ -179,6 +191,16 @@ class Nolune(BaseHTTPRequestHandler):
             return self.answer({"folders": [{"id": "japan", "name": "Trip to Japan"}]})
         if path == "/api/p/smiths/new-chat":
             return self.answer(OPTIONS)
+        pages = {
+            "/api/p/smiths/memory": "memory",
+            "/api/p/smiths/automations": "automations",
+            "/api/p/smiths/skills": "skills",
+            "/api/p/smiths/settings": "settings",
+            "/api/p/smiths/images": "images",
+            "/api/p/smiths/folders/japan": "folder",
+        }
+        if path in pages:
+            return self.answer(fixture(pages[path]))
         if path.startswith("/api/icons/"):
             icon = ICONS.get(path[len("/api/icons/"):])
             return self.answer(icon) if icon else self.answer({"message": "Unknown icon"}, 404)

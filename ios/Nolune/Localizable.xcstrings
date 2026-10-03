@@ -1,6 +1,62 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "\"Every weekday at 7:30, check the weather and tell us if we need umbrellas.\"" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„Prüfe an jedem Werktag um 7:30 das Wetter und sag uns, ob wir Regenschirme brauchen.“"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Cada día entre semana a las 7:30, mira el tiempo y dinos si necesitamos paraguas»."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "« Chaque jour de semaine à 7 h 30, regarde la météo et dis-nous s’il faut prendre un parapluie. »"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Каждый будний день в 7:30 проверяй погоду и говори нам, нужен ли зонт»."
+          }
+        }
+      }
+    },
+    "\"Remind Anna tomorrow at 17:00 to pick up the parcel.\"" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„Erinnere Anna morgen um 17:00, das Paket abzuholen.“"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Recuérdale a Anna mañana a las 17:00 que recoja el paquete»."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "« Rappelle à Anna demain à 17 h d’aller chercher le colis. »"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«Напомни Анне завтра в 17:00 забрать посылку»."
+          }
+        }
+      }
+    },
     "%@ answered with an error (%lld)." : {
       "localizations" : {
         "de" : {
@@ -169,6 +225,224 @@
         }
       }
     },
+    "%@ will be able to read everything in this profile's memory, this note too. Check that it holds nothing meant to be kept from them, like a surprise." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ kann dann das ganze Gedächtnis dieses Profils lesen, auch diese Notiz. Prüfe, dass nichts darin steht, was vor dieser Person geheim bleiben soll, etwa eine Überraschung."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ podrá leer toda la memoria de este perfil, también esta nota. Comprueba que no tenga nada que deba quedar en secreto para esta persona, como una sorpresa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ pourra lire toute la mémoire de ce profil, y compris cette note. Vérifiez qu’elle ne contient rien à garder secret pour cette personne, comme une surprise."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ сможет читать всю память профиля, и эту заметку тоже. Проверьте, что в ней нет ничего, что стоит держать в секрете от этого человека, например сюрприза."
+          }
+        }
+      }
+    },
+    "%@'s card" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karte von %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ficha de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fiche de %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Карточка: %@"
+          }
+        }
+      }
+    },
+    "%@'s card is empty so far." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Karte von %@ ist noch leer."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ficha de %@ está vacía por ahora."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La fiche de %@ est vide pour l’instant."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@: карточка пока пуста."
+          }
+        }
+      }
+    },
+    "%lld memories" : {
+      "localizations" : {
+        "de" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Erinnerung"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld Erinnerungen"
+                }
+              }
+            }
+          }
+        },
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld memory"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld memories"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recuerdo"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld recuerdos"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld souvenir"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld souvenirs"
+                }
+              }
+            }
+          }
+        },
+        "ru" : {
+          "variations" : {
+            "plural" : {
+              "few" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld факта"
+                }
+              },
+              "many" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld фактов"
+                }
+              },
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld факт"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld фактов"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld of %lld on · about %lld tokens at the start of every new chat" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld von %lld an · etwa %lld Tokens am Anfang jedes neuen Chats"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld de %lld activadas · unos %lld tokens al inicio de cada chat nuevo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld sur %lld activées · environ %lld tokens au début de chaque nouvelle discussion"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включено %lld из %lld · около %lld токенов в начале каждого нового чата"
+          }
+        }
+      }
+    },
     "(no output)" : {
       "localizations" : {
         "de" : {
@@ -253,6 +527,34 @@
         }
       }
     },
+    "A new project…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein neues Projekt…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un proyecto nuevo…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un nouveau projet…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Новый проект…"
+          }
+        }
+      }
+    },
     "Account" : {
       "localizations" : {
         "de" : {
@@ -277,6 +579,174 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Аккаунт"
+          }
+        }
+      }
+    },
+    "Add %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ hinzufügen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить: %@"
+          }
+        }
+      }
+    },
+    "Add a drawing first." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Füge zuerst eine Zeichnung hinzu."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Primero añade un dibujo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajoutez d’abord un dessin."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сначала добавьте рисунок."
+          }
+        }
+      }
+    },
+    "Add a photo first." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Füge zuerst ein Foto hinzu."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Primero añade una foto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajoutez d’abord une photo."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сначала добавьте фото."
+          }
+        }
+      }
+    },
+    "Add a picture" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bild hinzufügen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir una foto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter une photo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить фото"
+          }
+        }
+      }
+    },
+    "Add anything else…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sonst noch etwas…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añade lo que quieras…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajoutez autre chose…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавьте что-нибудь ещё…"
+          }
+        }
+      }
+    },
+    "Add files" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dateien hinzufügen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir archivos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter des fichiers"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Добавить файлы"
           }
         }
       }
@@ -309,6 +779,62 @@
         }
       }
     },
+    "All automations" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle Automationen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todas las automatizaciones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toutes les automatisations"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Все автоматизации"
+          }
+        }
+      }
+    },
+    "All its chats are deleted for everyone. The folder is moved to ~/.nolune/trash." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle seine Chats werden für alle gelöscht. Der Ordner wird nach ~/.nolune/trash verschoben."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos sus chats se eliminan para todos. La carpeta se mueve a ~/.nolune/trash."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toutes ses discussions sont supprimées pour tout le monde. Le dossier est déplacé dans ~/.nolune/trash."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Все его чаты удалятся у всех. Папка переместится в ~/.nolune/trash."
+          }
+        }
+      }
+    },
     "All profiles" : {
       "localizations" : {
         "de" : {
@@ -333,6 +859,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Все профили"
+          }
+        }
+      }
+    },
+    "Also called: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auch genannt: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otros nombres: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autres noms : %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Зовут также: %@"
           }
         }
       }
@@ -561,6 +1115,34 @@
         }
       }
     },
+    "Avatar" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avatar"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avatar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avatar"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Аватар"
+          }
+        }
+      }
+    },
     "Back to %@" : {
       "localizations" : {
         "de" : {
@@ -585,6 +1167,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Вернуться к %@"
+          }
+        }
+      }
+    },
+    "Built into nolune" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "In nolune eingebaut"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Incluidas en nolune"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intégrées à nolune"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Встроены в nolune"
           }
         }
       }
@@ -729,6 +1339,62 @@
         }
       }
     },
+    "Cards" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Karten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fichas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fiches"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Карточки"
+          }
+        }
+      }
+    },
+    "Categories" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kategorien"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Categorías"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Catégories"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Категории"
+          }
+        }
+      }
+    },
     "Change" : {
       "localizations" : {
         "de" : {
@@ -753,6 +1419,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Изменить"
+          }
+        }
+      }
+    },
+    "Change note" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz ändern"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar nota"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changer de note"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сменить заметку"
+          }
+        }
+      }
+    },
+    "Change picture" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bild ändern"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar foto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changer de photo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сменить фото"
           }
         }
       }
@@ -865,6 +1587,146 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Чаты"
+          }
+        }
+      }
+    },
+    "Chats you start here show up here. You can also drag chats onto the folder in the sidebar." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chats, die du hier startest, erscheinen hier. Du kannst Chats auch in der Seitenleiste auf den Ordner ziehen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los chats que empieces aquí aparecen aquí. También puedes arrastrar chats a la carpeta en la barra lateral."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les discussions commencées ici apparaissent ici. Vous pouvez aussi glisser des discussions sur le dossier dans la barre latérale."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Здесь появятся чаты, которые вы начнёте в этой папке. Чаты можно и перетащить на папку в боковой панели."
+          }
+        }
+      }
+    },
+    "Choose a photo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foto wählen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir una foto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisir une photo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрать фото"
+          }
+        }
+      }
+    },
+    "Choose note" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz wählen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir nota"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisir la note"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрать заметку"
+          }
+        }
+      }
+    },
+    "Choose someone to add" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle jemanden zum Hinzufügen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige a quién añadir"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez quelqu’un à ajouter"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите, кого добавить"
+          }
+        }
+      }
+    },
+    "Choose where it belongs. If that note is there already, the two become one." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wähle, wohin sie gehört. Gibt es diese Notiz schon, werden beide zu einer."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elige dónde va. Si esa nota ya existe, las dos se convierten en una."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisissez où elle va. Si cette note existe déjà, les deux n’en font plus qu’une."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выберите, куда она относится. Если такая заметка уже есть, они станут одной."
           }
         }
       }
@@ -1345,6 +2207,34 @@
         }
       }
     },
+    "Core" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Wichtigste"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lo esencial"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’essentiel"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Главное"
+          }
+        }
+      }
+    },
     "Couldn't reach %@: %@" : {
       "localizations" : {
         "de" : {
@@ -1373,6 +2263,62 @@
         }
       }
     },
+    "Couldn’t open that picture. Try a JPEG or PNG." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Bild ließ sich nicht öffnen. Versuch es mit JPEG oder PNG."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo abrir esa imagen. Prueba con JPEG o PNG."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’ouvrir cette image. Essayez un JPEG ou un PNG."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось открыть это изображение. Попробуйте JPEG или PNG."
+          }
+        }
+      }
+    },
+    "Custom…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eigene…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personalizado…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personnalisé…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Свой вариант…"
+          }
+        }
+      }
+    },
     "Delete" : {
       "localizations" : {
         "de" : {
@@ -1397,6 +2343,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Удалить"
+          }
+        }
+      }
+    },
+    "Delete \"%@\"?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„%@“ löschen?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Eliminar «%@»?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer « %@ » ?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить «%@»?"
           }
         }
       }
@@ -1457,6 +2431,118 @@
         }
       }
     },
+    "Delete this profile" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Profil löschen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar este perfil"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprimer ce profil"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить этот профиль"
+          }
+        }
+      }
+    },
+    "Deletes all its chats for everyone. The folder is moved to ~/.nolune/trash." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Löscht alle seine Chats für alle. Der Ordner wird nach ~/.nolune/trash verschoben."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elimina todos sus chats para todos. La carpeta se mueve a ~/.nolune/trash."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Supprime toutes ses discussions pour tout le monde. Le dossier est déplacé dans ~/.nolune/trash."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Все его чаты удалятся у всех. Папка переместится в ~/.nolune/trash."
+          }
+        }
+      }
+    },
+    "Describe an image" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beschreibe ein Bild"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Describe una imagen"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Décrivez une image"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Опишите картинку"
+          }
+        }
+      }
+    },
+    "Description" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beschreibung"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descripción"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Description"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Описание"
+          }
+        }
+      }
+    },
     "Disconnected: %@" : {
       "localizations" : {
         "de" : {
@@ -1513,6 +2599,34 @@
         }
       }
     },
+    "Does nolune know %@ already?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kennt nolune %@ schon?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿nolune ya conoce a %@?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nolune connaît-il déjà %@ ?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nolune уже знает человека по имени %@?"
+          }
+        }
+      }
+    },
     "Done" : {
       "localizations" : {
         "de" : {
@@ -1537,6 +2651,118 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Готово"
+          }
+        }
+      }
+    },
+    "Draw" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeichnen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dibujar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dessiner"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нарисовать"
+          }
+        }
+      }
+    },
+    "Each member's card says what they told nolune about themselves that they'd tell anyone. It goes with them into every profile they're in, and every chat starts with it. Only they change it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf der Karte jedes Mitglieds steht, was es nolune über sich selbst erzählt hat und jedem erzählen würde. Sie geht mit in jedes Profil, in dem es ist, und jeder Chat beginnt mit ihr. Nur das Mitglied selbst ändert sie."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ficha de cada miembro dice lo que le contó a nolune sobre sí mismo y le contaría a cualquiera. Va con esa persona a todos los perfiles en los que está, y cada chat empieza con ella. Solo esa persona la cambia."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La fiche de chaque membre dit ce qu’il a raconté de lui-même à nolune et raconterait à n’importe qui. Elle le suit dans tous ses profils, et chaque discussion commence avec elle. Lui seul la modifie."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "На карточке каждого участника то, что он сам рассказал nolune о себе и рассказал бы кому угодно. Карточка переходит вместе с ним во все его профили, и каждый чат начинается с неё. Менять её может только он сам."
+          }
+        }
+      }
+    },
+    "Edit" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bearbeiten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modifier"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Изменить"
+          }
+        }
+      }
+    },
+    "Edit your card" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Karte bearbeiten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar tu ficha"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modifier votre fiche"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Изменить вашу карточку"
           }
         }
       }
@@ -1569,6 +2795,34 @@
         }
       }
     },
+    "Everyone here sees and writes in the same chats, and can ask nolune for anything." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle hier sehen dieselben Chats, schreiben darin und können nolune um alles bitten."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos aquí ven y escriben en los mismos chats, y pueden pedirle a nolune cualquier cosa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout le monde ici voit les mêmes discussions, y écrit, et peut demander n’importe quoi à nolune."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Все здесь видят одни и те же чаты, пишут в них и могут просить nolune о чём угодно."
+          }
+        }
+      }
+    },
     "Everyone in your profiles sees your name and picture, and nolune reads your name with each message you send." : {
       "localizations" : {
         "de" : {
@@ -1593,6 +2847,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ваше имя и фото видят все в ваших профилях, а nolune читает ваше имя с каждым вашим сообщением."
+          }
+        }
+      }
+    },
+    "Everyone is already a member." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle sind schon Mitglied."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos son ya miembros."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout le monde est déjà membre."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Все уже состоят в этом профиле."
           }
         }
       }
@@ -1765,6 +3047,34 @@
         }
       }
     },
+    "Folder options" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordner-Optionen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opciones de la carpeta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Options du dossier"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Действия с папкой"
+          }
+        }
+      }
+    },
     "Folders" : {
       "localizations" : {
         "de" : {
@@ -1789,6 +3099,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Папки"
+          }
+        }
+      }
+    },
+    "Forget" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vergessen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Olvidar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oublier"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Забыть"
+          }
+        }
+      }
+    },
+    "Forget \"%@\"?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„%@“ vergessen?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Olvidar «%@»?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oublier « %@ » ?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Забыть «%@»?"
           }
         }
       }
@@ -1821,6 +3187,34 @@
         }
       }
     },
+    "From before memory had categories: nolune reads it, but adds nothing to it. Move it into a category to keep it growing." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus der Zeit, bevor das Gedächtnis Kategorien hatte: nolune liest sie, fügt aber nichts hinzu. Verschiebe sie in eine Kategorie, damit sie weiterwächst."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De antes de que la memoria tuviera categorías: nolune la lee, pero no le añade nada. Muévela a una categoría para que siga creciendo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "D’avant que la mémoire ait des catégories : nolune la lit, mais n’y ajoute rien. Déplacez-la dans une catégorie pour qu’elle continue de s’enrichir."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта заметка появилась, когда у памяти ещё не было категорий: nolune её читает, но ничего в неё не дописывает. Перенесите её в категорию, чтобы она пополнялась."
+          }
+        }
+      }
+    },
     "From nolune, to %@" : {
       "localizations" : {
         "de" : {
@@ -1845,6 +3239,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "От nolune для %@"
+          }
+        }
+      }
+    },
+    "Generate" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Erstellen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Generar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Générer"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Создать"
           }
         }
       }
@@ -2101,6 +3523,34 @@
         }
       }
     },
+    "Health" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gesundheit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salud"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Santé"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Здоровье"
+          }
+        }
+      }
+    },
     "High" : {
       "localizations" : {
         "de" : {
@@ -2125,6 +3575,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Высокий"
+          }
+        }
+      }
+    },
+    "Home" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zuhause"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Casa"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Maison"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Дом"
+          }
+        }
+      }
+    },
+    "How nolune looks in this profile's chats. Everyone here sees the same one, and nolune can change it when asked." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wie nolune in den Chats dieses Profils aussieht. Alle hier sehen denselben, und nolune kann ihn ändern, wenn man es darum bittet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cómo se ve nolune en los chats de este perfil. Todos aquí ven el mismo, y nolune puede cambiarlo si se lo pides."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’apparence de nolune dans les discussions de ce profil. Tout le monde ici voit le même, et nolune peut le changer si on le lui demande."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Как nolune выглядит в чатах этого профиля. Все здесь видят один и тот же аватар, и nolune может сменить его, если попросить."
           }
         }
       }
@@ -2157,6 +3663,118 @@
         }
       }
     },
+    "Instructions" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anweisungen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instrucciones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instructions"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Инструкции"
+          }
+        }
+      }
+    },
+    "Instructions for nolune" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anweisungen für nolune"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instrucciones para nolune"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instructions pour nolune"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Инструкции для nolune"
+          }
+        }
+      }
+    },
+    "It changed since, so it can't be undone here. Edit the note on the Memory page." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das wurde inzwischen geändert und lässt sich hier nicht rückgängig machen. Bearbeite die Notiz auf der Gedächtnis-Seite."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambió desde entonces, así que no se puede deshacer aquí. Edita la nota en la página Memoria."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cela a changé depuis, donc impossible d’annuler ici. Modifiez la note sur la page Mémoire."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "С тех пор это изменили, поэтому здесь не отменить. Поправьте заметку на странице «Память»."
+          }
+        }
+      }
+    },
+    "It was already undone." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das wurde schon rückgängig gemacht."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya se deshizo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "C’est déjà annulé."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это уже отменили."
+          }
+        }
+      }
+    },
     "It’s getting late, %@. What do you need?" : {
       "localizations" : {
         "de" : {
@@ -2185,6 +3803,34 @@
         }
       }
     },
+    "Landscape" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Querformat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Horizontal"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paysage"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Горизонтально"
+          }
+        }
+      }
+    },
     "Larger than %lld MB" : {
       "localizations" : {
         "de" : {
@@ -2209,6 +3855,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Больше %lld МБ"
+          }
+        }
+      }
+    },
+    "Learn from chats" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus Chats lernen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aprender de los chats"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apprendre des discussions"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запоминать из чатов"
+          }
+        }
+      }
+    },
+    "Link" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verknüpfen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vincular"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Associer"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Привязать"
           }
         }
       }
@@ -2269,6 +3971,34 @@
         }
       }
     },
+    "Made for %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Für %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hechas para %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faites pour %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Для профиля %@"
+          }
+        }
+      }
+    },
     "Max" : {
       "localizations" : {
         "de" : {
@@ -2325,6 +4055,34 @@
         }
       }
     },
+    "Members" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mitglieder"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Miembros"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Membres"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Участники"
+          }
+        }
+      }
+    },
     "Memory" : {
       "localizations" : {
         "de" : {
@@ -2349,6 +4107,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Память"
+          }
+        }
+      }
+    },
+    "Merge" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zusammenführen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unir"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fusionner"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Объединить"
           }
         }
       }
@@ -2409,6 +4195,90 @@
         }
       }
     },
+    "Move" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verschieben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déplacer"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перенести"
+          }
+        }
+      }
+    },
+    "Move \"%@\"" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "„%@“ verschieben"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover «%@»"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déplacer « %@ »"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перенести «%@»"
+          }
+        }
+      }
+    },
+    "Move to" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verschieben nach"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover a"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déplacer vers"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Куда перенести"
+          }
+        }
+      }
+    },
     "Move to folder" : {
       "localizations" : {
         "de" : {
@@ -2433,6 +4303,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Переместить в папку"
+          }
+        }
+      }
+    },
+    "Name" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Название"
           }
         }
       }
@@ -2517,6 +4415,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Новый чат"
+          }
+        }
+      }
+    },
+    "New chat in %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neuer Chat in %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nuevo chat en %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nouvelle discussion dans %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Новый чат в папке %@"
           }
         }
       }
@@ -2633,6 +4559,62 @@
         }
       }
     },
+    "Next month" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nächster Monat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mes siguiente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mois suivant"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Следующий месяц"
+          }
+        }
+      }
+    },
+    "No automations yet. Ask nolune in a chat, for example:" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Automationen. Bitte nolune in einem Chat darum, zum Beispiel:"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no hay automatizaciones. Pídeselo a nolune en un chat, por ejemplo:"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune automatisation pour l’instant. Demandez à nolune dans une discussion, par exemple :"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Автоматизаций пока нет. Попросите nolune в чате, например:"
+          }
+        }
+      }
+    },
     "No chats found." : {
       "localizations" : {
         "de" : {
@@ -2685,6 +4667,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "В этой папке пока нет чатов."
+          }
+        }
+      }
+    },
+    "No files yet" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Dateien"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no hay archivos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun fichier pour l’instant"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файлов пока нет"
           }
         }
       }
@@ -2745,6 +4755,90 @@
         }
       }
     },
+    "No runs yet" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Läufe"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no hay ejecuciones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune exécution pour l’instant"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запусков пока не было"
+          }
+        }
+      }
+    },
+    "No skills yet. When nolune works out how to do something, it can save that as a skill for next time." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Fähigkeiten. Wenn nolune herausfindet, wie etwas geht, kann es das als Fähigkeit für das nächste Mal speichern."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no hay habilidades. Cuando nolune descubre cómo hacer algo, puede guardarlo como habilidad para la próxima vez."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune compétence pour l’instant. Quand nolune trouve comment faire quelque chose, il peut l’enregistrer comme compétence pour la prochaine fois."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Навыков пока нет. Когда nolune разберётся, как что-то делать, он сможет сохранить это как навык на будущее."
+          }
+        }
+      }
+    },
+    "No templates yet." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch keine Vorlagen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no hay plantillas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun modèle pour l’instant."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Шаблонов пока нет."
+          }
+        }
+      }
+    },
     "Not done" : {
       "localizations" : {
         "de" : {
@@ -2773,6 +4867,118 @@
         }
       }
     },
+    "Note: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note : %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заметка: %@"
+          }
+        }
+      }
+    },
+    "Note: %@, started when there's something to write" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notiz: %@, entsteht, sobald es etwas zu notieren gibt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nota: %@, se crea cuando haya algo que apuntar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Note : %@, créée dès qu’il y a quelque chose à noter"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Заметка: %@, появится, когда будет что записать"
+          }
+        }
+      }
+    },
+    "Nothing ran on this day." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An diesem Tag lief nichts."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ese día no se ejecutó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien ne s’est exécuté ce jour-là."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В этот день ничего не запускалось."
+          }
+        }
+      }
+    },
+    "Nothing runs on this day." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An diesem Tag läuft nichts."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ese día no se ejecuta nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien n’est prévu ce jour-là."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "На этот день ничего не запланировано."
+          }
+        }
+      }
+    },
     "Nothing yet. Ask nolune for a reminder or a daily check, and what it finds shows up here." : {
       "localizations" : {
         "de" : {
@@ -2797,6 +5003,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Пока ничего нет. Попросите nolune о чём-нибудь напомнить или что-то проверять каждый день, и всё, что он найдёт, появится здесь."
+          }
+        }
+      }
+    },
+    "Nothing yet. Put here what nolune should keep in mind in every chat: who's in the family, the languages you speak, allergies. nolune adds to it too." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Noch leer. Schreib hier hinein, was nolune in jedem Chat im Kopf haben soll: wer zur Familie gehört, welche Sprachen ihr sprecht, Allergien. nolune ergänzt es auch selbst."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada todavía. Pon aquí lo que nolune debe tener presente en cada chat: quién es quién en la familia, los idiomas que habláis, alergias. nolune también lo irá completando."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien pour l’instant. Écrivez ici ce que nolune doit garder en tête dans chaque discussion : qui est qui dans la famille, les langues que vous parlez, les allergies. nolune la complète aussi."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Пока пусто. Напишите сюда то, что nolune должен помнить в каждом чате: кто есть кто в семье, на каких языках вы говорите, аллергии. nolune тоже будет сюда дописывать."
           }
         }
       }
@@ -2881,6 +5115,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ОК"
+          }
+        }
+      }
+    },
+    "Only %@ can undo this." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nur %@ kann das rückgängig machen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo %@ puede deshacerlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ceci ne peut être annulé que par %@."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отменить это может только %@."
           }
         }
       }
@@ -2997,6 +5259,34 @@
         }
       }
     },
+    "Other" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sonstiges"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otros"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autre"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Другое"
+          }
+        }
+      }
+    },
     "Password" : {
       "localizations" : {
         "de" : {
@@ -3021,6 +5311,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Пароль"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausieren"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mettre en pause"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поставить на паузу"
           }
         }
       }
@@ -3077,6 +5395,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Люди и профиль"
+          }
+        }
+      }
+    },
+    "Pets" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Haustiere"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mascotas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Animaux"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Питомцы"
           }
         }
       }
@@ -3165,6 +5511,118 @@
         }
       }
     },
+    "Pictures, documents, anything. nolune gets where they're saved and opens them when they matter." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bilder, Dokumente, alles Mögliche. nolune weiß, wo sie gespeichert sind, und öffnet sie, wenn sie wichtig sind."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fotos, documentos, lo que sea. nolune sabe dónde están guardados y los abre cuando hace falta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Photos, documents, tout ce que vous voulez. nolune sait où ils sont enregistrés et les ouvre quand ils comptent."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Картинки, документы, что угодно. nolune знает, где они лежат, и открывает их, когда они нужны."
+          }
+        }
+      }
+    },
+    "Places" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Orte"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lugares"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lieux"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Места"
+          }
+        }
+      }
+    },
+    "Plans" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pläne"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Planes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agenda"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Планы"
+          }
+        }
+      }
+    },
+    "Portrait" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hochformat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vertical"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Portrait"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вертикально"
+          }
+        }
+      }
+    },
     "Preparing a command…" : {
       "localizations" : {
         "de" : {
@@ -3189,6 +5647,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Готовит команду…"
+          }
+        }
+      }
+    },
+    "Previous month" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorheriger Monat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mes anterior"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mois précédent"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Предыдущий месяц"
           }
         }
       }
@@ -3221,6 +5707,34 @@
         }
       }
     },
+    "Profile name" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name des Profils"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre del perfil"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom du profil"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Название профиля"
+          }
+        }
+      }
+    },
     "Profiles" : {
       "localizations" : {
         "de" : {
@@ -3245,6 +5759,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Профили"
+          }
+        }
+      }
+    },
+    "Project name" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Projektname"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre del proyecto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom du projet"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Название проекта"
+          }
+        }
+      }
+    },
+    "Projects" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Projekte"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proyectos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Projets"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проекты"
           }
         }
       }
@@ -3411,6 +5981,34 @@
         }
       }
     },
+    "Recent runs (%lld)" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Letzte Läufe (%lld)"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecuciones recientes (%lld)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécutions récentes (%lld)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Последние запуски (%lld)"
+          }
+        }
+      }
+    },
     "Reconnecting…" : {
       "localizations" : {
         "de" : {
@@ -3491,6 +6089,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Убрать"
+          }
+        }
+      }
+    },
+    "Remove %@?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ entfernen?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Quitar a %@?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirer %@ ?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Удалить %@?"
+          }
+        }
+      }
+    },
+    "Remove picture" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bild entfernen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar foto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirer la photo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Убрать фото"
           }
         }
       }
@@ -3579,6 +6233,34 @@
         }
       }
     },
+    "Resume" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fortsetzen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reanudar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reprendre"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Возобновить"
+          }
+        }
+      }
+    },
     "Rise and shine, %@! What’s on today’s list?" : {
       "localizations" : {
         "de" : {
@@ -3603,6 +6285,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Что у нас сегодня в планах, %@?"
+          }
+        }
+      }
+    },
+    "Routines" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Routinen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rutinas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Habitudes"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Распорядок"
+          }
+        }
+      }
+    },
+    "Run now" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jetzt ausführen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ejecutar ahora"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exécuter maintenant"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запустить сейчас"
           }
         }
       }
@@ -3797,6 +6535,62 @@
         }
       }
     },
+    "Saved from chats" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aus Chats gespeichert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardado de los chats"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistré depuis les discussions"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Запомнено из чатов"
+          }
+        }
+      }
+    },
+    "Script: runs without the model and calls %@ when nolune is needed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skript: läuft ohne das Modell und ruft %@ auf, wenn nolune gebraucht wird"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Script: funciona sin el modelo y llama a %@ cuando hace falta nolune"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Script : tourne sans le modèle et appelle %@ quand nolune est nécessaire"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скрипт: работает без модели и вызывает %@, когда нужен nolune"
+          }
+        }
+      }
+    },
     "Scroll to the newest message" : {
       "localizations" : {
         "de" : {
@@ -3909,6 +6703,62 @@
         }
       }
     },
+    "Shape" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Format"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formato"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Format"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Формат"
+          }
+        }
+      }
+    },
+    "Shared by all profiles" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Von allen Profilen geteilt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartidas por todos los perfiles"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Partagées par tous les profils"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Общие для всех профилей"
+          }
+        }
+      }
+    },
     "Show all" : {
       "localizations" : {
         "de" : {
@@ -3933,6 +6783,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Показать полностью"
+          }
+        }
+      }
+    },
+    "Show all %lld" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle %lld zeigen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar los %lld"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout afficher (%lld)"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Показать все (%lld)"
           }
         }
       }
@@ -4161,6 +7039,34 @@
         }
       }
     },
+    "Someone else: start a new note" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jemand anderes: neue Notiz beginnen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es otra persona: empezar una nota nueva"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quelqu’un d’autre : commencer une nouvelle note"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это другой человек: начать новую заметку"
+          }
+        }
+      }
+    },
     "Someone in the chat asked for this summary: the model goes on from it." : {
       "localizations" : {
         "de" : {
@@ -4185,6 +7091,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Этот пересказ попросили в чате: дальше модель опирается на него."
+          }
+        }
+      }
+    },
+    "Someone new…" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jemand Neues…"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguien nuevo…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quelqu’un de nouveau…"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Новый человек…"
           }
         }
       }
@@ -4217,6 +7151,34 @@
         }
       }
     },
+    "Soul" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seele"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alma"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Âme"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Душа"
+          }
+        }
+      }
+    },
     "Sounds" : {
       "localizations" : {
         "de" : {
@@ -4241,6 +7203,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Звуки"
+          }
+        }
+      }
+    },
+    "Square" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quadrat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadrada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carré"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Квадрат"
+          }
+        }
+      }
+    },
+    "Start drawing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeichnen beginnen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empezar a dibujar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Commencer à dessiner"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Начать рисовать"
           }
         }
       }
@@ -4441,6 +7459,34 @@
         }
       }
     },
+    "Take a photo" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foto aufnehmen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hacer una foto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prendre une photo"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сделать фото"
+          }
+        }
+      }
+    },
     "Takes its time" : {
       "localizations" : {
         "de" : {
@@ -4465,6 +7511,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Не торопится"
+          }
+        }
+      }
+    },
+    "Template groups" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vorlagengruppen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grupos de plantillas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Groupes de modèles"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Группы шаблонов"
           }
         }
       }
@@ -4577,6 +7651,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ответ оборвался, потому что стал слишком длинным."
+          }
+        }
+      }
+    },
+    "Their name" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Name"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su nombre"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Son nom"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Имя"
           }
         }
       }
@@ -4805,6 +7907,62 @@
         }
       }
     },
+    "Times are in the computer's time zone (%@)." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Zeiten sind in der Zeitzone des Computers (%@)."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las horas están en la zona horaria del ordenador (%@)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les heures sont dans le fuseau horaire de l’ordinateur (%@)."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Время указано в часовом поясе компьютера (%@)."
+          }
+        }
+      }
+    },
+    "Today" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Heute"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hoy"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aujourd’hui"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сегодня"
+          }
+        }
+      }
+    },
     "Too many attempts. Wait a minute and try again." : {
       "localizations" : {
         "de" : {
@@ -4889,6 +8047,62 @@
         }
       }
     },
+    "Turn all off" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle ausschalten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desactivar todas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout désactiver"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выключить все"
+          }
+        }
+      }
+    },
+    "Turn all on" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alle einschalten"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar todas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout activer"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Включить все"
+          }
+        }
+      }
+    },
     "Type its name or address, or paste a link someone sent you from it." : {
       "localizations" : {
         "de" : {
@@ -4945,6 +8159,34 @@
         }
       }
     },
+    "Undone" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rückgängig gemacht"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deshecho"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Annulé"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отменено"
+          }
+        }
+      }
+    },
     "Unrestricted" : {
       "localizations" : {
         "de" : {
@@ -4969,6 +8211,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Без ограничений"
+          }
+        }
+      }
+    },
+    "Unsorted" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ohne Kategorie"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin categoría"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sans catégorie"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Без категории"
           }
         }
       }
@@ -5053,6 +8323,90 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Обновлённые навыки: %@"
+          }
+        }
+      }
+    },
+    "Use a photo of a drawing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foto einer Zeichnung verwenden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar una foto de un dibujo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utiliser une photo d’un dessin"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Взять фото рисунка"
+          }
+        }
+      }
+    },
+    "We're planning two weeks in Japan in April with the kids (7 and 10). Keep plans relaxed and the budget under ¥600,000." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wir planen im April zwei Wochen Japan mit den Kindern (7 und 10). Plane entspannt und bleib unter 600.000 ¥."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estamos planeando dos semanas en Japón en abril con los niños (7 y 10 años). Planes tranquilos y un presupuesto de menos de 600 000 ¥."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nous préparons deux semaines au Japon en avril avec les enfants (7 et 10 ans). Des programmes tranquilles et un budget sous 600 000 ¥."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Планируем две недели в Японии в апреле с детьми (им 7 и 10). Без спешки, бюджет до 600 000 ¥."
+          }
+        }
+      }
+    },
+    "Webhook URL. Keep it secret: anyone with it can start a run. POST JSON to it." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Webhook-URL. Halte sie geheim: Jeder, der sie hat, kann einen Lauf starten. Sende JSON per POST an sie."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL del webhook. Mantenla en secreto: cualquiera que la tenga puede iniciar una ejecución. Envíale JSON con POST."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL du webhook. Gardez-la secrète : toute personne qui l’a peut lancer une exécution. Envoyez-lui du JSON en POST."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL вебхука. Держите его в секрете: любой, у кого он есть, может запустить автоматизацию. Отправляйте на него JSON методом POST."
           }
         }
       }
@@ -5197,6 +8551,90 @@
         }
       }
     },
+    "What it does, in one sentence" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Was sie tut, in einem Satz"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qué hace, en una frase"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce qu’elle fait, en une phrase"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Что она делает, одним предложением"
+          }
+        }
+      }
+    },
+    "What nolune noted by itself after chats went quiet, in the last two weeks." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Was nolune sich von selbst notiert hat, wenn Chats still wurden, in den letzten zwei Wochen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lo que nolune anotó por su cuenta cuando los chats quedaron en silencio, en las últimas dos semanas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce que nolune a noté de lui-même quand les discussions se sont calmées, ces deux dernières semaines."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Что nolune записал сам, когда чаты затихали, за последние две недели."
+          }
+        }
+      }
+    },
+    "What nolune should know or do in every chat here." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Was nolune in jedem Chat hier wissen oder tun soll."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lo que nolune debe saber o hacer en cada chat de aquí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce que nolune doit savoir ou faire dans chaque discussion ici."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Что nolune должен знать или делать в каждом чате этой папки."
+          }
+        }
+      }
+    },
     "What's nolune?" : {
       "localizations" : {
         "de" : {
@@ -5277,6 +8715,90 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Какие планы на вечер, %@?"
+          }
+        }
+      }
+    },
+    "When a chat has been quiet for a couple of minutes, nolune reads it over and saves what's worth remembering. That's one short extra request to the chat's model each time. When this is off, nolune saves only what it thinks of while chatting." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn ein Chat ein paar Minuten ruht, liest nolune ihn noch einmal durch und merkt sich, was sich zu merken lohnt. Das ist jedes Mal eine kurze zusätzliche Anfrage an das Modell des Chats. Ausgeschaltet merkt sich nolune nur, woran es während des Chats selbst denkt."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuando un chat lleva un par de minutos en silencio, nolune lo repasa y guarda lo que vale la pena recordar. Cada vez es una breve petición extra al modelo del chat. Si lo desactivas, nolune solo guarda lo que se le ocurra durante la conversación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quand une discussion est calme depuis quelques minutes, nolune la relit et garde ce qui mérite d’être retenu. C’est chaque fois une courte requête de plus au modèle de la discussion. Désactivé, nolune ne garde que ce à quoi il pense pendant la discussion."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Когда в чате пару минут тихо, nolune перечитывает его и сохраняет то, что стоит запомнить. Каждый раз это один короткий дополнительный запрос к модели чата. Если выключить, nolune сохраняет только то, о чём вспомнит во время разговора."
+          }
+        }
+      }
+    },
+    "Which note is about %@?" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Welche Notiz ist über %@?"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Qué nota es sobre %@?"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quelle note parle de %@ ?"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Какая заметка о человеке по имени %@?"
+          }
+        }
+      }
+    },
+    "Who nolune is for %@: its character, what it cares about, how it talks. Every chat starts with it, and nolune changes it too when you ask it to be different." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wer nolune für %@ ist: sein Charakter, was ihm wichtig ist, wie es spricht. Jeder Chat beginnt damit, und nolune ändert es auch selbst, wenn du es bittest, anders zu sein."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quién es nolune para %@: su carácter, lo que le importa, cómo habla. Cada chat empieza con ella, y nolune también la cambia cuando le pides que sea distinto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qui est nolune pour %@ : son caractère, ce qui compte pour lui, sa façon de parler. Chaque discussion commence avec elle, et nolune la modifie aussi quand vous lui demandez d’être différent."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Кто nolune для профиля %@: его характер, что для него важно, как он говорит. С этого начинается каждый чат, и nolune сам меняет это, когда вы просите его стать другим."
           }
         }
       }
@@ -5393,6 +8915,34 @@
         }
       }
     },
+    "You're warm and a little playful, and you keep answers short. With the kids you explain things simply and never talk down to them. When you don't know something, you say so." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Du bist herzlich und ein bisschen verspielt und hältst Antworten kurz. Den Kindern erklärst du Dinge einfach und nie von oben herab. Wenn du etwas nicht weißt, sagst du es."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eres cálido y un poco juguetón, y das respuestas cortas. A los niños les explicas las cosas de forma sencilla y nunca con condescendencia. Cuando no sabes algo, lo dices."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu es chaleureux et un peu espiègle, et tu réponds brièvement. Avec les enfants, tu expliques simplement, sans jamais les prendre de haut. Quand tu ne sais pas, tu le dis."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ты тёплый и немного игривый, отвечаешь коротко. Детям объясняешь просто и никогда не говоришь с ними свысока. Если чего-то не знаешь, так и говоришь."
+          }
+        }
+      }
+    },
     "Your card" : {
       "localizations" : {
         "de" : {
@@ -5417,6 +8967,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ваша карточка"
+          }
+        }
+      }
+    },
+    "Your card is empty so far. Tell nolune about yourself in any chat, like \"I'm vegetarian\", and it goes on your card, for all your profiles." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deine Karte ist noch leer. Erzähl nolune in einem beliebigen Chat von dir, etwa „Ich bin Vegetarier“, und es kommt auf deine Karte, für alle deine Profile."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu ficha está vacía por ahora. Cuéntale a nolune algo de ti en cualquier chat, como «Soy vegetariano», e irá a tu ficha, para todos tus perfiles."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre fiche est vide pour l’instant. Parlez de vous à nolune dans n’importe quelle discussion, par exemple « Je suis végétarien », et cela ira sur votre fiche, pour tous vos profils."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ваша карточка пока пуста. Расскажите nolune о себе в любом чате, например «Я вегетарианец», и это попадёт на вашу карточку, для всех ваших профилей."
           }
         }
       }
@@ -5477,6 +9055,34 @@
         }
       }
     },
+    "a chat" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "einem Chat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "un chat"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "une discussion"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "без названия"
+          }
+        }
+      }
+    },
     "blocked" : {
       "localizations" : {
         "de" : {
@@ -5533,6 +9139,34 @@
         }
       }
     },
+    "done" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "erledigt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "terminada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "terminée"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "завершена"
+          }
+        }
+      }
+    },
     "failed" : {
       "localizations" : {
         "de" : {
@@ -5557,6 +9191,62 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ошибка"
+          }
+        }
+      }
+    },
+    "from %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aus %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "de %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "из чата %@"
+          }
+        }
+      }
+    },
+    "from a deleted chat" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aus einem gelöschten Chat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "de un chat eliminado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "d’une discussion supprimée"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "из удалённого чата"
           }
         }
       }
@@ -5589,6 +9279,62 @@
         }
       }
     },
+    "member: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mitglied: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "miembro: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "membre : %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "участник: %@"
+          }
+        }
+      }
+    },
+    "next %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nächster Lauf %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "próxima %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "prochaine %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "следующий запуск %@"
+          }
+        }
+      }
+    },
     "nolune can make mistakes, and it can change files on this computer." : {
       "localizations" : {
         "de" : {
@@ -5613,6 +9359,34 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "nolune может ошибаться и может менять файлы на этом компьютере."
+          }
+        }
+      }
+    },
+    "nolune can't make pictures yet." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nolune kann noch keine Bilder erstellen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nolune todavía no puede crear imágenes."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nolune ne peut pas encore créer d’images."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nolune пока не может рисовать картинки."
           }
         }
       }
@@ -5785,6 +9559,34 @@
         }
       }
     },
+    "nolune may have a note about them already" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nolune hat vielleicht schon eine Notiz über diese Person"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puede que nolune ya tenga una nota sobre esta persona"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nolune a peut-être déjà une note sur cette personne"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Возможно, у nolune уже есть заметка об этом человеке"
+          }
+        }
+      }
+    },
     "nolune reads this after its current step" : {
       "localizations" : {
         "de" : {
@@ -5841,6 +9643,286 @@
         }
       }
     },
+    "nothing to report" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nichts zu melden"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "nada que contar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "rien à signaler"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "нечего сообщить"
+          }
+        }
+      }
+    },
+    "notified" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "benachrichtigt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "notificado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "notifié"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "уведомление отправлено"
+          }
+        }
+      }
+    },
+    "now" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "jetzt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ahora"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "actuelle"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "сейчас"
+          }
+        }
+      }
+    },
+    "output" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ausgabe"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "salida"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sortie"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "вывод"
+          }
+        }
+      }
+    },
+    "paused" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pausiert"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en pausa"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en pause"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "на паузе"
+          }
+        }
+      }
+    },
+    "pinned, in every new chat" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "angeheftet, in jedem neuen Chat"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "fijada, en cada chat nuevo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "épinglée, dans chaque nouvelle discussion"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "закреплена, есть в каждом новом чате"
+          }
+        }
+      }
+    },
+    "run by hand" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "von Hand gestartet"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "a mano"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "lancée à la main"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "вручную"
+          }
+        }
+      }
+    },
+    "running" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "läuft"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en curso"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en cours"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "выполняется"
+          }
+        }
+      }
+    },
+    "scheduled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "geplant"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "programada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "planifiée"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "по расписанию"
+          }
+        }
+      }
+    },
+    "script %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skript %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "script: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "script : %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "скрипт: %@"
+          }
+        }
+      }
+    },
     "stopped" : {
       "localizations" : {
         "de" : {
@@ -5893,6 +9975,202 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "останавливается"
+          }
+        }
+      }
+    },
+    "updated %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "aktualisiert %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "actualizado %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "mis à jour %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "обновлено %@"
+          }
+        }
+      }
+    },
+    "view" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ansehen"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ver"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "voir"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "открыть"
+          }
+        }
+      }
+    },
+    "waiting" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "wartet"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "esperando"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en attente"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ожидает"
+          }
+        }
+      }
+    },
+    "was: %@" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "vorher: %@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "antes: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "avant : %@"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "было: %@"
+          }
+        }
+      }
+    },
+    "webhook" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Webhook"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "webhook"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "webhook"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "вебхук"
+          }
+        }
+      }
+    },
+    "woken by script" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "von einem Skript geweckt"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "despertada por un script"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "réveillée par un script"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "разбужено скриптом"
+          }
+        }
+      }
+    },
+    "~%lld tokens" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~%lld Tokens"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~%lld tokens"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~%lld tokens"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~%lld токенов"
           }
         }
       }

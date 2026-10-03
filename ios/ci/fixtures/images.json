@@ -1,0 +1,1031 @@
+{
+	"templates": [
+		{
+			"id": "party-invitation",
+			"name": "Party invitation",
+			"title": "Invite everyone to the party",
+			"description": "A birthday invitation with the name, age, date and place, in the theme they love.",
+			"sentence": "Make a {{theme}} party invitation for {{name}}{{#age}}, turning {{age}}{{/age}}{{#when}}, on {{when}}{{/when}}{{#where}}, at {{where}}{{/where}}{{#image}}, starring the kid in {{image}}{{/image}}.",
+			"category": "Templates",
+			"icon": "party-popper",
+			"color": "#f6b7c1",
+			"cover": 1790829009169,
+			"image": "optional",
+			"imageLabel": "Photo of the birthday kid",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "select",
+					"id": "theme",
+					"label": "Theme",
+					"default": "dinosaur",
+					"options": [
+						{
+							"value": "dinosaur",
+							"label": "dinosaur"
+						},
+						{
+							"value": "outer-space",
+							"label": "outer space"
+						},
+						{
+							"value": "unicorn",
+							"label": "unicorn"
+						},
+						{
+							"value": "pirate",
+							"label": "pirate"
+						},
+						{
+							"value": "under-the-sea",
+							"label": "under-the-sea"
+						},
+						{
+							"value": "superhero",
+							"label": "superhero"
+						},
+						{
+							"value": "construction",
+							"label": "construction"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "name",
+					"label": "Name",
+					"default": "",
+					"placeholder": "Aisha",
+					"required": true
+				},
+				{
+					"type": "text",
+					"id": "age",
+					"label": "Age",
+					"default": "",
+					"placeholder": "6",
+					"required": false
+				},
+				{
+					"type": "text",
+					"id": "when",
+					"label": "When",
+					"default": "",
+					"placeholder": "Saturday, May 3 at 2 pm",
+					"required": false
+				},
+				{
+					"type": "text",
+					"id": "where",
+					"label": "Where",
+					"default": "",
+					"placeholder": "our house",
+					"required": false
+				}
+			]
+		},
+		{
+			"id": "couple-portrait",
+			"name": "Couple portrait",
+			"title": "Make a picture of you two",
+			"description": "A photo of the two of you as a film poster, a fairy tale, a watercolor or a tarot card.",
+			"sentence": "Turn {{image}} into {{style}}{{#title}} called \"{{title}}\"{{/title}}.",
+			"category": "Templates",
+			"icon": "heart",
+			"color": "#f4a7b9",
+			"cover": 1790829009168,
+			"image": "required",
+			"imageLabel": "Photo of you two",
+			"imageSource": "photo",
+			"maxImages": 2,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "a-romantic-film-poster",
+					"options": [
+						{
+							"value": "a-romantic-film-poster",
+							"label": "a romantic film poster"
+						},
+						{
+							"value": "a-fairy-tale",
+							"label": "a fairy tale"
+						},
+						{
+							"value": "a-watercolor",
+							"label": "a watercolor"
+						},
+						{
+							"value": "a-tarot-card",
+							"label": "a tarot card"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "title",
+					"label": "Title",
+					"default": "",
+					"placeholder": "The Lovers",
+					"required": false
+				}
+			]
+		},
+		{
+			"id": "photo-booth",
+			"name": "Photo booth",
+			"title": "Make photo-booth strips",
+			"description": "Black-and-white booth strips of you and your people in costume, with harsh flash and silly poses.",
+			"sentence": "Turn {{image}} into {{theme}} photo-booth strips.",
+			"category": "Templates",
+			"icon": "camera",
+			"color": "#c9ced6",
+			"cover": 1790829009170,
+			"image": "required",
+			"imageLabel": "Photos of who's in the booth",
+			"imageSource": "photo",
+			"maxImages": 4,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "select",
+					"id": "theme",
+					"label": "Theme",
+					"default": "oktoberfest",
+					"options": [
+						{
+							"value": "oktoberfest",
+							"label": "Oktoberfest"
+						},
+						{
+							"value": "halloween",
+							"label": "Halloween"
+						},
+						{
+							"value": "new-years-eve",
+							"label": "New Year's Eve"
+						},
+						{
+							"value": "90s-prom",
+							"label": "'90s prom"
+						},
+						{
+							"value": "wedding",
+							"label": "wedding"
+						}
+					],
+					"custom": true
+				}
+			]
+		},
+		{
+			"id": "tiny-world",
+			"name": "Tiny world",
+			"title": "Shrink it to a miniature",
+			"description": "Your house, your car or your street as a tiny handmade model on a desk.",
+			"sentence": null,
+			"category": "Templates",
+			"icon": "house",
+			"color": "#b9dcc2",
+			"cover": 1790829009172,
+			"image": "required",
+			"imageLabel": "Photo of a place or a thing",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "auto",
+			"settings": []
+		},
+		{
+			"id": "sticker-pack",
+			"name": "Sticker pack",
+			"title": "Make a sticker pack",
+			"description": "Nine stickers of a person, a pet or a thing, each with its own expression or pose.",
+			"sentence": "Create a {{style}} sticker pack based on {{image}}{{#remix}}, remixing with {{remix}}{{/remix}}.",
+			"category": "Templates",
+			"icon": "sticker",
+			"color": "#f3dc86",
+			"cover": 1790829009171,
+			"image": "required",
+			"imageLabel": "Photo of who or what to turn into stickers",
+			"imageSource": "photo",
+			"maxImages": 3,
+			"size": "square",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "3d",
+					"options": [
+						{
+							"value": "3d",
+							"label": "3D"
+						},
+						{
+							"value": "retro",
+							"label": "Retro"
+						},
+						{
+							"value": "kawaii",
+							"label": "Kawaii"
+						},
+						{
+							"value": "pixel-art",
+							"label": "Pixel art"
+						},
+						{
+							"value": "embroidered",
+							"label": "Embroidered"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "emoji",
+					"id": "remix",
+					"label": "Remix with",
+					"default": "💀🍓🛼💨",
+					"max": 4
+				}
+			]
+		},
+		{
+			"id": "storybook-page",
+			"name": "Storybook page",
+			"title": "Star in a picture book",
+			"description": "A picture-book page where your kid goes on any adventure you can think of.",
+			"sentence": "Make a {{style}} storybook page where the kid in {{image}} {{adventure}}.",
+			"category": "Templates",
+			"icon": "book-open",
+			"color": "#f3d08a",
+			"cover": 1790829009171,
+			"image": "required",
+			"imageLabel": "Photo of the kid",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "watercolor",
+					"options": [
+						{
+							"value": "watercolor",
+							"label": "watercolor"
+						},
+						{
+							"value": "gouache",
+							"label": "gouache"
+						},
+						{
+							"value": "paper-cut",
+							"label": "paper-cut"
+						},
+						{
+							"value": "crayon",
+							"label": "crayon"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "adventure",
+					"label": "Adventure",
+					"default": "",
+					"placeholder": "rides a dragon to school",
+					"required": true
+				}
+			]
+		},
+		{
+			"id": "nail-art",
+			"name": "Nail art",
+			"title": "Try a new nail design",
+			"description": "See a nail design on a hand before you book it.",
+			"sentence": "Design {{shape}} nails with {{idea}}{{#image}}, inspired by {{image}}{{/image}}.",
+			"category": "Templates",
+			"icon": "hand",
+			"color": "#f7c6d9",
+			"cover": 1790829009169,
+			"image": "optional",
+			"imageLabel": "Inspiration",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "select",
+					"id": "shape",
+					"label": "Shape",
+					"default": "almond",
+					"options": [
+						{
+							"value": "almond",
+							"label": "almond"
+						},
+						{
+							"value": "square",
+							"label": "square"
+						},
+						{
+							"value": "coffin",
+							"label": "coffin"
+						},
+						{
+							"value": "short-round",
+							"label": "short round"
+						}
+					],
+					"custom": false
+				},
+				{
+					"type": "text",
+					"id": "idea",
+					"label": "Design",
+					"default": "",
+					"placeholder": "tiny strawberries on milky pink",
+					"required": true
+				}
+			]
+		},
+		{
+			"id": "wanted-poster",
+			"name": "Wanted poster",
+			"title": "Catch the culprit",
+			"description": "An old-west WANTED poster for whoever ate the last cookie. Cats included.",
+			"sentence": "Make a wanted poster for the culprit in {{image}}{{#name}}, known as \"{{name}}\"{{/name}}{{#crime}}, wanted for {{crime}}{{/crime}}{{#reward}}, with a reward of {{reward}}{{/reward}}.",
+			"category": "Templates",
+			"icon": "scroll",
+			"color": "#e3c29b",
+			"cover": 1790829009173,
+			"image": "required",
+			"imageLabel": "Photo of the culprit",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "text",
+					"id": "name",
+					"label": "Name",
+					"default": "",
+					"placeholder": "Whiskers",
+					"required": false
+				},
+				{
+					"type": "text",
+					"id": "crime",
+					"label": "Crime",
+					"default": "",
+					"placeholder": "stealing the last sausage",
+					"required": false
+				},
+				{
+					"type": "text",
+					"id": "reward",
+					"label": "Reward",
+					"default": "",
+					"placeholder": "one belly rub",
+					"required": false
+				}
+			]
+		},
+		{
+			"id": "scribble",
+			"name": "Scribble",
+			"title": "Bring a drawing to life",
+			"description": "Draw something here, or snap a drawing on paper, and see it made real.",
+			"sentence": "Turn {{image}} into {{result}}.",
+			"category": "Templates",
+			"icon": "pen-line",
+			"color": "#f1f0ea",
+			"cover": 1790829009170,
+			"image": "required",
+			"imageLabel": "A drawing",
+			"imageSource": "drawing",
+			"maxImages": 1,
+			"size": "square",
+			"settings": [
+				{
+					"type": "select",
+					"id": "result",
+					"label": "Make it",
+					"default": "a-plush-toy",
+					"options": [
+						{
+							"value": "a-plush-toy",
+							"label": "a plush toy"
+						},
+						{
+							"value": "a-3d-figure",
+							"label": "a 3D figure"
+						},
+						{
+							"value": "a-real-photo",
+							"label": "a real photo"
+						},
+						{
+							"value": "a-painting",
+							"label": "a painting"
+						}
+					],
+					"custom": false
+				}
+			]
+		},
+		{
+			"id": "dream-bouquet",
+			"name": "Dream bouquet",
+			"title": "Arrange a dream bouquet",
+			"description": "Her favorite flowers as a bouquet, a painting or a pressed-flower frame.",
+			"sentence": "Arrange {{flowers}}{{#colors}} in {{colors}}{{/colors}} as {{format}}.",
+			"category": "Templates",
+			"icon": "flower-2",
+			"color": "#f9d2c4",
+			"cover": 1790829009168,
+			"image": "optional",
+			"imageLabel": "Photo of flowers she likes",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "text",
+					"id": "flowers",
+					"label": "Flowers",
+					"default": "",
+					"placeholder": "peonies, ranunculus and eucalyptus",
+					"required": true
+				},
+				{
+					"type": "text",
+					"id": "colors",
+					"label": "Colors",
+					"default": "",
+					"placeholder": "blush pink and cream",
+					"required": false
+				},
+				{
+					"type": "select",
+					"id": "format",
+					"label": "Format",
+					"default": "a-real-bouquet",
+					"options": [
+						{
+							"value": "a-real-bouquet",
+							"label": "a real bouquet"
+						},
+						{
+							"value": "a-vase-on-a-table",
+							"label": "a vase on a table"
+						},
+						{
+							"value": "a-painting",
+							"label": "a painting"
+						},
+						{
+							"value": "a-pressed-flower-frame",
+							"label": "a pressed-flower frame"
+						}
+					],
+					"custom": false
+				}
+			]
+		},
+		{
+			"id": "trip-postcard",
+			"name": "Trip postcard",
+			"title": "Send a postcard from your trip",
+			"description": "A trip photo as a 1950s postcard with big retro letters.",
+			"sentence": "Turn {{image}} into a vintage \"Greetings from {{place}}\" postcard.",
+			"category": "Templates",
+			"icon": "stamp",
+			"color": "#9fcbe6",
+			"cover": 1790829009173,
+			"image": "required",
+			"imageLabel": "Photo from the trip",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "landscape",
+			"settings": [
+				{
+					"type": "text",
+					"id": "place",
+					"label": "Place",
+					"default": "",
+					"placeholder": "Issyk-Kul",
+					"required": true
+				}
+			]
+		},
+		{
+			"id": "outfit-board",
+			"name": "Outfit board",
+			"title": "Put together a look",
+			"description": "A styled flat-lay, mood board or lookbook photo of an outfit in any aesthetic.",
+			"sentence": "Put together {{format}} of a {{aesthetic}} outfit{{#occasion}} for {{occasion}}{{/occasion}}{{#image}}, built around {{image}}{{/image}}.",
+			"category": "Templates",
+			"icon": "shirt",
+			"color": "#e6c9dc",
+			"cover": 1790829009169,
+			"image": "optional",
+			"imageLabel": "A piece or an inspiration",
+			"imageSource": "photo",
+			"maxImages": 3,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "select",
+					"id": "format",
+					"label": "Format",
+					"default": "a-mood-board",
+					"options": [
+						{
+							"value": "a-mood-board",
+							"label": "a mood board"
+						},
+						{
+							"value": "a-flat-lay",
+							"label": "a flat-lay"
+						},
+						{
+							"value": "a-lookbook-photo",
+							"label": "a lookbook photo"
+						}
+					],
+					"custom": false
+				},
+				{
+					"type": "select",
+					"id": "aesthetic",
+					"label": "Aesthetic",
+					"default": "cottagecore",
+					"options": [
+						{
+							"value": "cottagecore",
+							"label": "cottagecore"
+						},
+						{
+							"value": "y2k",
+							"label": "Y2K"
+						},
+						{
+							"value": "old-money",
+							"label": "old money"
+						},
+						{
+							"value": "streetwear",
+							"label": "streetwear"
+						},
+						{
+							"value": "minimalist",
+							"label": "minimalist"
+						},
+						{
+							"value": "dark-academia",
+							"label": "dark academia"
+						}
+					],
+					"custom": false
+				},
+				{
+					"type": "text",
+					"id": "occasion",
+					"label": "Occasion",
+					"default": "",
+					"placeholder": "a summer picnic",
+					"required": false
+				}
+			]
+		},
+		{
+			"id": "family-crest",
+			"name": "Family crest",
+			"title": "Give your family a coat of arms",
+			"description": "A coat of arms built from your surname, your pets and what you love doing together.",
+			"sentence": "Design a {{style}} family crest for the {{surname}} family{{#symbols}} with {{symbols}}{{/symbols}}{{#motto}} and the motto \"{{motto}}\"{{/motto}}.",
+			"category": "Templates",
+			"icon": "shield",
+			"color": "#c9b8e8",
+			"cover": 1790829009169,
+			"image": "none",
+			"imageLabel": null,
+			"imageSource": "photo",
+			"maxImages": 0,
+			"size": "square",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "classic",
+					"options": [
+						{
+							"value": "classic",
+							"label": "classic"
+						},
+						{
+							"value": "modern",
+							"label": "modern"
+						},
+						{
+							"value": "cartoon",
+							"label": "cartoon"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "surname",
+					"label": "Surname",
+					"default": "",
+					"placeholder": "Turatbekov",
+					"required": true
+				},
+				{
+					"type": "text",
+					"id": "symbols",
+					"label": "Symbols",
+					"default": "",
+					"placeholder": "a cat, bicycles and pancakes",
+					"required": false
+				},
+				{
+					"type": "text",
+					"id": "motto",
+					"label": "Motto",
+					"default": "",
+					"placeholder": "Always one more episode",
+					"required": false
+				}
+			]
+		},
+		{
+			"id": "tattoo",
+			"name": "Tattoo",
+			"title": "Design a tattoo",
+			"description": "A tattoo design from an idea, as a clean stencil or on skin.",
+			"sentence": "Design a {{style}} tattoo of {{idea}}{{#image}}, based on {{image}}{{/image}}, shown {{show}}.",
+			"category": "Templates",
+			"icon": "feather",
+			"color": "#cfc3e6",
+			"cover": 1790829009172,
+			"image": "optional",
+			"imageLabel": "Sketch or reference",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "portrait",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "fine-line",
+					"options": [
+						{
+							"value": "fine-line",
+							"label": "fine-line"
+						},
+						{
+							"value": "botanical",
+							"label": "botanical"
+						},
+						{
+							"value": "minimalist",
+							"label": "minimalist"
+						},
+						{
+							"value": "traditional",
+							"label": "traditional"
+						},
+						{
+							"value": "watercolor",
+							"label": "watercolor"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "idea",
+					"label": "Idea",
+					"default": "",
+					"placeholder": "a moth with a crescent moon",
+					"required": true
+				},
+				{
+					"type": "select",
+					"id": "show",
+					"label": "Shown",
+					"default": "as-a-stencil",
+					"options": [
+						{
+							"value": "as-a-stencil",
+							"label": "as a stencil"
+						},
+						{
+							"value": "on-skin",
+							"label": "on skin"
+						}
+					],
+					"custom": false
+				}
+			]
+		},
+		{
+			"id": "coloring-page",
+			"name": "Coloring page",
+			"title": "Make a coloring page",
+			"description": "Any photo as a printable black-and-white coloring page for kids.",
+			"sentence": null,
+			"category": "Templates",
+			"icon": "brush",
+			"color": "#d7ecb2",
+			"cover": 1790829009167,
+			"image": "required",
+			"imageLabel": "Photo to turn into a coloring page",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "portrait",
+			"settings": []
+		},
+		{
+			"id": "sprite-sheet",
+			"name": "Sprite sheet",
+			"title": "Make game-ready sprites",
+			"description": "A character in every pose, or a set of item icons, ready to drop into a game.",
+			"sentence": "Make a {{style}} sprite sheet of {{subject}}: {{kind}}{{#image}}, based on {{image}}{{/image}}.",
+			"category": "Templates",
+			"icon": "gamepad-2",
+			"color": "#a9dccd",
+			"cover": 1790829009170,
+			"image": "optional",
+			"imageLabel": "Sketch or reference",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "landscape",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "pixel-art",
+					"options": [
+						{
+							"value": "pixel-art",
+							"label": "pixel art"
+						},
+						{
+							"value": "hand-painted",
+							"label": "hand-painted"
+						},
+						{
+							"value": "flat-vector",
+							"label": "flat vector"
+						},
+						{
+							"value": "low-poly",
+							"label": "low-poly"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "subject",
+					"label": "Subject",
+					"default": "",
+					"placeholder": "a fox knight",
+					"required": true
+				},
+				{
+					"type": "select",
+					"id": "kind",
+					"label": "Kind",
+					"default": "a-walk-cycle",
+					"options": [
+						{
+							"value": "a-walk-cycle",
+							"label": "a walk cycle"
+						},
+						{
+							"value": "idle-run-and-jump",
+							"label": "idle, run and jump"
+						},
+						{
+							"value": "item-icons",
+							"label": "item icons"
+						},
+						{
+							"value": "a-turnaround",
+							"label": "a turnaround"
+						}
+					],
+					"custom": false
+				}
+			]
+		},
+		{
+			"id": "concept-art",
+			"name": "Concept art",
+			"title": "Paint a world for your game",
+			"description": "Environment concept art for a game world you describe.",
+			"sentence": "Paint {{style}} concept art of {{world}} in {{mood}}{{#image}}, based on {{image}}{{/image}}.",
+			"category": "Templates",
+			"icon": "mountain",
+			"color": "#f2b48f",
+			"cover": 1790829009167,
+			"image": "optional",
+			"imageLabel": "Sketch or reference",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "landscape",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "painterly",
+					"options": [
+						{
+							"value": "painterly",
+							"label": "painterly"
+						},
+						{
+							"value": "anime-background",
+							"label": "anime background"
+						},
+						{
+							"value": "matte-painting",
+							"label": "matte painting"
+						},
+						{
+							"value": "low-poly",
+							"label": "low-poly"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "world",
+					"label": "World",
+					"default": "",
+					"placeholder": "a floating market above the clouds",
+					"required": true
+				},
+				{
+					"type": "select",
+					"id": "mood",
+					"label": "Light",
+					"default": "golden-hour-light",
+					"options": [
+						{
+							"value": "golden-hour-light",
+							"label": "golden-hour light"
+						},
+						{
+							"value": "bright-daylight",
+							"label": "bright daylight"
+						},
+						{
+							"value": "moonlight",
+							"label": "moonlight"
+						},
+						{
+							"value": "a-storm",
+							"label": "a storm"
+						}
+					],
+					"custom": false
+				}
+			]
+		},
+		{
+			"id": "app-icon",
+			"name": "App icon",
+			"title": "Design an app icon",
+			"description": "A polished icon for your app or game, from a name and an idea.",
+			"sentence": "Design a {{style}} app icon for {{name}}{{#idea}}: {{idea}}{{/idea}}{{#image}}, inspired by {{image}}{{/image}}.",
+			"category": "Templates",
+			"icon": "app-window",
+			"color": "#b7c8f5",
+			"cover": 1790829009167,
+			"image": "optional",
+			"imageLabel": "Sketch or reference",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "square",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "glossy-3d",
+					"options": [
+						{
+							"value": "glossy-3d",
+							"label": "glossy 3D"
+						},
+						{
+							"value": "flat",
+							"label": "flat"
+						},
+						{
+							"value": "pixel-art",
+							"label": "pixel art"
+						},
+						{
+							"value": "clay",
+							"label": "clay"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "name",
+					"label": "Name",
+					"default": "",
+					"placeholder": "Pocket Garden",
+					"required": true
+				},
+				{
+					"type": "text",
+					"id": "idea",
+					"label": "Idea",
+					"default": "",
+					"placeholder": "a tiny plant in a pot",
+					"required": false
+				}
+			]
+		},
+		{
+			"id": "tileable-texture",
+			"name": "Tileable texture",
+			"title": "Make a seamless texture",
+			"description": "A texture that repeats without seams, for games, 3D or a pattern.",
+			"sentence": "Make a seamless {{style}} texture of {{material}}{{#image}}, matching {{image}}{{/image}}.",
+			"category": "Templates",
+			"icon": "grid-3x3",
+			"color": "#d9cbb4",
+			"cover": 1790829009172,
+			"image": "optional",
+			"imageLabel": "Photo of the material to match",
+			"imageSource": "photo",
+			"maxImages": 1,
+			"size": "square",
+			"settings": [
+				{
+					"type": "select",
+					"id": "style",
+					"label": "Style",
+					"default": "photoreal",
+					"options": [
+						{
+							"value": "photoreal",
+							"label": "photoreal"
+						},
+						{
+							"value": "hand-painted",
+							"label": "hand-painted"
+						},
+						{
+							"value": "pixel-art",
+							"label": "pixel art"
+						},
+						{
+							"value": "toon",
+							"label": "toon"
+						}
+					],
+					"custom": true
+				},
+				{
+					"type": "text",
+					"id": "material",
+					"label": "Material",
+					"default": "",
+					"placeholder": "mossy cobblestone",
+					"required": true
+				}
+			]
+		}
+	],
+	"ready": false,
+	"problem": "No OpenAI API key yet. An admin can add one under Models & keys in nolune, or with `nolune key set openai`.",
+	"missingKey": {
+		"label": "OpenAI"
+	}
+}

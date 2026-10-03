@@ -36,7 +36,17 @@ final class Family: ObservableObject {
 	private var subscriptions: Set<AnyCancellable> = []
 	private var registered: String?
 
-	init(client: Client, defaults: UserDefaults = .standard) {
+	/// What the nolune serves apps (`/api/version`'s capabilities): screens it hasn't the JSON for
+	/// stay its web pages.
+	let capabilities: Set<String>
+
+	/// Whether the nolune serves what a native screen reads.
+	func can(_ capability: String) -> Bool {
+		capabilities.contains(capability)
+	}
+
+	init(client: Client, capabilities: [String] = [], defaults: UserDefaults = .standard) {
+		self.capabilities = Set(capabilities)
 		self.client = client
 		self.defaults = defaults
 	}

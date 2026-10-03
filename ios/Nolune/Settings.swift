@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 /**
@@ -61,10 +62,27 @@ struct SettingsView: View {
 	@State private var name = ""
 	@State private var preferences = Preferences()
 	@State private var loaded = false
+	@State private var photo: PhotosPickerItem?
+	@State private var picturing = false
+	@State private var problem: String?
 
 	var body: some View {
 		Form {
 			Section {
+				HStack(spacing: 14) {
+					PersonPicture(url: picture, name: family.me?.name ?? "")
+						.frame(width: 56, height: 56)
+						.overlay { if picturing { ProgressView() } }
+					VStack(alignment: .leading, spacing: 8) {
+						PhotosPicker(selection: $photo, matching: .images) {
+							Text(picture == nil ? "Add a picture" : "Change picture")
+						}
+						if picture != nil {
+							Button("Remove picture", role: .destructive, action: removePicture)
+						}
+					}
+					.buttonStyle(.borderless)
+				}
 				TextField("Your name", text: $name)
 					.textContentType(.name)
 					.submitLabel(.done)
@@ -72,7 +90,12 @@ struct SettingsView: View {
 			} header: {
 				Text("Your name")
 			} footer: {
-				Text("Everyone in your profiles sees your name and picture, and nolune reads your name with each message you send.")
+				if let problem {
+					Text(verbatim: problem)
+						.foregroundStyle(.red)
+				} else {
+					Text("Everyone in your profiles sees your name and picture, and nolune reads your name with each message you send.")
+				}
 			}
 			Section {
 				Toggle(isOn: $preferences.technical) {
@@ -95,6 +118,11 @@ struct SettingsView: View {
 			}
 		}
 		.navigationTitle("Settings")
+		.onChange(of: photo) { item in
+			guard let item else { return }
+			photo = nil
+			setPicture(item)
+		}
 		.task {
 			name = family.me?.name ?? ""
 			preferences = await Preferences.read(family.client.origin)
@@ -103,6 +131,54 @@ struct SettingsView: View {
 		.onChange(of: preferences) { changed in
 			guard loaded else { return }
 			Task { await changed.write(family.client.origin) }
+		}
+	}
+
+	/// The person's picture, from the family's nolune.
+	private var picture: URL? {
+		guard let path = family.me?.picture else { return nil }
+		return URL(string: path, relativeTo: family.client.origin)?.absoluteURL
+	}
+
+	/// A photo, as a small square from its middle, as the web's cropper makes it by default.
+	private func setPicture(_ item: PhotosPickerItem) {
+		picturing = true
+		Task {
+			defer { picturing = false }
+			guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else {
+				problem = String(localized: "Couldn’t open that picture. Try a JPEG or PNG.")
+				return
+			}
+			let side = min(image.size.width, image.size.height)
+			let target: CGFloat = 512
+			let format = UIGraphicsImageRendererFormat()
+			format.scale = 1
+			let square = UIGraphicsImageRenderer(size: CGSize(width: target, height: target), format: format).image { _ in
+				let scale = target / side
+				let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+				image.draw(in: CGRect(x: (target - size.width) / 2, y: (target - size.height) / 2, width: size.width, height: size.height))
+			}
+			guard let jpeg = square.jpegData(compressionQuality: 0.85) else { return }
+			do {
+				try await family.client.setPicture(jpeg)
+				problem = nil
+				await family.reload()
+				Haptics.success()
+			} catch {
+				problem = error.localizedDescription
+				Haptics.failure()
+			}
+		}
+	}
+
+	private func removePicture() {
+		Task {
+			do {
+				try await family.client.call("DELETE", "api/me/picture")
+				await family.reload()
+			} catch {
+				problem = error.localizedDescription
+			}
 		}
 	}
 

@@ -2,8 +2,8 @@ name: iOS app
 
 # Builds nolune for iOS (ios/) and runs its tests on a simulator, builds it for a device as the App
 # Store gets it (unsigned: signing is Xcode's, ios/README.md), and keeps its screens as PNGs: the
-# first one; the native screens' sign-in, sidebar, chat, new chat and bell, from a pretend nolune
-# (ios/ci/nolune.py); the note an older nolune gets; and today's web app (`-native NO`) with a page
+# first one; the native screens (sign-in, sidebar, chat, new chat, bell and a profile's pages)
+# from a pretend nolune (ios/ci/nolune.py); the note an older nolune gets; and today's web app (`-native NO`) with a page
 # open. It builds the macOS app's Sky.swift and Theme.swift too.
 # The runner's Xcode is 26, with iOS 26's SDK: the app wears its look, Liquid Glass.
 
@@ -104,6 +104,11 @@ jobs:
           screen chat -origin http://localhost:5781 -open /p/smiths/c/trip
           screen new-chat -origin http://localhost:5781 -open /p/smiths
           screen bell -origin http://localhost:5781 -open '/p/smiths?notification=n2'
+          screen memory -origin http://localhost:5781 -open /p/smiths/memory
+          screen automations -origin http://localhost:5781 -open /p/smiths/automations
+          screen people -origin http://localhost:5781 -open /p/smiths/settings
+          screen images -origin http://localhost:5781 -open /p/smiths/images
+          screen folder -origin http://localhost:5781 -open /p/smiths/f/japan
           # Today's web app with the note, from a nolune that doesn't say which it is.
           screen update -origin https://www.nolune.dev
           # And without the native screens, a page open.

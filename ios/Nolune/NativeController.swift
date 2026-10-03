@@ -37,6 +37,8 @@ final class NativeController: UIViewController {
 	private var client: Client { Client(origin: origin) }
 	private var model: AppModel { AppModel.shared }
 	private var screen = Screen.checking
+	/// What the nolune serves apps, signed in: which screens are native.
+	private var capabilities: [String] = []
 	private var current: UIViewController?
 	private let spinner = UIActivityIndicatorView(style: .medium)
 	private var activations: AnyCancellable?
@@ -84,9 +86,12 @@ final class NativeController: UIViewController {
 		if Self.screen(for: await answer()) == .signedIn { show(.signedIn) }
 	}
 
+	/// What the nolune says it is, keeping what it serves apps.
 	private func answer() async -> Result<Server?, Error> {
 		do {
-			return .success(try await client.version())
+			let server = try await client.version()
+			capabilities = server?.capabilities ?? []
+			return .success(server)
 		} catch {
 			return .failure(error)
 		}
@@ -115,7 +120,7 @@ final class NativeController: UIViewController {
 		case .signedIn:
 			controller = UIHostingController(
 				rootView: MainView(
-					family: Family(client: client),
+					family: Family(client: client, capabilities: capabilities),
 					signOut: { [weak self] in self?.signedOut() },
 					connectElsewhere: { [weak self] in self?.connectElsewhere() }
 				)
@@ -151,6 +156,8 @@ final class NativeController: UIViewController {
 			return Address(origin: origin).describe(.unreachable(error.localizedDescription))
 		}
 		await Cookies.toWeb(origin)
+		// Signed in, it says what it serves apps.
+		_ = await answer()
 		show(.signedIn)
 		return nil
 	}

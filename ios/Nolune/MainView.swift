@@ -24,24 +24,11 @@ struct MainView: View {
 	}
 
 	var body: some View {
-		NavigationSplitView {
-			SidebarView(
-				family: family,
-				selection: $selection,
-				showBell: { bell = BellSheet(expand: nil) },
-				signOut: signOut,
-				connectElsewhere: connectElsewhere
-			)
-		} detail: {
-			NavigationStack {
-				if let selection {
-					// Again for another profile: a profile's page is that profile's.
-					screen(selection)
-						.id([family.slug ?? "", String(describing: selection), newChatFolder ?? ""])
-				} else {
-					Text("Pick a chat, or start a new one.")
-						.foregroundStyle(.secondary)
-				}
+		Group {
+			if #available(iOS 17.0, *) {
+				FollowingSplitView(selection: selection) { sidebar } detail: { detail }
+			} else {
+				NavigationSplitView { sidebar } detail: { detail }
 			}
 		}
 		.sheet(item: $bell) { sheet in
@@ -73,6 +60,29 @@ struct MainView: View {
 		}
 	}
 
+	private var sidebar: some View {
+		SidebarView(
+			family: family,
+			selection: $selection,
+			showBell: { bell = BellSheet(expand: nil) },
+			signOut: signOut,
+			connectElsewhere: connectElsewhere
+		)
+	}
+
+	private var detail: some View {
+		NavigationStack {
+			if let selection {
+				// Again for another profile: a profile's page is that profile's.
+				screen(selection)
+					.id([family.slug ?? "", String(describing: selection), newChatFolder ?? ""])
+			} else {
+				Text("Pick a chat, or start a new one.")
+					.foregroundStyle(.secondary)
+			}
+		}
+	}
+
 	@ViewBuilder private func screen(_ destination: Destination) -> some View {
 		let slug = family.slug ?? ""
 		switch destination {
@@ -91,9 +101,34 @@ struct MainView: View {
 				deleted: { selection = sizeClass == .regular ? .newChat : nil }
 			)
 			.navigationBarTitleDisplayMode(.inline)
+		case .folder(let id) where family.can("folders"):
+			FolderView(
+				family: family,
+				slug: slug,
+				id: id,
+				open: { selection = $0 },
+				newChat: {
+					newChatFolder = id
+					selection = .newChat
+				},
+				deleted: { selection = sizeClass == .regular ? .newChat : nil }
+			)
 		case .folder(let id):
 			web("/p/\(slug)/f/\(id)", for: destination)
 				.navigationTitle(family.folders.first { $0.id == id }?.name ?? "")
+		case .page(.memory) where family.can("memory"):
+			MemoryView(family: family, slug: slug) { selection = $0 }
+		case .page(.automations) where family.can("automations"):
+			AutomationsView(family: family, slug: slug) { selection = .chat($0) }
+		case .page(.skills) where family.can("skills"):
+			SkillsView(family: family, slug: slug)
+		case .page(.people) where family.can("profile"):
+			ProfileView(family: family, slug: slug) {
+				selection = nil
+				Task { await family.reload() }
+			}
+		case .page(.images) where family.can("images"):
+			ImagesView(family: family, slug: slug) { selection = .chat($0) }
 		case .page(let page):
 			web(page.path(in: slug), for: destination)
 				.navigationTitle(page.title)
@@ -150,6 +185,29 @@ struct MainView: View {
 		Task {
 			if let slug = found.slug, slug != family.slug { await family.open(profile: slug) }
 			selection = found.destination
+		}
+	}
+}
+
+/**
+ * The split view, showing what's selected on an iPhone even when the sidebar has no row for it:
+ * a chat in a folder that's closed, one a notification continued in, one not loaded yet.
+ */
+@available(iOS 17.0, *)
+private struct FollowingSplitView<Sidebar: View, Detail: View>: View {
+	let selection: Destination?
+	@ViewBuilder let sidebar: Sidebar
+	@ViewBuilder let detail: Detail
+	@State private var column = NavigationSplitViewColumn.sidebar
+
+	var body: some View {
+		NavigationSplitView(preferredCompactColumn: $column) {
+			sidebar
+		} detail: {
+			detail
+		}
+		.onChange(of: selection) { _, selected in
+			column = selected == nil ? .sidebar : .detail
 		}
 	}
 }
