@@ -79,6 +79,21 @@ final class AddressTests: XCTestCase {
 		XCTAssertNil(AppModel(defaults: defaults).origin)
 	}
 
+	@MainActor
+	func testTheNativeScreensAreOnUnlessTurnedOff() {
+		let defaults = UserDefaults(suiteName: "NativeTests")!
+		defer { defaults.removePersistentDomain(forName: "NativeTests") }
+		XCTAssertTrue(AppModel(defaults: defaults).native)
+		// As `-native NO` and `-open <path>` set them.
+		defaults.set("NO", forKey: "native")
+		defaults.set("/p/smiths/c/abc", forKey: "open")
+		let model = AppModel(defaults: defaults)
+		XCTAssertFalse(model.native)
+		XCTAssertEqual(model.pending, "/p/smiths/c/abc")
+		defaults.set("//elsewhere.com", forKey: "open")
+		XCTAssertNil(AppModel(defaults: defaults).pending)
+	}
+
 	// MARK: Is there a nolune there?
 
 	/// A session whose answers come from `Answers`, not the network: statuses, and redirects.

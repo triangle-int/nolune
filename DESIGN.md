@@ -2658,16 +2658,24 @@ when they like, so an app asks each one what it serves.
   the origin of requests that carry either against the address the nolune was set up with, which
   an app may reach it by another of (a computer on this network). The pages sign in and out on the
   server, which it doesn't check, and an app signs out as they do, with `POST /logout`.
+- **Who's signed in.** `GET /api/me` says who, as the account menu shows them: their id, name,
+  email, picture and whether they're an admin; `PATCH /api/me` renames them.
 - **Profiles and chats.** `GET /api/profiles` lists the person's profiles with their members;
-  `GET /api/p/<slug>/folders` a profile's folders. `GET /api/p/<slug>/chats` pages through its
+  `GET /api/p/<slug>/folders` a profile's folders, which `POST` makes, and `PATCH` (`{ name }`)
+  and `DELETE /api/p/<slug>/folders/<id>` rename and delete, its chats staying, out of any folder. `GET /api/p/<slug>/chats` pages through its
   chats, most recently active first: `limit` (50, at most 100), and `after`, the `next` the page
   before gave, opaque to the app (`<updatedAt ms>.<id>`, so pages neither skip nor repeat a chat
   active at the same moment as another). Each chat has its title (empty until it has one: apps say
   "New chat" in their own words), model, folder, last activity and whether nolune is working in it.
 - **Changing chats.** `POST /api/p/<slug>/chats` starts one as the new chat's page does
   (`startChat` in `packages/web/src/lib/server/chats.ts`, shared with its form action): the default
-  model unless `preset` names one, `effort`, `folder`, and `text` and `uploads` for its first
-  message. `PATCH /api/c/<id>` renames it, answering with the title as kept; `DELETE /api/c/<id>`
+  model unless `preset` names one, `effort`, `folder`, `commands` (how its commands run), and
+  `text` and `uploads` for its first message. `GET /api/p/<slug>/new-chat` says what that page
+  loads: the person's chips (`suggestions`; `suggestionsStale` when `/suggestions` would make new
+  ones), the models a chat can use and the default one, the reasoning levels, and how commands run
+  unless a chat says otherwise. A file for a message is its bytes, posted to
+  `/api/p/<slug>/uploads` with its name in `x-file-name` (`encodeURIComponent`), as the composer
+  uploads it. `PATCH /api/c/<id>` renames it, answering with the title as kept; `DELETE /api/c/<id>`
   deletes it, as its menu does. The rest of a chat (its events, sending, stopping, its model) was
   JSON already, under `/api/c/<id>/`.
 - **The bell.** `GET /api/notifications` lists it, with when the person last opened it; dismissing,
@@ -2686,12 +2694,19 @@ when they like, so an app asks each one what it serves.
   with the status: 400 for what doesn't check out, 401 signed out, 403 for what isn't theirs to do,
   404 for what isn't there or isn't theirs to see.
 - **Changes** reach apps as they reach pages, through `/api/events`.
+- **Pages inside an app.** An app can show a page of the family's nolune inside its own screens
+  until it has a native one. Its web view adds `nolune-embedded` to the user agent
+  (`isEmbedded` in `packages/web/src/lib/ios.ts`), and the page then leaves out its top bar,
+  sidebar and title, keeping its header's actions, and makes its links full navigations
+  (`data-sveltekit-reload`), so the app can open the ones it shows natively.
 
 ## The iOS app
 
 `ios/` is nolune for iPhone and iPad: the family's nolune in an app of its own, with the bell's
-notifications on the lock screen. It's a thin app. The web UI does everything, in a WKWebView, and
-the app adds what a browser tab can't. It's built with Xcode 26 (`ios/Nolune.xcodeproj`, whose
+notifications on the lock screen. Its screens are SwiftUI, reading the [API for
+apps](#the-api-for-apps) (the native screens, below); pages it has no screen of its own for yet
+are the web app's, in a WKWebView, and a nolune from before that API gets today's web app whole.
+It's built with Xcode 26 (`ios/Nolune.xcodeproj`, whose
 folders Xcode reads as they are, so a new file needs no change to the project), checked by
 `.github/workflows/ios.yml`, and published to the App Store from Xcode: see `ios/README.md`. It
 runs on iOS 16 and later, and iOS 26's SDK gives it that version's look there, Liquid Glass: the
@@ -2732,13 +2747,13 @@ rather than chrome of their own, and controls of their own that float over conte
   another nolune" (`packages/web/src/lib/ios.ts`, a `nolune` message to the app). The app first
   tells the nolune to stop sending that iPhone notifications (`DELETE /api/push`), then shows the
   first screen, which offers going back.
-- **Native screens** come one at a time, and stay behind a flag until there are enough of them:
-  the app launched with `-native YES` (`AppModel.native`). Then `NativeController.swift` asks the
-  nolune which it is (`/api/version`). One with the API for apps signs in natively
-  (`SignInView.swift`, through `Client.swift`), with the sign-in page's words and errors, then
-  shows the web app signed in; one from before, today's web app, with a line above it, "Update
-  nolune for the full app"; one that didn't answer, the web app, and it asks again when the app
-  comes back to the front. The session is better-auth's cookie, which `Cookies.swift` keeps in
+- **Native screens** are on unless the app is launched with `-native NO`, which opens today's web
+  app instead (`AppModel.native`). `NativeController.swift` asks the nolune which it is
+  (`/api/version`). One with the API for apps signs in natively (`SignInView.swift`, through
+  `Client.swift`), with the sign-in page's words and errors, then shows the native screens
+  (`MainView.swift`); one from before, today's web app, with a line above it, "Update nolune for
+  the full app"; one that didn't answer, the web app, and it asks again when the app comes back to
+  the front. The session is better-auth's cookie, which `Cookies.swift` keeps in
   both of the app's cookie stores, URLSession's and the web views': copied to the web views'
   after signing in natively, and from them after an invite, or at launch when the app has no
   session of its own (after the sign-in shows: WebKit's store is slow to answer at first), so
@@ -2747,6 +2762,41 @@ rather than chrome of their own, and controls of their own that float over conte
   (its `/logout` goes on to the sign-in page, which the app doesn't show) signs the app's session
   out too, after telling the nolune to stop sending that iPhone notifications, and the native
   sign-in comes back.
+- **The native screens** are a split view (`MainView.swift`): the sidebar beside what it opens on
+  an iPad, pushed on an iPhone. `Family.swift` keeps the family's nolune for them: who's signed in,
+  their profiles, the open profile's chats and folders, the bell, all live from `/api/events` and
+  the profile's `/running`, followed again after they drop and when the app comes back to the
+  front.
+  - **The sidebar** (`SidebarView.swift`) is the web sidebar's: a new chat, the profile's pages,
+    its folders with their chats, its other chats a page at a time with a spinner on the ones
+    nolune works in, and search through all of them. A chat renames, moves and deletes from a
+    swipe or its menu. The toolbar switches profiles, opens the bell, and has the account menu.
+    The profiles' assistants are drawn as the web draws them: `scripts/ios-avatars.ts` turns the
+    glyphs in `packages/core/src/avatars.ts` and their colors into Swift (`Avatars.swift`), and a
+    test keeps it current.
+  - **A chat** (`ChatView.swift`) follows `/api/c/<id>/transcript` (`Conversation.swift`, keeping
+    it as the page keeps its ChatState: `Transcript.swift`). Replies are Markdown, read in blocks
+    as `marked` reads them (`Markdown.swift`: paragraphs, headings, lists and tasks, quotes, rules,
+    code with a copy button, tables that scroll sideways, pictures), with Foundation's inline
+    Markdown in each block (`MarkdownView.swift`), so a reply that streams draws again only the
+    blocks that changed. Pictures and files a reply or command shows come from the copies nolune
+    kept, as on the web, and open in Quick Look. Work between texts folds into "Thinking" or
+    "Worked for 12s" (`ActivityView.swift`), each command with its icon: Lucide's, fetched from
+    `/api/icons/<name>` and drawn from its SVG (`SVG.swift`, `LucideIcon.swift`). The view follows
+    the newest message unless the person scrolled up, then offers to jump back.
+  - **The composer** (`Composer.swift`, `ChatComposer.swift`) grows with its text; Return sends
+    from a hardware keyboard and Shift-Return starts a line. Files from Photos, the camera and
+    Files upload as they're added. Its menus are the web's: the model and reasoning (asking first
+    in a chat with replies, whose cache a switch loses), how commands run, and for a new chat
+    (`NewChatView.swift`, with a greeting for the time of day and the person's chips) its folder.
+    It tells the chat the person is typing, as the web does.
+  - **The bell** (`BellView.swift`) is a sheet, the new ones first; a tapped notification opens it
+    with that one in full. **Settings** (`Settings.swift`) has the person's name and the pages'
+    preferences, kept in the `nolune-prefs` cookie the pages read.
+  - **Pages without a native screen yet** (images, automations, memory, skills, the profile's
+    people, admin pages) are the web app's, inside the native navigation (`WebScreen.swift`, as
+    [pages inside an app](#the-api-for-apps)): a link in one to a chat or another screen opens it
+    natively.
 - **When it can't be reached** (no network, an address that's gone), a screen says so, with Try
   again and Connect to another nolune, and it tries again when the app comes back to the front. A
   family computer that's off is the relay's page, which reloads itself.

@@ -8,6 +8,7 @@ final class AppModel: ObservableObject {
 	private static let originKey = "origin"
 	private static let previousKey = "previous"
 	private static let nativeKey = "native"
+	private static let openKey = "open"
 
 	/// The family's nolune, as the person connected to it; nil until they have (ConnectView).
 	@Published private(set) var origin: URL?
@@ -20,8 +21,8 @@ final class AppModel: ObservableObject {
 	/// Counts the times the app came back to the front, for the page to check it's still there.
 	@Published private(set) var activations = 0
 	/**
-	 * Whether the native screens are on (NativeController.swift). Off until they're whole: today's
-	 * web app is the one that ships. Xcode's scheme turns them on with `-native YES`.
+	 * Whether the native screens are on (NativeController.swift), as they are unless launched with
+	 * `-native NO`, which opens today's web app instead.
 	 */
 	let native: Bool
 
@@ -32,7 +33,9 @@ final class AppModel: ObservableObject {
 		self.defaults = defaults
 		origin = defaults.string(forKey: Self.originKey).flatMap(URL.init(string:))
 		previous = defaults.string(forKey: Self.previousKey).flatMap(URL.init(string:))
-		native = defaults.bool(forKey: Self.nativeKey)
+		native = defaults.object(forKey: Self.nativeKey) == nil || defaults.bool(forKey: Self.nativeKey)
+		// A page to open first, as `-open /p/smiths/c/<id>` (CI's screens).
+		pending = defaults.string(forKey: Self.openKey).flatMap { Address.isPath($0) ? $0 : nil }
 	}
 
 	func connect(to address: Address) {

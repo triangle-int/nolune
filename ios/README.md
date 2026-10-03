@@ -22,12 +22,14 @@ xcodebuild test -project ios/Nolune.xcodeproj -scheme Nolune \
 ```
 
 The CI workflow `ios.yml` does the same on every change here, builds for a device too, and keeps
-its screens as PNGs: the first one, the app with a page open, and the native screens' sign-in and
-note for an older nolune.
+its screens as PNGs: the first one; the native sign-in, sidebar, chat, new chat and bell, from a
+pretend nolune (`ci/nolune.py`, which you can run the same way: `python3 ios/ci/nolune.py 5780
+signed-in`, then launch with `-origin http://localhost:5780`); the note for an older nolune; and
+today's web app with a page open.
 
-The native screens ([#125](https://github.com/triangle-int/nolune/issues/125)) are off until
-they're whole, and today's web app is the one that ships. To try them, add `-native YES` under
-Arguments Passed On Launch in the scheme (Product > Scheme > Edit Scheme > Run > Arguments).
+The app's screens are native ([#125](https://github.com/triangle-int/nolune/issues/125)). To see
+today's web app instead, add `-native NO` under Arguments Passed On Launch in the scheme
+(Product > Scheme > Edit Scheme > Run > Arguments); `-open /p/<slug>/c/<id>` opens a page first.
 
 `Sky.swift` and `Theme.swift`, and the Figtree font, are the macOS app's (`macos/`): the first
 screen wears its onboarding, and a change there shows in both apps. Xcode reads the `Nolune` and
