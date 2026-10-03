@@ -10,6 +10,7 @@ import * as chats from '../../routes/api/p/[slug]/chats/+server';
 import * as folders from '../../routes/api/p/[slug]/folders/+server';
 import * as folder from '../../routes/api/p/[slug]/folders/[folder]/+server';
 import * as me from '../../routes/api/me/+server';
+import * as newChat from '../../routes/api/p/[slug]/new-chat/+server';
 import * as profiles from '../../routes/api/profiles/+server';
 import * as version from '../../routes/api/version/+server';
 import { decodeCursor, encodeCursor } from './api';
@@ -161,6 +162,29 @@ describe('/api/p/<slug>/chats', () => {
 		expect(await answer(chats.GET, request(null, { params: { slug: 'family' } }))).toMatchObject({
 			status: 401
 		});
+	});
+});
+
+describe('/api/p/<slug>/new-chat', () => {
+	it('says what a new chat starts with: the models, the default one, and the reasoning levels', async () => {
+		const { user, profile } = makeFamily();
+		const preset = makePreset();
+		const { status, body } = await answer(
+			newChat.GET,
+			request(user, { params: { slug: profile.slug } })
+		);
+		expect(status).toBe(200);
+		expect(body).toMatchObject({
+			presets: [{ id: preset.id, name: preset.name, provider: 'anthropic' }],
+			defaultPresetId: preset.id,
+			efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+			commandMode: 'auto'
+		});
+		expect(Array.isArray(body.suggestions)).toBe(true);
+		const stranger = makeUser('Stranger');
+		expect(
+			(await answer(newChat.GET, request(stranger, { params: { slug: profile.slug } }))).status
+		).toBe(404);
 	});
 });
 
