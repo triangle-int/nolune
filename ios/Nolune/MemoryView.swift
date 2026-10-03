@@ -412,7 +412,7 @@ private struct NoteEditor: View {
 				if let maxChars {
 					Text(verbatim: "\(text.count) / \(maxChars)")
 						.font(.caption.monospacedDigit())
-						.foregroundStyle(text.count > maxChars ? Palette.plain.destructive : .secondary)
+						.foregroundStyle(text.count > maxChars ? Palette.plain.destructive : Color.secondary)
 				}
 				if let problem {
 					Text(verbatim: problem)

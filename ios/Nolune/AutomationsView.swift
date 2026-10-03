@@ -97,7 +97,7 @@ struct AutomationsView: View {
 				if let status = entry.status {
 					Text(verbatim: AutomationView.describe(status))
 						.font(.caption)
-						.foregroundStyle(status == "failed" ? Palette.plain.destructive : .secondary)
+						.foregroundStyle(status == "failed" ? Palette.plain.destructive : Color.secondary)
 				}
 			}
 		}
@@ -391,7 +391,7 @@ private struct RunRow: View {
 				Text(verbatim: run.at)
 				Spacer()
 				Text(verbatim: script ? String(localized: "script \(AutomationView.describe(run.status))") : AutomationView.describe(run.status))
-					.foregroundStyle(run.status == "failed" ? Palette.plain.destructive : .secondary)
+					.foregroundStyle(run.status == "failed" ? Palette.plain.destructive : Color.secondary)
 			}
 			.font(.subheadline)
 			HStack(spacing: 12) {

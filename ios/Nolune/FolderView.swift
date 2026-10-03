@@ -65,7 +65,7 @@ struct FolderView: View {
 							HStack {
 								Text(verbatim: "\(instructions.count) / \(folder.maxInstructions)")
 									.font(.caption.monospacedDigit())
-									.foregroundStyle(instructions.count > folder.maxInstructions ? Palette.plain.destructive : .secondary)
+									.foregroundStyle(instructions.count > folder.maxInstructions ? Palette.plain.destructive : Color.secondary)
 								Spacer()
 								Button("Cancel") { instructions = folder.instructions }
 									.buttonStyle(.borderless)

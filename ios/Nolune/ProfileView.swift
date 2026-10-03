@@ -59,7 +59,7 @@ struct ProfileView: View {
 							HStack {
 								Text(verbatim: "\(soul.count) / \(settings.maxSoul)")
 									.font(.caption.monospacedDigit())
-									.foregroundStyle(soul.count > settings.maxSoul ? Palette.plain.destructive : .secondary)
+									.foregroundStyle(soul.count > settings.maxSoul ? Palette.plain.destructive : Color.secondary)
 								Spacer()
 								Button("Cancel") { soul = settings.soul }
 									.buttonStyle(.borderless)
