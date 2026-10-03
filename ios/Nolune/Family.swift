@@ -106,7 +106,7 @@ final class Family: ObservableObject {
 			await reloadProfile()
 			loaded = true
 		} catch {
-			problem = error.localizedDescription
+			if !error.isCancellation { problem = error.localizedDescription }
 		}
 	}
 
@@ -127,7 +127,8 @@ final class Family: ObservableObject {
 			self.folders = list
 			running = Set(first.chats.filter(\.running).map(\.id)).union(running)
 		} catch {
-			problem = error.localizedDescription
+			// Cancelled with the stream that asked for it, as `listen` follows anew: nothing went wrong.
+			if !error.isCancellation { problem = error.localizedDescription }
 		}
 	}
 
@@ -141,7 +142,7 @@ final class Family: ObservableObject {
 			chats += page.chats.filter { !known.contains($0.id) }
 			more = page.next
 		} catch {
-			problem = error.localizedDescription
+			if !error.isCancellation { problem = error.localizedDescription }
 		}
 	}
 
