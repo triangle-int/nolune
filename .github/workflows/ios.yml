@@ -4,6 +4,7 @@ name: iOS app
 # Store gets it (unsigned: signing is Xcode's, ios/README.md), and keeps its screens as PNGs: the
 # first one, the app with a page open, and with the native screens on (`-native YES`), their
 # sign-in and the note an older nolune gets. It builds the macOS app's Sky.swift and Theme.swift too.
+# The runner's Xcode is 26, with iOS 26's SDK: the app wears its look, Liquid Glass.
 
 on:
   push:
@@ -31,7 +32,7 @@ permissions:
 jobs:
   app:
     name: Build and test nolune for iOS
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       BUILD: ${{ github.workspace }}/ios/build
     steps:

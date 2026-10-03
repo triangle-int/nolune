@@ -2691,9 +2691,13 @@ when they like, so an app asks each one what it serves.
 
 `ios/` is nolune for iPhone and iPad: the family's nolune in an app of its own, with the bell's
 notifications on the lock screen. It's a thin app. The web UI does everything, in a WKWebView, and
-the app adds what a browser tab can't. It's built with Xcode (`ios/Nolune.xcodeproj`, whose
+the app adds what a browser tab can't. It's built with Xcode 26 (`ios/Nolune.xcodeproj`, whose
 folders Xcode reads as they are, so a new file needs no change to the project), checked by
-`.github/workflows/ios.yml`, and published to the App Store from Xcode: see `ios/README.md`.
+`.github/workflows/ios.yml`, and published to the App Store from Xcode: see `ios/README.md`. It
+runs on iOS 16 and later, and iOS 26's SDK gives it that version's look there, Liquid Glass: the
+system's own parts (bars, sheets, alerts, menus) wear it by themselves, so native screens use them
+rather than chrome of their own, and controls of their own that float over content use
+`glassEffect` on iOS 26.
 
 - **Connecting.** The first screen (`ConnectView.swift`) wears the macOS onboarding: its sky,
   type and controls, `Sky.swift` and `Theme.swift`, are built into both apps. It asks which nolune
