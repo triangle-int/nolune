@@ -1,7 +1,13 @@
 import { error, json } from '@sveltejs/kit';
-import { FolderError, createFolder } from '@nolune/core';
+import { FolderError, createFolder, listFolders } from '@nolune/core';
 import { requireProfile } from '$lib/server/access';
 import type { RequestHandler } from './$types';
+
+/** The profile's folders of chats, as the sidebar lists them. */
+export const GET: RequestHandler = ({ params, locals }) => {
+	const { profile } = requireProfile(locals, params.slug);
+	return json({ folders: listFolders(profile.id).map((f) => ({ id: f.id, name: f.name })) });
+};
 
 /** Creates a folder of chats in the profile. */
 export const POST: RequestHandler = async ({ params, locals, request }) => {

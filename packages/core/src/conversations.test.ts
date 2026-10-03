@@ -99,6 +99,31 @@ describe('listing conversations', () => {
 		]);
 	});
 
+	it('pages through them without skipping or repeating one, ties included', () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(Date.UTC(2026, 8, 1));
+		const { user, profile, preset } = newChat({ title: 'First' });
+		for (const title of ['Second', 'Third', 'Fourth', 'Fifth']) {
+			// Two at a time, so pages break between conversations active at the same moment.
+			if (title !== 'Third' && title !== 'Fifth') vi.advanceTimersByTime(60_000);
+			createConversation({ profile, presetId: preset.id, userId: user.id, title });
+		}
+		const all = listConversations(profile.id).map((c) => c.id);
+		expect(new Set(all).size).toBe(5);
+		// Every page size, so some pages end between two conversations active at the same moment.
+		for (let limit = 1; limit <= 5; limit++) {
+			const paged: string[] = [];
+			let after: { updatedAt: Date; id: string } | undefined;
+			for (;;) {
+				const page = listConversations(profile.id, { limit, after });
+				paged.push(...page.map((c) => c.id));
+				if (page.length < limit) break;
+				after = page[page.length - 1];
+			}
+			expect(paged, `pages of ${limit}`).toEqual(all);
+		}
+	});
+
 	it('shows a conversation only to members of its profile', () => {
 		const { user, chat } = newChat();
 		const max = makeUser('Max');
