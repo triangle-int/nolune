@@ -8,6 +8,8 @@ import * as chat from '../../routes/api/c/[id]/+server';
 import * as notifications from '../../routes/api/notifications/+server';
 import * as chats from '../../routes/api/p/[slug]/chats/+server';
 import * as folders from '../../routes/api/p/[slug]/folders/+server';
+import * as folder from '../../routes/api/p/[slug]/folders/[folder]/+server';
+import * as me from '../../routes/api/me/+server';
 import * as profiles from '../../routes/api/profiles/+server';
 import * as version from '../../routes/api/version/+server';
 import { decodeCursor, encodeCursor } from './api';
@@ -168,6 +170,70 @@ describe('/api/p/<slug>/folders', () => {
 		const folder = createFolder({ profile, name: 'Trips', userId: user.id });
 		const { body } = await answer(folders.GET, request(user, { params: { slug: profile.slug } }));
 		expect(body).toEqual({ folders: [{ id: folder.id, name: 'Trips' }] });
+	});
+});
+
+describe('/api/p/<slug>/folders/<folder>', () => {
+	it('renames a folder, answering with the name as kept, and deletes it, leaving its chats', async () => {
+		const { user, profile } = makeFamily();
+		makePreset();
+		const trips = createFolder({ profile, name: 'Trips', userId: user.id });
+		const started = await answer(
+			chats.POST,
+			request(user, { method: 'POST', params: { slug: profile.slug }, body: { folder: trips.id } })
+		);
+		const params = { slug: profile.slug, folder: trips.id };
+		expect(
+			await answer(
+				folder.PATCH,
+				request(user, { method: 'PATCH', params, body: { name: '  Rome ' } })
+			)
+		).toEqual({ status: 200, body: { id: trips.id, name: 'Rome' } });
+		expect(
+			await answer(folder.PATCH, request(user, { method: 'PATCH', params, body: { name: 3 } }))
+		).toMatchObject({ status: 400 });
+
+		expect(await answer(folder.DELETE, request(user, { method: 'DELETE', params }))).toEqual({
+			status: 204,
+			body: null
+		});
+		expect(
+			(await answer(folders.GET, request(user, { params: { slug: profile.slug } }))).body
+		).toEqual({ folders: [] });
+		expect(listConversations(profile.id).map((c) => [c.id, c.folderId])).toEqual([
+			[started.body.id, null]
+		]);
+	});
+
+	it("is only for the profile's own folders and members", async () => {
+		const { user, profile } = makeFamily();
+		const elsewhere = createProfile('Elsewhere', user.id);
+		const theirs = createFolder({ profile: elsewhere, name: 'Theirs', userId: user.id });
+		const stranger = makeUser('Stranger');
+		const mine = createFolder({ profile, name: 'Mine', userId: user.id });
+		expect(
+			await answer(
+				folder.DELETE,
+				request(user, { method: 'DELETE', params: { slug: profile.slug, folder: theirs.id } })
+			)
+		).toMatchObject({ status: 404 });
+		expect(
+			await answer(
+				folder.DELETE,
+				request(stranger, { method: 'DELETE', params: { slug: profile.slug, folder: mine.id } })
+			)
+		).toMatchObject({ status: 404 });
+	});
+});
+
+describe('/api/me', () => {
+	it('says who is signed in', async () => {
+		const { user } = makeFamily('Anna');
+		expect(await answer(me.GET, request({ ...user, isAdmin: true }))).toEqual({
+			status: 200,
+			body: { id: user.id, name: 'Anna', email: '', isAdmin: true, picture: null }
+		});
+		expect(await answer(me.GET, request(null))).toMatchObject({ status: 401 });
 	});
 });
 

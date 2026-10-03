@@ -19,6 +19,16 @@ export function inIosApp(): boolean {
 	return app() !== null;
 }
 
+/**
+ * The app's own screens show some pages inside them, under the app's navigation: their web views
+ * say so in the user agent, and the pages leave out their header and sidebar, the app's own.
+ */
+export const EMBEDDED_AGENT = 'nolune-embedded';
+
+export function isEmbedded(userAgent: string | null): boolean {
+	return !!userAgent?.includes(EMBEDDED_AGENT);
+}
+
 /** Back to the app's first screen, to connect to another family's nolune. */
 export function connectElsewhere(): void {
 	app()?.postMessage({ type: 'connect' });
