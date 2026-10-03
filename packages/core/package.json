@@ -10,6 +10,7 @@
 		"./media-refs": "./src/media-refs.ts",
 		"./articles": "./src/articles.ts",
 		"./avatars": "./src/avatars.ts",
+		"./tint": "./src/tint.ts",
 		"./memory-export": "./src/memory-export.ts",
 		"./memory-categories": "./src/memory-categories.ts",
 		"./schedule": "./src/schedule.ts",

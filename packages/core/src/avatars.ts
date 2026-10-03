@@ -18,6 +18,21 @@ export const AVATARS = [
 
 export type Avatar = (typeof AVATARS)[number];
 
+/** Each avatar's color in the light and dark themes, as the web's layout.css has them. */
+export type AvatarColors = Record<Avatar, { light: string; dark: string }>;
+
+/** The `--avatar-*` colors in a stylesheet: light (`:root`) first, then dark (`.dark`). */
+export function parseAvatarColors(stylesheet: string): AvatarColors {
+	return Object.fromEntries(
+		AVATARS.map((avatar) => {
+			const [light, dark] = [
+				...stylesheet.matchAll(new RegExp(`--avatar-${avatar}:\\s*(#[0-9a-f]{3,8})`, 'gi'))
+			].map((match) => match[1]);
+			return [avatar, { light, dark }];
+		})
+	) as AvatarColors;
+}
+
 export function isAvatar(value: unknown): value is Avatar {
 	return typeof value === 'string' && (AVATARS as readonly string[]).includes(value);
 }

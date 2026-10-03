@@ -57,6 +57,7 @@ struct Preferences: Codable, Equatable {
 
 /// Settings: the person's name, how nolune looks on this device, and signing out.
 struct SettingsView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	let signOut: () -> Void
 	@State private var name = ""
@@ -68,55 +69,59 @@ struct SettingsView: View {
 
 	var body: some View {
 		Form {
-			Section {
-				HStack(spacing: 14) {
-					PersonPicture(url: picture, name: family.me?.name ?? "")
-						.frame(width: 56, height: 56)
-						.overlay { if picturing { ProgressView() } }
-					VStack(alignment: .leading, spacing: 8) {
-						PhotosPicker(selection: $photo, matching: .images) {
-							Text(picture == nil ? "Add a picture" : "Change picture")
+			Group {
+				Section {
+					HStack(spacing: 14) {
+						PersonPicture(url: picture, name: family.me?.name ?? "")
+							.frame(width: 56, height: 56)
+							.overlay { if picturing { ProgressView() } }
+						VStack(alignment: .leading, spacing: 8) {
+							PhotosPicker(selection: $photo, matching: .images) {
+								Text(picture == nil ? "Add a picture" : "Change picture")
+							}
+							if picture != nil {
+								Button("Remove picture", role: .destructive, action: removePicture)
+							}
 						}
-						if picture != nil {
-							Button("Remove picture", role: .destructive, action: removePicture)
-						}
+						.buttonStyle(.borderless)
 					}
-					.buttonStyle(.borderless)
+					TextField("Your name", text: $name)
+						.textContentType(.name)
+						.submitLabel(.done)
+						.onSubmit(saveName)
+				} header: {
+					Text("Your name")
+				} footer: {
+					if let problem {
+						Text(verbatim: problem)
+							.foregroundStyle(Palette.plain.destructive)
+					} else {
+						Text("Everyone in your profiles sees your name and picture, and nolune reads your name with each message you send.")
+					}
 				}
-				TextField("Your name", text: $name)
-					.textContentType(.name)
-					.submitLabel(.done)
-					.onSubmit(saveName)
-			} header: {
-				Text("Your name")
-			} footer: {
-				if let problem {
-					Text(verbatim: problem)
-						.foregroundStyle(.red)
-				} else {
-					Text("Everyone in your profiles sees your name and picture, and nolune reads your name with each message you send.")
+				Section {
+					Toggle(isOn: $preferences.technical) {
+						Text("Show technical details")
+						Text("Show the exact commands nolune runs, token usage and prompt caching.")
+					}
+					Toggle(isOn: $preferences.expandSteps) {
+						Text("Always show steps")
+						Text("Open the list of what nolune did under each reply, instead of keeping it folded.")
+					}
+					Toggle(isOn: $preferences.sounds) {
+						Text("Sounds")
+						Text("Soft sounds where nolune moves on its own, like the welcome of a new profile.")
+					}
+				} footer: {
+					Text("These settings are saved on this device only.")
+				}
+				Section {
+					Button("Log out", role: .destructive, action: signOut)
 				}
 			}
-			Section {
-				Toggle(isOn: $preferences.technical) {
-					Text("Show technical details")
-					Text("Show the exact commands nolune runs, token usage and prompt caching.")
-				}
-				Toggle(isOn: $preferences.expandSteps) {
-					Text("Always show steps")
-					Text("Open the list of what nolune did under each reply, instead of keeping it folded.")
-				}
-				Toggle(isOn: $preferences.sounds) {
-					Text("Sounds")
-					Text("Soft sounds where nolune moves on its own, like the welcome of a new profile.")
-				}
-			} footer: {
-				Text("These settings are saved on this device only.")
-			}
-			Section {
-				Button("Log out", role: .destructive, action: signOut)
-			}
+			.listRowBackground(palette.muted)
 		}
+		.pageBackground(palette)
 		.navigationTitle("Settings")
 		.onChange(of: photo) { item in
 			guard let item else { return }

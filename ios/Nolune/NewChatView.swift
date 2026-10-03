@@ -6,6 +6,7 @@ import SwiftUI
  * reasoning, and how its commands run. Sending starts the chat with that message, then opens it.
  */
 struct NewChatView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	/// Opens the chat it started.
 	let started: (String) -> Void
@@ -49,6 +50,7 @@ struct NewChatView: View {
 			.padding(.top, 80)
 			.frame(maxWidth: .infinity)
 		}
+		.background(palette.background)
 		.scrollDismissesKeyboard(.interactively)
 		.safeAreaInset(edge: .bottom, spacing: 0) {
 			VStack(alignment: .leading, spacing: 8) {
@@ -67,7 +69,7 @@ struct NewChatView: View {
 									.font(.subheadline)
 									.padding(.horizontal, 12)
 									.padding(.vertical, 8)
-									.background(Capsule().fill(Color(.secondarySystemBackground)))
+									.background(Capsule().fill(palette.muted))
 								}
 								.buttonStyle(.plain)
 							}
@@ -113,7 +115,7 @@ struct NewChatView: View {
 			.padding(.vertical, 6)
 			.frame(maxWidth: 780)
 			.frame(maxWidth: .infinity)
-			.background(.bar)
+			.background(palette.background)
 		}
 		.environment(\.noluneClient, family.client)
 		.task {

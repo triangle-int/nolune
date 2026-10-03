@@ -93,7 +93,7 @@ struct BellWidgetView: View {
 							.foregroundStyle(.white)
 							.padding(.horizontal, 6)
 							.padding(.vertical, 2)
-							.background(Capsule().fill(Color.red))
+							.background(Capsule().fill(Palette.plain.destructive))
 					}
 				}
 				.foregroundStyle(.secondary)
@@ -309,12 +309,12 @@ struct ReplyLockScreen: View {
 }
 
 extension View {
-	/// The widget's background: the system's on iOS 17, where it's required.
+	/// The widget's background, the web's page color: the container's on iOS 17, where it's required.
 	@ViewBuilder func widgetBackground() -> some View {
 		if #available(iOS 17.0, *) {
-			containerBackground(.fill.tertiary, for: .widget)
+			containerBackground(Palette.plain.background, for: .widget)
 		} else {
-			padding()
+			padding().background(Palette.plain.background)
 		}
 	}
 }

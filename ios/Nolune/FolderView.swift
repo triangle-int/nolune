@@ -7,6 +7,7 @@ import SwiftUI
  * in its menu, as in the sidebar's.
  */
 struct FolderView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	let slug: String
 	let id: String
@@ -50,97 +51,101 @@ struct FolderView: View {
 
 	var body: some View {
 		List {
-			if let folder {
-				Section {
-					Button(action: newChat) {
-						Label("New chat in \(folder.name)", systemImage: "square.and.pencil")
-					}
-				}
-				Section {
-					TextField("We're planning two weeks in Japan in April with the kids (7 and 10). Keep plans relaxed and the budget under ¥600,000.", text: $instructions, axis: .vertical)
-						.lineLimit(3...12)
-					if instructions != folder.instructions {
-						HStack {
-							Text(verbatim: "\(instructions.count) / \(folder.maxInstructions)")
-								.font(.caption.monospacedDigit())
-								.foregroundStyle(instructions.count > folder.maxInstructions ? .red : .secondary)
-							Spacer()
-							Button("Cancel") { instructions = folder.instructions }
-								.buttonStyle(.borderless)
-							Button("Save") { saveInstructions() }
-								.buttonStyle(.borderless)
-								.disabled(instructions.count > folder.maxInstructions)
+			Group {
+				if let folder {
+					Section {
+						Button(action: newChat) {
+							Label("New chat in \(folder.name)", systemImage: "square.and.pencil")
 						}
 					}
-				} header: {
-					Text("Instructions")
-				} footer: {
-					Text("What nolune should know or do in every chat here.")
-				}
-				Section {
-					if folder.files.isEmpty, uploads.items.isEmpty {
-						Text("No files yet")
-							.foregroundStyle(.secondary)
-					}
-					ForEach(folder.files) { file in
-						fileRow(file)
-					}
-					ForEach(uploads.items) { item in
-						HStack {
-							ProgressView()
-							Text(verbatim: item.name)
-								.foregroundStyle(.secondary)
-							if let problem = item.problem {
-								Text(verbatim: problem)
-									.font(.caption)
-									.foregroundStyle(.red)
-							}
-						}
-					}
-					Menu {
-						Button {
-							photosShown = true
-						} label: {
-							Label("Photos", systemImage: "photo.on.rectangle")
-						}
-						Button {
-							filesShown = true
-						} label: {
-							Label("Files", systemImage: "folder")
-						}
-					} label: {
-						Label("Add files", systemImage: "plus")
-					}
-					.disabled(folder.files.count >= folder.maxFiles)
-				} header: {
-					Text("Files")
-				} footer: {
-					Text("Pictures, documents, anything. nolune gets where they're saved and opens them when they matter.")
-				}
-				Section("Chats") {
-					if chats.isEmpty {
-						Text("Chats you start here show up here. You can also drag chats onto the folder in the sidebar.")
-							.foregroundStyle(.secondary)
-					}
-					ForEach(chats) { chat in
-						Button {
-							open(.chat(chat.id))
-						} label: {
+					Section {
+						TextField("We're planning two weeks in Japan in April with the kids (7 and 10). Keep plans relaxed and the budget under ¥600,000.", text: $instructions, axis: .vertical)
+							.lineLimit(3...12)
+						if instructions != folder.instructions {
 							HStack {
-								ChatRow(title: chat.title.isEmpty ? String(localized: "New chat") : chat.title, running: family.running.contains(chat.id))
-									.foregroundStyle(Color.primary)
-								Text(chat.updated, format: .relative(presentation: .named))
-									.font(.caption)
+								Text(verbatim: "\(instructions.count) / \(folder.maxInstructions)")
+									.font(.caption.monospacedDigit())
+									.foregroundStyle(instructions.count > folder.maxInstructions ? Palette.plain.destructive : .secondary)
+								Spacer()
+								Button("Cancel") { instructions = folder.instructions }
+									.buttonStyle(.borderless)
+								Button("Save") { saveInstructions() }
+									.buttonStyle(.borderless)
+									.disabled(instructions.count > folder.maxInstructions)
+							}
+						}
+					} header: {
+						Text("Instructions")
+					} footer: {
+						Text("What nolune should know or do in every chat here.")
+					}
+					Section {
+						if folder.files.isEmpty, uploads.items.isEmpty {
+							Text("No files yet")
+								.foregroundStyle(.secondary)
+						}
+						ForEach(folder.files) { file in
+							fileRow(file)
+						}
+						ForEach(uploads.items) { item in
+							HStack {
+								ProgressView()
+								Text(verbatim: item.name)
 									.foregroundStyle(.secondary)
+								if let problem = item.problem {
+									Text(verbatim: problem)
+										.font(.caption)
+										.foregroundStyle(Palette.plain.destructive)
+								}
+							}
+						}
+						Menu {
+							Button {
+								photosShown = true
+							} label: {
+								Label("Photos", systemImage: "photo.on.rectangle")
+							}
+							Button {
+								filesShown = true
+							} label: {
+								Label("Files", systemImage: "folder")
+							}
+						} label: {
+							Label("Add files", systemImage: "plus")
+						}
+						.disabled(folder.files.count >= folder.maxFiles)
+					} header: {
+						Text("Files")
+					} footer: {
+						Text("Pictures, documents, anything. nolune gets where they're saved and opens them when they matter.")
+					}
+					Section("Chats") {
+						if chats.isEmpty {
+							Text("Chats you start here show up here. You can also drag chats onto the folder in the sidebar.")
+								.foregroundStyle(.secondary)
+						}
+						ForEach(chats) { chat in
+							Button {
+								open(.chat(chat.id))
+							} label: {
+								HStack {
+									ChatRow(title: chat.title.isEmpty ? String(localized: "New chat") : chat.title, running: family.running.contains(chat.id))
+										.foregroundStyle(Palette.plain.foreground)
+									Text(chat.updated, format: .relative(presentation: .named))
+										.font(.caption)
+										.foregroundStyle(.secondary)
+								}
 							}
 						}
 					}
+				} else if problem == nil {
+					ProgressView()
+						.frame(maxWidth: .infinity)
 				}
-			} else if problem == nil {
-				ProgressView()
-					.frame(maxWidth: .infinity)
 			}
+			.listRowBackground(palette.muted)
 		}
+		.pageBackground(palette)
 		.navigationTitle(folder?.name ?? family.folders.first { $0.id == id }?.name ?? "")
 		.toolbar {
 			ToolbarItem(placement: .primaryAction) {
@@ -231,7 +236,7 @@ struct FolderView: View {
 				}
 				VStack(alignment: .leading, spacing: 2) {
 					Text(verbatim: file.name)
-						.foregroundStyle(Color.primary)
+						.foregroundStyle(Palette.plain.foreground)
 						.lineLimit(1)
 						.truncationMode(.middle)
 					Text(verbatim: ByteCountFormatter.string(fromByteCount: Int64(file.bytes), countStyle: .file))

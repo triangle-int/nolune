@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
  * Shift-Return starts a new line; the on-screen keyboard's return starts one.
  */
 struct ComposerBar<Accessories: View>: View {
+	@Environment(\.palette) private var palette
 	@Binding var text: String
 	@ObservedObject var attachments: Attachments
 	let placeholder: String
@@ -45,8 +46,8 @@ struct ComposerBar<Accessories: View>: View {
 						Image(systemName: "stop.fill")
 							.font(.body.weight(.semibold))
 							.frame(width: 34, height: 34)
-							.background(Circle().fill(Color.primary))
-							.foregroundStyle(Color(.systemBackground))
+							.background(Circle().fill(Palette.plain.primary))
+							.foregroundStyle(Palette.plain.primaryForeground)
 					}
 					.accessibilityLabel(Text("Stop"))
 				} else {
@@ -60,8 +61,8 @@ struct ComposerBar<Accessories: View>: View {
 							}
 						}
 						.frame(width: 34, height: 34)
-						.background(Circle().fill(canSend ? Color.accentColor : Color.secondary.opacity(0.3)))
-						.foregroundStyle(.white)
+						.background(Circle().fill(canSend ? Palette.plain.primary : Color.secondary.opacity(0.3)))
+						.foregroundStyle(Palette.plain.primaryForeground)
 					}
 					.disabled(!canSend)
 					.accessibilityLabel(Text("Send"))
@@ -72,11 +73,11 @@ struct ComposerBar<Accessories: View>: View {
 		.padding(10)
 		.background(
 			RoundedRectangle(cornerRadius: 24, style: .continuous)
-				.fill(Color(.secondarySystemBackground))
+				.fill(palette.composer)
 		)
 		.overlay(
 			RoundedRectangle(cornerRadius: 24, style: .continuous)
-				.strokeBorder(Color(.separator), lineWidth: 0.5)
+				.strokeBorder(Palette.plain.border)
 		)
 		.photosPicker(
 			isPresented: $photosShown,
@@ -126,7 +127,7 @@ struct ComposerBar<Accessories: View>: View {
 			Image(systemName: "plus")
 				.font(.body.weight(.medium))
 				.frame(width: 34, height: 34)
-				.background(Circle().strokeBorder(Color(.separator)))
+				.background(Circle().strokeBorder(Palette.plain.border))
 		}
 		.disabled(attachments.isFull)
 		.accessibilityLabel(Text("Attach files"))
@@ -218,6 +219,7 @@ final class Attachments: ObservableObject {
 }
 
 private struct AttachmentStrip: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var attachments: Attachments
 
 	var body: some View {
@@ -259,13 +261,13 @@ private struct AttachmentStrip: View {
 				}
 				.padding(6)
 				.frame(width: 96, height: 64)
-				.background(Color(.tertiarySystemBackground))
+				.background(palette.muted)
 			}
 		}
 		.clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 		.overlay {
 			if item.problem != nil {
-				RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.red.opacity(0.35))
+				RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.plain.destructive.opacity(0.35))
 				Image(systemName: "exclamationmark.triangle.fill")
 					.foregroundStyle(.white)
 			} else if item.upload == nil {

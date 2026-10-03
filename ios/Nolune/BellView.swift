@@ -7,6 +7,7 @@ import SwiftUI
  * that one expanded (`expand`).
  */
 struct BellView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	let expand: String?
 	/// Opens the chat a notification continues in.
@@ -29,21 +30,25 @@ struct BellView: View {
 	var body: some View {
 		NavigationStack {
 			List {
-				if family.bell.items.isEmpty {
-					Text("Nothing yet. Ask nolune for a reminder or a daily check, and what it finds shows up here.")
-						.foregroundStyle(.secondary)
-				}
-				ForEach(items) { item in
-					row(item)
-						.swipeActions(edge: .trailing) {
-							Button(role: .destructive) {
-								Task { await family.dismiss(item) }
-							} label: {
-								Label("Dismiss", systemImage: "xmark")
+				Group {
+					if family.bell.items.isEmpty {
+						Text("Nothing yet. Ask nolune for a reminder or a daily check, and what it finds shows up here.")
+							.foregroundStyle(.secondary)
+					}
+					ForEach(items) { item in
+						row(item)
+							.swipeActions(edge: .trailing) {
+								Button(role: .destructive) {
+									Task { await family.dismiss(item) }
+								} label: {
+									Label("Dismiss", systemImage: "xmark")
+								}
 							}
-						}
+					}
 				}
+				.listRowBackground(palette.muted)
 			}
+			.pageBackground(palette)
 			.listStyle(.insetGrouped)
 			.navigationTitle("Notifications")
 			.navigationBarTitleDisplayMode(.inline)
@@ -81,7 +86,7 @@ struct BellView: View {
 					.alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
 				Text(item.title)
 					.font(.headline)
-					.foregroundStyle(item.level == "error" ? Color.red : Color.primary)
+					.foregroundStyle(item.level == "error" ? Palette.plain.destructive : Palette.plain.foreground)
 					.lineLimit(open ? nil : 1)
 				Spacer(minLength: 4)
 				if new {
@@ -90,7 +95,7 @@ struct BellView: View {
 						.foregroundStyle(.white)
 						.padding(.horizontal, 6)
 						.padding(.vertical, 2)
-						.background(Capsule().fill(Color.red))
+						.background(Capsule().fill(Palette.plain.destructive))
 				}
 				Text(item.created, format: .relative(presentation: .named))
 					.font(.caption)

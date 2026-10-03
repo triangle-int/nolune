@@ -1,19 +1,7 @@
-import { AVATARS, avatarSvg, type Avatar } from '@nolune/core/avatars';
+import { avatarSvg, parseAvatarColors, type Avatar } from '@nolune/core/avatars';
 import css from '../routes/layout.css?raw';
 
-export type AvatarColors = Record<Avatar, { light: string; dark: string }>;
-
-/** The `--avatar-*` colors in a stylesheet: light (`:root`) first, then dark (`.dark`). */
-export function parseAvatarColors(stylesheet: string): AvatarColors {
-	return Object.fromEntries(
-		AVATARS.map((avatar) => {
-			const [light, dark] = [
-				...stylesheet.matchAll(new RegExp(`--avatar-${avatar}:\\s*(#[0-9a-f]{3,8})`, 'gi'))
-			].map((match) => match[1]);
-			return [avatar, { light, dark }];
-		})
-	) as AvatarColors;
-}
+export { parseAvatarColors, type AvatarColors } from '@nolune/core/avatars';
 
 /**
  * Each avatar's colors as layout.css defines them, for pictures that can't use CSS variables.

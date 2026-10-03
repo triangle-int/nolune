@@ -6,6 +6,7 @@ import SwiftUI
  * which note is theirs first, as the web does. A member leaves by removing themselves.
  */
 struct ProfileView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	let slug: String
 	/// The profile is gone for this person: they left it, or deleted it.
@@ -31,77 +32,81 @@ struct ProfileView: View {
 
 	var body: some View {
 		Form {
-			if let settings {
-				Section {
-					TextField("Profile name", text: $name)
-						.submitLabel(.done)
-						.onSubmit(rename)
-				} header: {
-					Text("Name")
-				} footer: {
-					if let message { Text(verbatim: message) }
-				}
-				Section {
-					AvatarPicker(selected: settings.avatar) { avatar in
-						act { try await client.setAvatar(slug, avatar) }
+			Group {
+				if let settings {
+					Section {
+						TextField("Profile name", text: $name)
+							.submitLabel(.done)
+							.onSubmit(rename)
+					} header: {
+						Text("Name")
+					} footer: {
+						if let message { Text(verbatim: message) }
 					}
-				} header: {
-					Text("Avatar")
-				} footer: {
-					Text("How nolune looks in this profile's chats. Everyone here sees the same one, and nolune can change it when asked.")
-				}
-				Section {
-					TextField("You're warm and a little playful, and you keep answers short. With the kids you explain things simply and never talk down to them. When you don't know something, you say so.", text: $soul, axis: .vertical)
-						.lineLimit(4...16)
-					if soul != settings.soul {
-						HStack {
-							Text(verbatim: "\(soul.count) / \(settings.maxSoul)")
-								.font(.caption.monospacedDigit())
-								.foregroundStyle(soul.count > settings.maxSoul ? .red : .secondary)
-							Spacer()
-							Button("Cancel") { soul = settings.soul }
-								.buttonStyle(.borderless)
-							Button("Save") { act { try await client.writeSoul(slug, soul) } }
-								.buttonStyle(.borderless)
-								.disabled(soul.count > settings.maxSoul)
+					Section {
+						AvatarPicker(selected: settings.avatar) { avatar in
+							act { try await client.setAvatar(slug, avatar) }
 						}
+					} header: {
+						Text("Avatar")
+					} footer: {
+						Text("How nolune looks in this profile's chats. Everyone here sees the same one, and nolune can change it when asked.")
 					}
-				} header: {
-					Text("Soul")
-				} footer: {
-					Text("Who nolune is for \(settings.name): its character, what it cares about, how it talks. Every chat starts with it, and nolune changes it too when you ask it to be different.")
-				}
-				Section {
-					ForEach(settings.members) { member in
-						memberRow(member)
-					}
-					if settings.others.isEmpty {
-						Text("Everyone is already a member.")
-							.foregroundStyle(.secondary)
-					} else {
-						Menu {
-							ForEach(settings.others, id: \.self) { other in
-								Button(other) { add(other) }
+					Section {
+						TextField("You're warm and a little playful, and you keep answers short. With the kids you explain things simply and never talk down to them. When you don't know something, you say so.", text: $soul, axis: .vertical)
+							.lineLimit(4...16)
+						if soul != settings.soul {
+							HStack {
+								Text(verbatim: "\(soul.count) / \(settings.maxSoul)")
+									.font(.caption.monospacedDigit())
+									.foregroundStyle(soul.count > settings.maxSoul ? Palette.plain.destructive : .secondary)
+								Spacer()
+								Button("Cancel") { soul = settings.soul }
+									.buttonStyle(.borderless)
+								Button("Save") { act { try await client.writeSoul(slug, soul) } }
+									.buttonStyle(.borderless)
+									.disabled(soul.count > settings.maxSoul)
 							}
-						} label: {
-							Label("Choose someone to add", systemImage: "person.badge.plus")
 						}
+					} header: {
+						Text("Soul")
+					} footer: {
+						Text("Who nolune is for \(settings.name): its character, what it cares about, how it talks. Every chat starts with it, and nolune changes it too when you ask it to be different.")
 					}
-				} header: {
-					Text("Members")
-				} footer: {
-					Text("Everyone here sees and writes in the same chats, and can ask nolune for anything.")
+					Section {
+						ForEach(settings.members) { member in
+							memberRow(member)
+						}
+						if settings.others.isEmpty {
+							Text("Everyone is already a member.")
+								.foregroundStyle(.secondary)
+						} else {
+							Menu {
+								ForEach(settings.others, id: \.self) { other in
+									Button(other) { add(other) }
+								}
+							} label: {
+								Label("Choose someone to add", systemImage: "person.badge.plus")
+							}
+						}
+					} header: {
+						Text("Members")
+					} footer: {
+						Text("Everyone here sees and writes in the same chats, and can ask nolune for anything.")
+					}
+					Section {
+						Button("Delete this profile", role: .destructive) { deleting = true }
+					} footer: {
+						Text("Deletes all its chats for everyone. The folder is moved to ~/.nolune/trash.")
+					}
+				} else if problem == nil {
+					ProgressView()
+						.frame(maxWidth: .infinity)
 				}
-				Section {
-					Button("Delete this profile", role: .destructive) { deleting = true }
-				} footer: {
-					Text("Deletes all its chats for everyone. The folder is moved to ~/.nolune/trash.")
-				}
-			} else if problem == nil {
-				ProgressView()
-					.frame(maxWidth: .infinity)
 			}
+			.listRowBackground(palette.muted)
 		}
+		.pageBackground(palette)
 		.navigationTitle("People & profile")
 		.refreshable { await load() }
 		.task { await load() }
@@ -274,7 +279,7 @@ private struct AvatarPicker: View {
 						.padding(8)
 						.background(
 							Circle()
-								.strokeBorder(avatar == selected ? Color.accentColor : Color.clear, lineWidth: 2)
+								.strokeBorder(avatar == selected ? Palette.plain.primary : Color.clear, lineWidth: 2)
 						)
 				}
 				.buttonStyle(.plain)
@@ -288,6 +293,7 @@ private struct AvatarPicker: View {
 
 /// Which people note is someone's, with a look at what each says; or a new one.
 private struct NoteChooser: View {
+	@Environment(\.palette) private var palette
 	let who: String
 	let linking: Bool
 	let candidates: [PersonNote]
@@ -299,44 +305,48 @@ private struct NoteChooser: View {
 	var body: some View {
 		NavigationStack {
 			List {
-				Section {
-					ForEach(candidates) { note in
-						option(note.path) {
-							VStack(alignment: .leading, spacing: 3) {
-								HStack {
-									Text(verbatim: note.title ?? note.path)
-										.font(.body.weight(.medium))
-									if note.path == current {
-										Text("now")
+				Group {
+					Section {
+						ForEach(candidates) { note in
+							option(note.path) {
+								VStack(alignment: .leading, spacing: 3) {
+									HStack {
+										Text(verbatim: note.title ?? note.path)
+											.font(.body.weight(.medium))
+										if note.path == current {
+											Text("now")
+												.font(.caption)
+												.foregroundStyle(.secondary)
+										}
+									}
+									Text(verbatim: note.path)
+										.font(.caption.monospaced())
+										.foregroundStyle(.secondary)
+									if !note.aliases.isEmpty {
+										Text("Also called: \(note.aliases.joined(separator: ", "))")
+											.font(.caption)
+											.foregroundStyle(.secondary)
+									}
+									ForEach(note.facts.prefix(3), id: \.self) { fact in
+										Text(verbatim: "• \(fact)")
 											.font(.caption)
 											.foregroundStyle(.secondary)
 									}
 								}
-								Text(verbatim: note.path)
-									.font(.caption.monospaced())
-									.foregroundStyle(.secondary)
-								if !note.aliases.isEmpty {
-									Text("Also called: \(note.aliases.joined(separator: ", "))")
-										.font(.caption)
-										.foregroundStyle(.secondary)
-								}
-								ForEach(note.facts.prefix(3), id: \.self) { fact in
-									Text(verbatim: "• \(fact)")
-										.font(.caption)
-										.foregroundStyle(.secondary)
-								}
 							}
 						}
-					}
-					option("new") {
-						Text("Someone else: start a new note")
-					}
-				} footer: {
-					if picked != "new" {
-						Text("\(who) will be able to read everything in this profile's memory, this note too. Check that it holds nothing meant to be kept from them, like a surprise.")
+						option("new") {
+							Text("Someone else: start a new note")
+						}
+					} footer: {
+						if picked != "new" {
+							Text("\(who) will be able to read everything in this profile's memory, this note too. Check that it holds nothing meant to be kept from them, like a surprise.")
+						}
 					}
 				}
+				.listRowBackground(palette.muted)
 			}
+			.pageBackground(palette)
 			.navigationTitle(linking ? String(localized: "Which note is about \(who)?") : String(localized: "Does nolune know \(who) already?"))
 			.navigationBarTitleDisplayMode(.inline)
 			.toolbar {
@@ -360,11 +370,11 @@ private struct NoteChooser: View {
 		} label: {
 			HStack(alignment: .top) {
 				label()
-					.foregroundStyle(Color.primary)
+					.foregroundStyle(Palette.plain.foreground)
 				Spacer()
 				if picked == value {
 					Image(systemName: "checkmark")
-						.foregroundStyle(Color.accentColor)
+						.foregroundStyle(Palette.plain.primary)
 				}
 			}
 		}

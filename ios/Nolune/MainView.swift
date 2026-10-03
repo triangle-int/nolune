@@ -23,6 +23,9 @@ struct MainView: View {
 		let expand: String?
 	}
 
+	/// The open profile's colors, as the web has its pages (Palette.swift).
+	private var palette: Palette { .of(avatar: family.profile?.avatar) }
+
 	var body: some View {
 		Group {
 			if #available(iOS 17.0, *) {
@@ -31,10 +34,15 @@ struct MainView: View {
 				NavigationSplitView { sidebar } detail: { detail }
 			}
 		}
+		// The web's colors: its greys, and near black (a light grey in the dark) for what's tapped.
+		.environment(\.palette, palette)
+		.tint(palette.primary)
 		.sheet(item: $bell) { sheet in
 			BellView(family: family, expand: sheet.expand) { place in
 				selection = .chat(place.conversationId)
 			}
+			.environment(\.palette, palette)
+			.tint(palette.primary)
 		}
 		.alert(
 			family.problem ?? "",
@@ -90,7 +98,9 @@ struct MainView: View {
 					.id([family.slug ?? "", String(describing: selection), newChatFolder ?? ""])
 			} else {
 				Text("Pick a chat, or start a new one.")
-					.foregroundStyle(.secondary)
+					.foregroundStyle(palette.mutedForeground)
+					.frame(maxWidth: .infinity, maxHeight: .infinity)
+					.background(palette.background)
 			}
 		}
 	}

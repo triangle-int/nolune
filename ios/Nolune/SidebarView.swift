@@ -7,6 +7,7 @@ import SwiftUI
  * or their menu; the toolbar switches profiles and has the bell and the account.
  */
 struct SidebarView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	@Binding var selection: Destination?
 	let showBell: () -> Void
@@ -45,12 +46,18 @@ struct SidebarView: View {
 
 	var body: some View {
 		List(selection: $selection) {
-			if search.isEmpty {
-				browsing
-			} else {
-				results
+			Group {
+				if search.isEmpty {
+					browsing
+				} else {
+					results
+				}
 			}
+			.listRowBackground(Color.clear)
+			.listRowSeparator(.hidden)
 		}
+		.scrollContentBackground(.hidden)
+		.background(palette.sidebar)
 		.listStyle(.sidebar)
 		.navigationTitle(family.profile?.name ?? "nolune")
 		.toolbarTitleMenu { profileMenu }

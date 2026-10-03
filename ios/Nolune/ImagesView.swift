@@ -8,6 +8,7 @@ import SwiftUI
  * sentence and shape, and generate: that starts a chat which makes the picture, and opens it.
  */
 struct ImagesView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	let slug: String
 	/// Opens the chat a picture is being made in.
@@ -54,11 +55,11 @@ struct ImagesView: View {
 							}
 						} icon: {
 							Image(systemName: "exclamationmark.triangle")
-								.foregroundStyle(.orange)
+								.foregroundStyle(Palette.plain.warning)
 						}
 						.padding(12)
 						.frame(maxWidth: .infinity, alignment: .leading)
-						.background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.orange.opacity(0.1)))
+						.background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.plain.warning.opacity(0.1)))
 					}
 					if groups.count > 1 {
 						Picker("Template groups", selection: Binding(get: { group ?? groups[0] }, set: { group = $0 })) {
@@ -90,6 +91,7 @@ struct ImagesView: View {
 			.frame(maxWidth: 900)
 			.frame(maxWidth: .infinity)
 		}
+		.background(palette.background)
 		.navigationTitle("Images")
 		.environment(\.noluneClient, client)
 		.refreshable { await load() }
@@ -106,7 +108,7 @@ struct ImagesView: View {
 			.padding(.vertical, 6)
 			.frame(maxWidth: 780)
 			.frame(maxWidth: .infinity)
-			.background(.bar)
+			.background(palette.background)
 		}
 		.sheet(item: $picked) { template in
 			TemplateSheet(template: template, slug: slug, client: client) { chat in
@@ -149,6 +151,7 @@ struct ImagesView: View {
 
 /// A template: its cover, or its icon on its color, and its name.
 private struct TemplateTile: View {
+	@Environment(\.palette) private var palette
 	let template: PictureTemplate
 	let cover: URL?
 
@@ -156,7 +159,7 @@ private struct TemplateTile: View {
 		VStack(alignment: .leading, spacing: 6) {
 			ZStack {
 				RoundedRectangle(cornerRadius: 14, style: .continuous)
-					.fill(Color(hex: template.color) ?? Color(.secondarySystemBackground))
+					.fill(Color(hex: template.color) ?? palette.muted)
 				if let cover {
 					AsyncImage(url: cover) { image in
 						image.resizable().scaledToFill()
@@ -183,6 +186,7 @@ private struct TemplateTile: View {
  * anything else to add, and the shape. Generate starts the chat.
  */
 private struct TemplateSheet: View {
+	@Environment(\.palette) private var palette
 	let template: PictureTemplate
 	let slug: String
 	let client: Client
@@ -219,73 +223,77 @@ private struct TemplateSheet: View {
 	var body: some View {
 		NavigationStack {
 			Form {
-				Section {
-					Text(verbatim: template.description)
-						.foregroundStyle(.secondary)
-					Text(verbatim: template.sentence(with: values, picture: pictures.items.isEmpty ? "" : (template.imageLabel ?? String(localized: "Picture")).lowercased()))
-						.font(.title3.weight(.semibold))
-				}
-				if template.image != "none" {
-					Section(template.imageLabel ?? String(localized: "Picture")) {
-						ForEach(pictures.items) { item in
-							HStack {
-								if let preview = item.preview {
-									Image(uiImage: preview)
-										.resizable()
-										.scaledToFill()
-										.frame(width: 56, height: 56)
-										.clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-								}
-								Text(verbatim: item.problem ?? item.name)
-									.foregroundStyle(item.problem == nil ? Color.primary : Color.red)
-								Spacer()
-								if item.upload == nil, item.problem == nil { ProgressView() }
-								Button {
-									pictures.remove(item.id)
-								} label: {
-									Image(systemName: "xmark.circle.fill")
-										.foregroundStyle(.secondary)
-								}
-								.buttonStyle(.borderless)
-							}
-						}
-						if pictures.items.count < template.maxImages {
-							if drawn {
-								Button("Start drawing") { drawing = true }
-								Button("Use a photo of a drawing") { photosShown = true }
-							} else {
-								if UIImagePickerController.isSourceTypeAvailable(.camera) {
-									Button("Take a photo") { cameraShown = true }
-								}
-								Button("Choose a photo") { photosShown = true }
-							}
-						}
-					}
-				}
-				if !template.settings.isEmpty {
+				Group {
 					Section {
-						ForEach(template.settings, id: \.id) { setting in
-							row(setting)
+						Text(verbatim: template.description)
+							.foregroundStyle(.secondary)
+						Text(verbatim: template.sentence(with: values, picture: pictures.items.isEmpty ? "" : (template.imageLabel ?? String(localized: "Picture")).lowercased()))
+							.font(.title3.weight(.semibold))
+					}
+					if template.image != "none" {
+						Section(template.imageLabel ?? String(localized: "Picture")) {
+							ForEach(pictures.items) { item in
+								HStack {
+									if let preview = item.preview {
+										Image(uiImage: preview)
+											.resizable()
+											.scaledToFill()
+											.frame(width: 56, height: 56)
+											.clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+									}
+									Text(verbatim: item.problem ?? item.name)
+										.foregroundStyle(item.problem == nil ? Palette.plain.foreground : Palette.plain.destructive)
+									Spacer()
+									if item.upload == nil, item.problem == nil { ProgressView() }
+									Button {
+										pictures.remove(item.id)
+									} label: {
+										Image(systemName: "xmark.circle.fill")
+											.foregroundStyle(.secondary)
+									}
+									.buttonStyle(.borderless)
+								}
+							}
+							if pictures.items.count < template.maxImages {
+								if drawn {
+									Button("Start drawing") { drawing = true }
+									Button("Use a photo of a drawing") { photosShown = true }
+								} else {
+									if UIImagePickerController.isSourceTypeAvailable(.camera) {
+										Button("Take a photo") { cameraShown = true }
+									}
+									Button("Choose a photo") { photosShown = true }
+								}
+							}
+						}
+					}
+					if !template.settings.isEmpty {
+						Section {
+							ForEach(template.settings, id: \.id) { setting in
+								row(setting)
+							}
+						}
+					}
+					Section {
+						TextField("Add anything else…", text: $extra, axis: .vertical)
+						Picker("Shape", selection: $shape) {
+							Text("Square").tag("square")
+							Text("Portrait").tag("portrait")
+							Text("Landscape").tag("landscape")
+							Text("Auto").tag("auto")
+						}
+					} footer: {
+						if let problem {
+							Text(verbatim: problem)
+								.foregroundStyle(Palette.plain.destructive)
+						} else if missingPicture {
+							Text(drawn ? "Add a drawing first." : "Add a photo first.")
 						}
 					}
 				}
-				Section {
-					TextField("Add anything else…", text: $extra, axis: .vertical)
-					Picker("Shape", selection: $shape) {
-						Text("Square").tag("square")
-						Text("Portrait").tag("portrait")
-						Text("Landscape").tag("landscape")
-						Text("Auto").tag("auto")
-					}
-				} footer: {
-					if let problem {
-						Text(verbatim: problem)
-							.foregroundStyle(.red)
-					} else if missingPicture {
-						Text(drawn ? "Add a drawing first." : "Add a photo first.")
-					}
-				}
+				.listRowBackground(palette.muted)
 			}
+			.pageBackground(palette)
 			.navigationTitle(template.title)
 			.navigationBarTitleDisplayMode(.inline)
 			.toolbar {
@@ -404,6 +412,7 @@ private extension Color {
 
 /// A drawing to make a picture from: PencilKit's canvas, square and white, as a 1024-point PNG.
 struct DrawingView: View {
+	@Environment(\.palette) private var palette
 	let done: (Data) -> Void
 	@Environment(\.dismiss) private var dismiss
 	@State private var canvas = PKCanvasView()
@@ -416,7 +425,7 @@ struct DrawingView: View {
 					.frame(width: side, height: side)
 					.frame(maxWidth: .infinity, maxHeight: .infinity)
 			}
-			.background(Color(.systemGroupedBackground))
+			.background(palette.background)
 			.navigationTitle("Draw")
 			.navigationBarTitleDisplayMode(.inline)
 			.toolbar {

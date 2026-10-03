@@ -6,6 +6,7 @@ import SwiftUI
  * opens to read, edit, move (or merge) and forget, as the web page does.
  */
 struct MemoryView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	let slug: String
 	/// Opens another screen: the person's own card, which is the web's for now.
@@ -18,52 +19,56 @@ struct MemoryView: View {
 
 	var body: some View {
 		List {
-			if let memory {
-				Section {
-					Toggle("Learn from chats", isOn: Binding(get: { memory.learnFromChats }, set: { learn($0) }))
-				} footer: {
-					Text("When a chat has been quiet for a couple of minutes, nolune reads it over and saves what's worth remembering. That's one short extra request to the chat's model each time. When this is off, nolune saves only what it thinks of while chatting.")
-				}
-				if !memory.recent.isEmpty {
+			Group {
+				if let memory {
 					Section {
-						ForEach(allChanges ? memory.recent : Array(memory.recent.prefix(4))) { change in
-							ChangeRow(change: change, me: family.me?.id, title: title(of: change.note)) { await undo(change) }
-						}
-						if !allChanges, memory.recent.count > 4 {
-							Button("Show all \(memory.recent.count)") { allChanges = true }
-						}
-					} header: {
-						Text("Saved from chats")
+						Toggle("Learn from chats", isOn: Binding(get: { memory.learnFromChats }, set: { learn($0) }))
 					} footer: {
-						Text("What nolune noted by itself after chats went quiet, in the last two weeks.")
+						Text("When a chat has been quiet for a couple of minutes, nolune reads it over and saves what's worth remembering. That's one short extra request to the chat's model each time. When this is off, nolune saves only what it thinks of while chatting.")
 					}
-				}
-				Section {
-					noteRow(core(memory), pinned: true)
-				} header: {
-					Text("Core")
-				}
-				if !memory.cards.isEmpty {
+					if !memory.recent.isEmpty {
+						Section {
+							ForEach(allChanges ? memory.recent : Array(memory.recent.prefix(4))) { change in
+								ChangeRow(change: change, me: family.me?.id, title: title(of: change.note)) { await undo(change) }
+							}
+							if !allChanges, memory.recent.count > 4 {
+								Button("Show all \(memory.recent.count)") { allChanges = true }
+							}
+						} header: {
+							Text("Saved from chats")
+						} footer: {
+							Text("What nolune noted by itself after chats went quiet, in the last two weeks.")
+						}
+					}
 					Section {
-						ForEach(memory.cards) { card in
-							cardRow(card)
-						}
+						noteRow(core(memory), pinned: true)
 					} header: {
-						Text("Cards")
-					} footer: {
-						Text("Each member's card says what they told nolune about themselves that they'd tell anyone. It goes with them into every profile they're in, and every chat starts with it. Only they change it.")
+						Text("Core")
 					}
-				}
-				ForEach(groups(memory)) { group in
-					Section(group.title) {
-						ForEach(group.notes) { note in noteRow(note) }
+					if !memory.cards.isEmpty {
+						Section {
+							ForEach(memory.cards) { card in
+								cardRow(card)
+							}
+						} header: {
+							Text("Cards")
+						} footer: {
+							Text("Each member's card says what they told nolune about themselves that they'd tell anyone. It goes with them into every profile they're in, and every chat starts with it. Only they change it.")
+						}
 					}
+					ForEach(groups(memory)) { group in
+						Section(group.title) {
+							ForEach(group.notes) { note in noteRow(note) }
+						}
+					}
+				} else if problem == nil {
+					ProgressView()
+						.frame(maxWidth: .infinity)
 				}
-			} else if problem == nil {
-				ProgressView()
-					.frame(maxWidth: .infinity)
 			}
+			.listRowBackground(palette.muted)
 		}
+		.pageBackground(palette)
 		.navigationTitle("Memory")
 		.refreshable { await load() }
 		.task { await load() }
@@ -80,7 +85,7 @@ struct MemoryView: View {
 		} label: {
 			VStack(alignment: .leading, spacing: 3) {
 				HStack(spacing: 6) {
-					if pinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.orange) }
+					if pinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(Palette.plain.warning) }
 					Text(verbatim: pinned ? String(localized: "Core") : MemoryCategory.title(of: note))
 						.font(.body.weight(.medium))
 				}
@@ -284,6 +289,7 @@ private struct ChangeRow: View {
 
 /// A note: to read, edit, move or merge, and forget.
 private struct NoteView: View {
+	@Environment(\.palette) private var palette
 	let note: MemoryOverview.Note
 	let slug: String
 	let client: Client
@@ -312,12 +318,13 @@ private struct NoteView: View {
 				if MemoryCategory.of(note.path) == nil {
 					Label("From before memory had categories: nolune reads it, but adds nothing to it. Move it into a category to keep it growing.", systemImage: "exclamationmark.triangle")
 						.font(.footnote)
-						.foregroundStyle(.orange)
+						.foregroundStyle(Palette.plain.warning)
 				}
 			}
 			.padding()
 			.frame(maxWidth: .infinity, alignment: .leading)
 		}
+		.background(palette.background)
 		.navigationTitle(pinned ? String(localized: "Core") : MemoryCategory.title(of: note))
 		.navigationBarTitleDisplayMode(.inline)
 		.toolbar {
@@ -405,12 +412,12 @@ private struct NoteEditor: View {
 				if let maxChars {
 					Text(verbatim: "\(text.count) / \(maxChars)")
 						.font(.caption.monospacedDigit())
-						.foregroundStyle(text.count > maxChars ? .red : .secondary)
+						.foregroundStyle(text.count > maxChars ? Palette.plain.destructive : .secondary)
 				}
 				if let problem {
 					Text(verbatim: problem)
 						.font(.footnote)
-						.foregroundStyle(.red)
+						.foregroundStyle(Palette.plain.destructive)
 				}
 			}
 			.padding()
@@ -454,6 +461,7 @@ private struct NoteEditor: View {
 
 /// Where a note goes: a category, someone's note, or a project's; into one that's there, it merges.
 private struct MoveNote: View {
+	@Environment(\.palette) private var palette
 	let note: MemoryOverview.Note
 	let notes: [MemoryOverview.Note]
 	let move: (String) async -> Void
@@ -483,11 +491,11 @@ private struct MoveNote: View {
 		} label: {
 			HStack {
 				Text(verbatim: name)
-					.foregroundStyle(Color.primary)
+					.foregroundStyle(Palette.plain.foreground)
 				Spacer()
 				if target == value {
 					Image(systemName: "checkmark")
-						.foregroundStyle(Color.accentColor)
+						.foregroundStyle(Palette.plain.primary)
 				}
 			}
 		}
@@ -497,34 +505,38 @@ private struct MoveNote: View {
 	var body: some View {
 		NavigationStack {
 			Form {
-				Section {
-					ForEach(MemoryCategory.notes.filter { $0 != .projects }, id: \.self) { category in
-						option(category.name, "\(category.rawValue).md")
+				Group {
+					Section {
+						ForEach(MemoryCategory.notes.filter { $0 != .projects }, id: \.self) { category in
+							option(category.name, "\(category.rawValue).md")
+						}
+					} header: {
+						Text("Categories")
+					} footer: {
+						Text("Choose where it belongs. If that note is there already, the two become one.")
 					}
-				} header: {
-					Text("Categories")
-				} footer: {
-					Text("Choose where it belongs. If that note is there already, the two become one.")
+					Section(MemoryCategory.people.name) {
+						ForEach(notes.filter { MemoryCategory.of($0.path) == .people && $0.path != note.path }) { person in
+							option(MemoryCategory.title(of: person), person.path)
+						}
+						option(String(localized: "Someone new…"), Self.newPerson)
+						if target == Self.newPerson {
+							TextField("Their name", text: $newName)
+						}
+					}
+					Section(MemoryCategory.projects.name) {
+						ForEach(notes.filter { MemoryCategory.of($0.path) == .projects && $0.path != note.path }) { project in
+							option(MemoryCategory.title(of: project), project.path)
+						}
+						option(String(localized: "A new project…"), Self.newProject)
+						if target == Self.newProject {
+							TextField("Project name", text: $newName)
+						}
+					}
 				}
-				Section(MemoryCategory.people.name) {
-					ForEach(notes.filter { MemoryCategory.of($0.path) == .people && $0.path != note.path }) { person in
-						option(MemoryCategory.title(of: person), person.path)
-					}
-					option(String(localized: "Someone new…"), Self.newPerson)
-					if target == Self.newPerson {
-						TextField("Their name", text: $newName)
-					}
-				}
-				Section(MemoryCategory.projects.name) {
-					ForEach(notes.filter { MemoryCategory.of($0.path) == .projects && $0.path != note.path }) { project in
-						option(MemoryCategory.title(of: project), project.path)
-					}
-					option(String(localized: "A new project…"), Self.newProject)
-					if target == Self.newProject {
-						TextField("Project name", text: $newName)
-					}
-				}
+				.listRowBackground(palette.muted)
 			}
+			.pageBackground(palette)
 			.navigationTitle("Move \"\(MemoryCategory.title(of: note))\"")
 			.navigationBarTitleDisplayMode(.inline)
 			.toolbar {

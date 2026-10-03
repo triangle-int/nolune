@@ -37,11 +37,11 @@ struct ActivityView: View {
 						let blocked = statuses.filter { $0 == .blocked }.count
 						if failed > 0, technical {
 							Text("· \(failed) failed")
-								.foregroundStyle(.red)
+								.foregroundStyle(Palette.plain.destructive)
 						}
 						if blocked > 0 {
 							Text("· \(blocked) blocked")
-								.foregroundStyle(.orange)
+								.foregroundStyle(Palette.plain.warning)
 						}
 					}
 					if !open, !pictures.isEmpty {
@@ -161,6 +161,7 @@ private struct StepRow: View {
 
 /// A command nolune ran: what it does, how it ended, and opened, the command and its output.
 private struct CommandStep: View {
+	@Environment(\.palette) private var palette
 	let command: Step.Command
 	let context: ChatContext
 	let showsOutput: Bool
@@ -210,9 +211,9 @@ private struct CommandStep: View {
 		} else if let result {
 			switch result.status {
 			case .failed:
-				Text(technical ? "failed" : "didn't work").foregroundStyle(.red)
+				Text(technical ? "failed" : "didn't work").foregroundStyle(Palette.plain.destructive)
 			case .blocked:
-				Text("blocked").foregroundStyle(.orange)
+				Text("blocked").foregroundStyle(Palette.plain.warning)
 			case .stopped:
 				Text("stopped").foregroundStyle(.secondary)
 			case .done:
@@ -273,7 +274,7 @@ private struct CommandStep: View {
 			}
 		}
 		.padding(10)
-		.background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(.secondarySystemBackground)))
+		.background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.muted.opacity(0.5)))
 	}
 
 	/// What it printed: all of it once it's done, as it comes while it runs.
@@ -291,8 +292,8 @@ private struct CommandStep: View {
 
 	private var outputColor: Color {
 		switch result?.status {
-		case .failed?: return .red
-		case .blocked?: return .orange
+		case .failed?: return Palette.plain.destructive
+		case .blocked?: return Palette.plain.warning
 		default: return .primary
 		}
 	}

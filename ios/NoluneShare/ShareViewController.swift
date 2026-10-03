@@ -215,6 +215,7 @@ final class ShareModel: ObservableObject {
 }
 
 struct ShareView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var model: ShareModel
 
 	var body: some View {
@@ -237,6 +238,7 @@ struct ShareView: View {
 			}
 			.navigationTitle("nolune")
 			.navigationBarTitleDisplayMode(.inline)
+			.background(palette.background)
 			.toolbar {
 				ToolbarItem(placement: .cancellationAction) {
 					Button("Cancel") { model.close() }
@@ -256,76 +258,82 @@ struct ShareView: View {
 				}
 			}
 		}
+		// The web's near black (a light grey in the dark) for what's tapped, as in the app.
+		.tint(palette.primary)
 	}
 
 	private var form: some View {
 		Form {
-			if model.reading {
-				ProgressView()
-					.frame(maxWidth: .infinity)
-			}
-			if !model.files.isEmpty {
+			Group {
+				if model.reading {
+					ProgressView()
+						.frame(maxWidth: .infinity)
+				}
+				if !model.files.isEmpty {
+					Section {
+						ForEach(model.files) { file in
+							HStack(spacing: 12) {
+								if let thumbnail = file.thumbnail {
+									Image(uiImage: thumbnail)
+										.resizable()
+										.scaledToFill()
+										.frame(width: 44, height: 44)
+										.clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+								} else {
+									Image(systemName: "doc")
+										.font(.title2)
+										.frame(width: 44, height: 44)
+										.foregroundStyle(.secondary)
+								}
+								VStack(alignment: .leading, spacing: 2) {
+									Text(verbatim: file.name)
+										.lineLimit(1)
+									Text(verbatim: ByteCountFormatter.string(fromByteCount: Int64(file.bytes), countStyle: .file))
+										.font(.caption)
+										.foregroundStyle(.secondary)
+								}
+							}
+						}
+					}
+				}
 				Section {
-					ForEach(model.files) { file in
-						HStack(spacing: 12) {
-							if let thumbnail = file.thumbnail {
-								Image(uiImage: thumbnail)
-									.resizable()
-									.scaledToFill()
-									.frame(width: 44, height: 44)
-									.clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-							} else {
-								Image(systemName: "doc")
-									.font(.title2)
-									.frame(width: 44, height: 44)
-									.foregroundStyle(.secondary)
-							}
-							VStack(alignment: .leading, spacing: 2) {
-								Text(verbatim: file.name)
-									.lineLimit(1)
-								Text(verbatim: ByteCountFormatter.string(fromByteCount: Int64(file.bytes), countStyle: .file))
-									.font(.caption)
-									.foregroundStyle(.secondary)
+					TextField("Add a message", text: $model.text, axis: .vertical)
+						.lineLimit(3...10)
+				} footer: {
+					if let sending = model.sending {
+						Text(verbatim: sending)
+					} else if let problem = model.problem {
+						Text(verbatim: problem)
+							.foregroundStyle(.red)
+					}
+				}
+				if model.profiles.count > 1 {
+					Section("Profile") {
+						Picker("Profile", selection: $model.slug) {
+							ForEach(model.profiles) { profile in
+								Label {
+									Text(verbatim: profile.name)
+								} icon: {
+									AvatarView(avatar: profile.avatar)
+										.frame(width: 24, height: 24)
+								}
+								.tag(Optional(profile.slug))
 							}
 						}
+						.pickerStyle(.inline)
+						.labelsHidden()
+					}
+				}
+				Section("Send to") {
+					row(String(localized: "New chat"), chat: nil)
+					ForEach(model.chats) { chat in
+						row(chat.title.isEmpty ? String(localized: "New chat") : chat.title, chat: chat.id)
 					}
 				}
 			}
-			Section {
-				TextField("Add a message", text: $model.text, axis: .vertical)
-					.lineLimit(3...10)
-			} footer: {
-				if let sending = model.sending {
-					Text(verbatim: sending)
-				} else if let problem = model.problem {
-					Text(verbatim: problem)
-						.foregroundStyle(.red)
-				}
-			}
-			if model.profiles.count > 1 {
-				Section("Profile") {
-					Picker("Profile", selection: $model.slug) {
-						ForEach(model.profiles) { profile in
-							Label {
-								Text(verbatim: profile.name)
-							} icon: {
-								AvatarView(avatar: profile.avatar)
-									.frame(width: 24, height: 24)
-							}
-							.tag(Optional(profile.slug))
-						}
-					}
-					.pickerStyle(.inline)
-					.labelsHidden()
-				}
-			}
-			Section("Send to") {
-				row(String(localized: "New chat"), chat: nil)
-				ForEach(model.chats) { chat in
-					row(chat.title.isEmpty ? String(localized: "New chat") : chat.title, chat: chat.id)
-				}
-			}
+			.listRowBackground(palette.muted)
 		}
+		.pageBackground(palette)
 		.disabled(model.sending != nil || model.sent)
 	}
 

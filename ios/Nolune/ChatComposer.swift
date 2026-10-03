@@ -7,6 +7,7 @@ import SwiftUI
  * wrong, or the disclaimer.
  */
 struct ChatComposer: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var chat: Conversation
 	@ObservedObject var family: Family
 	/// Shows the newest message, as the person writes or sends.
@@ -67,7 +68,7 @@ struct ChatComposer: View {
 					Text("Reconnecting…")
 				} else if let problem = chat.problem {
 					Text(verbatim: problem)
-						.foregroundStyle(.red)
+						.foregroundStyle(Palette.plain.destructive)
 				} else {
 					Text("nolune can make mistakes, and it can change files on this computer.")
 				}
@@ -82,7 +83,7 @@ struct ChatComposer: View {
 		.padding(.bottom, 6)
 		.frame(maxWidth: 780)
 		.frame(maxWidth: .infinity)
-		.background(.bar)
+		.background(palette.background)
 		.onChange(of: text) { typed in chat.typed(typed) }
 		.task {
 			if family.options == nil { await family.loadOptions() }
@@ -222,7 +223,7 @@ struct ModelMenu: View {
 			.foregroundStyle(.secondary)
 			.padding(.horizontal, 10)
 			.frame(height: 34)
-			.background(Capsule().strokeBorder(Color(.separator)))
+			.background(Capsule().strokeBorder(Palette.plain.border))
 		}
 		.accessibilityLabel(Text("Model"))
 		.accessibilityValue(Text(verbatim: "\(presetName), \(Effort.label(effort))"))
@@ -265,7 +266,7 @@ struct CommandMenu: View {
 				if mode == "unrestricted" {
 					Label("Unrestricted", systemImage: "exclamationmark.shield")
 						.font(.subheadline)
-						.foregroundStyle(.orange)
+						.foregroundStyle(Palette.plain.warning)
 						.padding(.horizontal, 10)
 				} else {
 					Image(systemName: "checkmark.shield")
@@ -274,7 +275,7 @@ struct CommandMenu: View {
 				}
 			}
 			.frame(height: 34)
-			.background(Capsule().strokeBorder(Color(.separator)))
+			.background(Capsule().strokeBorder(Palette.plain.border))
 		}
 		.accessibilityLabel(mode == "unrestricted" ? Text("Commands: unrestricted") : Text("Commands: auto mode"))
 	}
@@ -321,7 +322,7 @@ struct FolderMenu: View {
 			}
 			.foregroundStyle(.secondary)
 			.frame(height: 34)
-			.background(Capsule().strokeBorder(Color(.separator)))
+			.background(Capsule().strokeBorder(Palette.plain.border))
 		}
 		.accessibilityLabel(Text("Folder"))
 	}
@@ -329,6 +330,7 @@ struct FolderMenu: View {
 
 /// Skills and services that changed since the chat's tools were loaded, and loading them.
 private struct ToolChangesBanner: View {
+	@Environment(\.palette) private var palette
 	let changes: ToolChanges
 	let reload: () -> Void
 
@@ -344,7 +346,7 @@ private struct ToolChangesBanner: View {
 		.foregroundStyle(.secondary)
 		.padding(10)
 		.frame(maxWidth: .infinity, alignment: .leading)
-		.background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.secondarySystemBackground)))
+		.background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(palette.muted))
 	}
 
 	private var lines: [String] {

@@ -182,8 +182,13 @@ enum MarkdownInline {
 				text[range].link = links.media(Self.target(image))?.url
 				text[range].imageURL = nil
 			}
+			// As the web has them: links in the text's color (the tint), underlined in a light grey;
+			// code on the `secondary` grey.
+			if text[range].link != nil {
+				text[range].underlineStyle = Text.LineStyle(pattern: .solid, color: Palette.plain.color(\.ring))
+			}
 			if run.inlinePresentationIntent?.contains(.code) == true {
-				text[range].backgroundColor = Color.secondary.opacity(0.14)
+				text[range].backgroundColor = Palette.plain.color(\.secondary)
 			}
 		}
 		return text
@@ -199,6 +204,7 @@ enum MarkdownInline {
 // MARK: - Blocks
 
 private struct CodeBlock: View {
+	@Environment(\.palette) private var palette
 	let language: String?
 	let code: String
 	@State private var copied = false
@@ -227,8 +233,8 @@ private struct CodeBlock: View {
 					.padding(12)
 			}
 		}
-		.background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(.secondarySystemBackground)))
-		.overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color(.separator), lineWidth: 0.5))
+		.background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.muted.opacity(0.5)))
+		.overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.plain.border))
 	}
 
 	private func copy() {
@@ -262,7 +268,7 @@ private struct ListBlock: View {
 	@ViewBuilder private func marker(_ index: Int, _ item: MarkdownList.Item) -> some View {
 		if let checked = item.checked {
 			Image(systemName: checked ? "checkmark.square.fill" : "square")
-				.foregroundStyle(checked ? Color.accentColor : Color.secondary)
+				.foregroundStyle(checked ? Palette.plain.primary : Color.secondary)
 				.accessibilityLabel(checked ? Text("Done") : Text("Not done"))
 		} else if let start = list.start {
 			Text(verbatim: "\(start + index).")
@@ -296,7 +302,7 @@ private struct TableBlock: View {
 					}
 				}
 			}
-			.overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color(.separator), lineWidth: 0.5))
+			.overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Palette.plain.border))
 			.clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 		}
 	}
@@ -343,6 +349,7 @@ private struct MediaBlock: View {
 
 /// A picture from the family's nolune (the session's cookie goes with it), as it loads.
 struct RemotePicture: View {
+	@Environment(\.palette) private var palette
 	let url: URL
 
 	var body: some View {
@@ -359,7 +366,7 @@ struct RemotePicture: View {
 					.frame(width: 120, height: 90)
 			default:
 				RoundedRectangle(cornerRadius: 10)
-					.fill(Color(.secondarySystemBackground))
+					.fill(palette.muted)
 					.frame(width: 160, height: 120)
 					.overlay(ProgressView())
 			}
@@ -370,6 +377,7 @@ struct RemotePicture: View {
 
 /// A file to open: its name and a sign of what it is.
 struct FileCard: View {
+	@Environment(\.palette) private var palette
 	let name: String
 	var detail: String?
 	let open: () -> Void
@@ -395,7 +403,7 @@ struct FileCard: View {
 			}
 			.padding(10)
 			.frame(maxWidth: 320, alignment: .leading)
-			.background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(.secondarySystemBackground)))
+			.background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.muted))
 		}
 		.buttonStyle(.plain)
 	}

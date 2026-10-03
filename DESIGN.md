@@ -1922,7 +1922,8 @@ picture, or their initial on a colored circle (see [Web UI](#web-ui), "Your name
   character select: the pick up close on a starry stage lit in its color, which pops in with a
   squash when it changes, next to the roster, whose tiles take their avatar's color and show its
   working motion on hover.
-- **Tint.** A profile's pages take on its avatar's hue: `packages/web/src/lib/tint.ts` gives the page, sidebar,
+- **Tint.** A profile's pages take on its avatar's hue: `packages/core/src/tint.ts` (which
+  `packages/web/src/lib/tint.ts` and nolune for iOS use) gives the page, sidebar,
   bubbles, hover and (in dark) card, menu and composer greys a little OKLCH chroma in the avatar
   color's hue, at each grey's own luminance, so text and avatars keep their contrast. The root
   layout renders it into the head as a `<style>` that outranks `layout.css`, so the first paint and
@@ -2784,7 +2785,11 @@ rather than chrome of their own, and controls of their own that float over conte
   an iPad, pushed on an iPhone. `Family.swift` keeps the family's nolune for them: who's signed in,
   their profiles, the open profile's chats and folders, the bell, all live from `/api/events` and
   the profile's `/running`, followed again after they drop and when the app comes back to the
-  front.
+  front. They wear the web's colors (`Palette.swift`): its page, sidebar, bubble, composer and
+  border greys, a near-black primary (a light grey in the dark) for links, buttons and what's
+  picked, and the open profile's tint of them, as its pages have on the web. Lists and forms are
+  the web's page with its `muted` tiles for rows. `scripts/ios-avatars.ts` writes the values from
+  `layout.css` and `tint.ts` (`Palettes.swift`), and a test keeps them current.
   - **The sidebar** (`SidebarView.swift`) is the web sidebar's: a new chat, the profile's pages,
     its folders with their chats, its other chats a page at a time with a spinner on the ones
     nolune works in, and search through all of them. A chat renames, moves and deletes from a

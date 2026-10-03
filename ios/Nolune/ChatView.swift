@@ -7,6 +7,7 @@ import SwiftUI
  * Pictures and files open in Quick Look; links to the family's nolune open in the app.
  */
 struct ChatView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	@StateObject private var chat: Conversation
 	/// A link to a page of the family's nolune: true when the app opened it.
@@ -81,6 +82,7 @@ struct ChatView: View {
 				.frame(maxWidth: .infinity)
 			}
 			.scrollDismissesKeyboard(.interactively)
+			.background(palette.background)
 			// Scrolling to read stops following the reply; letting go at the newest message follows again.
 			.modifier(Scrolling(began: { following = false }, ended: { if !away { following = true } }))
 			.onChange(of: chat.revision) { _ in
@@ -95,7 +97,8 @@ struct ChatView: View {
 						Image(systemName: "arrow.down")
 							.font(.body.weight(.semibold))
 							.padding(10)
-							.background(.regularMaterial, in: Circle())
+							.background(palette.background, in: Circle())
+							.overlay(Circle().strokeBorder(Palette.plain.border))
 							.shadow(color: .black.opacity(0.15), radius: 4, y: 1)
 					}
 					.buttonStyle(.plain)
@@ -313,6 +316,7 @@ private struct EntryView: View, Equatable {
 
 /// Someone's message: theirs on the right, with whoever sent it when it isn't the reader.
 private struct HumanMessage: View {
+	@Environment(\.palette) private var palette
 	let message: ChatMessage
 	let context: ChatContext
 	var queued = false
@@ -338,7 +342,7 @@ private struct HumanMessage: View {
 					.padding(.vertical, 10)
 					.background(
 						RoundedRectangle(cornerRadius: 18, style: .continuous)
-							.fill(Color(.secondarySystemBackground))
+							.fill(palette.bubble)
 					)
 					.overlay {
 						if queued {
@@ -549,7 +553,7 @@ private struct Card<Content: View>: View {
 		.frame(maxWidth: .infinity, alignment: .leading)
 		.background(
 			RoundedRectangle(cornerRadius: 12, style: .continuous)
-				.strokeBorder(Color(.separator), lineWidth: 0.5)
+				.strokeBorder(Palette.plain.border)
 		)
 	}
 }
@@ -596,7 +600,7 @@ private struct Folding<Content: View>: View {
 		.padding(12)
 		.background(
 			RoundedRectangle(cornerRadius: 12, style: .continuous)
-				.strokeBorder(Color(.separator), lineWidth: 0.5)
+				.strokeBorder(Palette.plain.border)
 		)
 	}
 }
@@ -610,7 +614,7 @@ private struct TaskResultCard: View {
 			symbol: "terminal",
 			title: String(localized: "Finished in the background · \(message.title ?? "")"),
 			detail: message.isError == true ? (technical ? String(localized: "failed") : String(localized: "didn't work")) : nil,
-			tint: .red
+			tint: Palette.plain.destructive
 		) {
 			ScrollView(.horizontal, showsIndicators: false) {
 				Text(verbatim: message.output ?? "")
@@ -736,7 +740,7 @@ private struct ChatTail: View {
 			VStack(alignment: .leading, spacing: 8) {
 				Label("Something went wrong while nolune was answering.", systemImage: "exclamationmark.triangle")
 					.font(.subheadline.weight(.medium))
-					.foregroundStyle(.red)
+					.foregroundStyle(Palette.plain.destructive)
 				Text(verbatim: error)
 					.font(.caption)
 					.foregroundStyle(.secondary)
@@ -746,7 +750,7 @@ private struct ChatTail: View {
 			}
 			.padding(12)
 			.frame(maxWidth: .infinity, alignment: .leading)
-			.background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.red.opacity(0.08)))
+			.background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.plain.destructive.opacity(0.08)))
 		} else if state.unanswered {
 			HStack {
 				Text("nolune hasn't answered this yet.")

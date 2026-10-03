@@ -6,6 +6,7 @@ import SwiftUI
  * change what it says and does, see its last runs, or delete it. New ones are asked for in a chat.
  */
 struct AutomationsView: View {
+	@Environment(\.palette) private var palette
 	@ObservedObject var family: Family
 	let slug: String
 	/// Opens a chat a run happened in.
@@ -19,55 +20,59 @@ struct AutomationsView: View {
 
 	var body: some View {
 		List {
-			if let overview {
-				if overview.triggers.isEmpty {
-					Section {
-						Text("No automations yet. Ask nolune in a chat, for example:")
-						Text("\"Every weekday at 7:30, check the weather and tell us if we need umbrellas.\"")
-							.foregroundStyle(.secondary)
-						Text("\"Remind Anna tomorrow at 17:00 to pick up the parcel.\"")
-							.foregroundStyle(.secondary)
-					}
-				} else {
-					Section {
-						MonthView(calendar: overview.calendar, day: $day) { month = $0 }
-					} footer: {
-						Text("Times are in the computer's time zone (\(overview.timeZone)).")
-					}
-					if let cell = overview.calendar.cells.first(where: { $0.key == (day ?? overview.calendar.selected) }) {
-						Section(cell.relative.map { "\($0) · \(cell.title)" } ?? cell.title) {
-							if cell.entries.isEmpty {
-								Text(cell.isPast ? "Nothing ran on this day." : "Nothing runs on this day.")
-									.foregroundStyle(.secondary)
-							}
-							ForEach(Array(cell.entries.enumerated()), id: \.offset) { _, entry in
-								entryRow(entry)
-							}
+			Group {
+				if let overview {
+					if overview.triggers.isEmpty {
+						Section {
+							Text("No automations yet. Ask nolune in a chat, for example:")
+							Text("\"Every weekday at 7:30, check the weather and tell us if we need umbrellas.\"")
+								.foregroundStyle(.secondary)
+							Text("\"Remind Anna tomorrow at 17:00 to pick up the parcel.\"")
+								.foregroundStyle(.secondary)
 						}
-					}
-					Section("All automations") {
-						ForEach(overview.triggers) { automation in
-							NavigationLink {
-								AutomationView(
-									automation: automation,
-									slug: slug,
-									client: client,
-									openChat: openChat,
-									ran: { chat in family.startLiveActivity(chat, title: automation.name) }
-								) {
-									await load()
+					} else {
+						Section {
+							MonthView(calendar: overview.calendar, day: $day) { month = $0 }
+						} footer: {
+							Text("Times are in the computer's time zone (\(overview.timeZone)).")
+						}
+						if let cell = overview.calendar.cells.first(where: { $0.key == (day ?? overview.calendar.selected) }) {
+							Section(cell.relative.map { "\($0) · \(cell.title)" } ?? cell.title) {
+								if cell.entries.isEmpty {
+									Text(cell.isPast ? "Nothing ran on this day." : "Nothing runs on this day.")
+										.foregroundStyle(.secondary)
 								}
-							} label: {
-								AutomationRow(automation: automation)
+								ForEach(Array(cell.entries.enumerated()), id: \.offset) { _, entry in
+									entryRow(entry)
+								}
+							}
+						}
+						Section("All automations") {
+							ForEach(overview.triggers) { automation in
+								NavigationLink {
+									AutomationView(
+										automation: automation,
+										slug: slug,
+										client: client,
+										openChat: openChat,
+										ran: { chat in family.startLiveActivity(chat, title: automation.name) }
+									) {
+										await load()
+									}
+								} label: {
+									AutomationRow(automation: automation)
+								}
 							}
 						}
 					}
+				} else if problem == nil {
+					ProgressView()
+						.frame(maxWidth: .infinity)
 				}
-			} else if problem == nil {
-				ProgressView()
-					.frame(maxWidth: .infinity)
 			}
+			.listRowBackground(palette.muted)
 		}
+		.pageBackground(palette)
 		.navigationTitle("Automations")
 		.environment(\.noluneClient, client)
 		.refreshable { await load() }
@@ -87,12 +92,12 @@ struct AutomationsView: View {
 					.foregroundStyle(.secondary)
 				LucideIcon(name: entry.icon, fallback: entry.kind == "webhook" ? "link" : "clock")
 				Text(verbatim: entry.name)
-					.foregroundStyle(Color.primary)
+					.foregroundStyle(Palette.plain.foreground)
 				Spacer()
 				if let status = entry.status {
 					Text(verbatim: AutomationView.describe(status))
 						.font(.caption)
-						.foregroundStyle(status == "failed" ? .red : .secondary)
+						.foregroundStyle(status == "failed" ? Palette.plain.destructive : .secondary)
 				}
 			}
 		}
@@ -159,7 +164,7 @@ private struct MonthView: View {
 						VStack(spacing: 2) {
 							Text(verbatim: "\(cell.day)")
 								.font(.callout.weight(cell.isToday ? .bold : .regular))
-								.foregroundStyle(cell.isToday ? Color.accentColor : cell.inMonth ? Color.primary : Color.secondary)
+								.foregroundStyle(cell.isToday ? Palette.plain.primary : cell.inMonth ? Palette.plain.foreground : Color.secondary)
 							HStack(spacing: 1) {
 								ForEach(cell.icons, id: \.key) { icon in
 									LucideIcon(name: icon.icon, fallback: icon.kind == "webhook" ? "link" : "clock")
@@ -172,7 +177,7 @@ private struct MonthView: View {
 						.frame(maxWidth: .infinity, minHeight: 40)
 						.background(
 							RoundedRectangle(cornerRadius: 8, style: .continuous)
-								.fill(cell.key == (day ?? calendar.selected) ? Color.accentColor.opacity(0.15) : Color.clear)
+								.fill(cell.key == (day ?? calendar.selected) ? Palette.plain.primary.opacity(0.15) : Color.clear)
 						)
 						.opacity(cell.inMonth ? 1 : 0.4)
 					}
@@ -233,6 +238,7 @@ private struct AutomationRow: View {
 
 /// An automation: to run now, pause or resume, change, see its runs, or delete.
 private struct AutomationView: View {
+	@Environment(\.palette) private var palette
 	let automation: AutomationsOverview.Automation
 	let slug: String
 	let client: Client
@@ -251,69 +257,73 @@ private struct AutomationView: View {
 
 	var body: some View {
 		Form {
-			Section {
-				Text(verbatim: automation.schedule)
-				if let next = automation.next {
-					Text("next \(next)")
-						.foregroundStyle(.secondary)
-				}
-				Button("Run now") {
-					act {
-						if let chat = try await client.runAutomation(slug, automation.id) { ran(chat) }
-					}
-				}
-				if automation.state != "done" {
-					Button(automation.state == "on" ? "Pause" : "Resume") {
-						act { try await client.setAutomation(slug, automation.id, enabled: automation.state != "on") }
-					}
-				}
-			} footer: {
-				if let message {
-					Text(verbatim: message)
-				}
-			}
-			Section("Description") {
-				TextField("What it does, in one sentence", text: $summary, axis: .vertical)
-			}
-			Section {
-				TextField("", text: $text, axis: .vertical)
-					.font(automation.action == "script" ? .callout.monospaced() : .body)
-					.lineLimit(3...12)
-				if edited {
-					Button("Save") {
-						act { try await client.editAutomation(slug, automation.id, summary: summary, text: text) }
-					}
-					.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-				}
-			} header: {
-				Text("Instructions for nolune")
-			} footer: {
-				if automation.action == "script" {
-					Text("Script: runs without the model and calls \("nolune wake") when nolune is needed")
-				}
-			}
-			if let webhook = automation.webhookUrl {
+			Group {
 				Section {
-					Text(verbatim: webhook)
-						.font(.caption.monospaced())
-						.textSelection(.enabled)
+					Text(verbatim: automation.schedule)
+					if let next = automation.next {
+						Text("next \(next)")
+							.foregroundStyle(.secondary)
+					}
+					Button("Run now") {
+						act {
+							if let chat = try await client.runAutomation(slug, automation.id) { ran(chat) }
+						}
+					}
+					if automation.state != "done" {
+						Button(automation.state == "on" ? "Pause" : "Resume") {
+							act { try await client.setAutomation(slug, automation.id, enabled: automation.state != "on") }
+						}
+					}
 				} footer: {
-					Text("Webhook URL. Keep it secret: anyone with it can start a run. POST JSON to it.")
+					if let message {
+						Text(verbatim: message)
+					}
+				}
+				Section("Description") {
+					TextField("What it does, in one sentence", text: $summary, axis: .vertical)
+				}
+				Section {
+					TextField("", text: $text, axis: .vertical)
+						.font(automation.action == "script" ? .callout.monospaced() : .body)
+						.lineLimit(3...12)
+					if edited {
+						Button("Save") {
+							act { try await client.editAutomation(slug, automation.id, summary: summary, text: text) }
+						}
+						.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+					}
+				} header: {
+					Text("Instructions for nolune")
+				} footer: {
+					if automation.action == "script" {
+						Text("Script: runs without the model and calls \("nolune wake") when nolune is needed")
+					}
+				}
+				if let webhook = automation.webhookUrl {
+					Section {
+						Text(verbatim: webhook)
+							.font(.caption.monospaced())
+							.textSelection(.enabled)
+					} footer: {
+						Text("Webhook URL. Keep it secret: anyone with it can start a run. POST JSON to it.")
+					}
+				}
+				Section("Recent runs (\(automation.runs.count))") {
+					if automation.runs.isEmpty {
+						Text("No runs yet")
+							.foregroundStyle(.secondary)
+					}
+					ForEach(automation.runs) { run in
+						RunRow(run: run, script: automation.action == "script") { openChat($0) }
+					}
+				}
+				Section {
+					Button("Delete", role: .destructive) { deleting = true }
 				}
 			}
-			Section("Recent runs (\(automation.runs.count))") {
-				if automation.runs.isEmpty {
-					Text("No runs yet")
-						.foregroundStyle(.secondary)
-				}
-				ForEach(automation.runs) { run in
-					RunRow(run: run, script: automation.action == "script") { openChat($0) }
-				}
-			}
-			Section {
-				Button("Delete", role: .destructive) { deleting = true }
-			}
+			.listRowBackground(palette.muted)
 		}
+		.pageBackground(palette)
 		.navigationTitle(automation.name)
 		.navigationBarTitleDisplayMode(.inline)
 		.disabled(working)
@@ -381,7 +391,7 @@ private struct RunRow: View {
 				Text(verbatim: run.at)
 				Spacer()
 				Text(verbatim: script ? String(localized: "script \(AutomationView.describe(run.status))") : AutomationView.describe(run.status))
-					.foregroundStyle(run.status == "failed" ? .red : .secondary)
+					.foregroundStyle(run.status == "failed" ? Palette.plain.destructive : .secondary)
 			}
 			.font(.subheadline)
 			HStack(spacing: 12) {

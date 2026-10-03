@@ -1,4 +1,6 @@
-import { AVATARS, GLYPHS, eyePath, type Avatar } from './avatars.ts';
+import { AVATARS, GLYPHS, eyePath, type AvatarColors } from './avatars.ts';
+
+export { parseAvatarColors, type AvatarColors } from './avatars.ts';
 
 /**
  * The avatars for nolune for iOS (ios/Shared/Avatars.swift), which draws them with SwiftUI's
@@ -6,20 +8,6 @@ import { AVATARS, GLYPHS, eyePath, type Avatar } from './avatars.ts';
  * with absolute M, L, C and Z. `node scripts/ios-avatars.ts` writes the file; a test checks it's
  * current.
  */
-
-export type AvatarColors = Record<Avatar, { light: string; dark: string }>;
-
-/** The `--avatar-*` colors in a stylesheet: light (`:root`) first, then dark (`.dark`). */
-export function parseAvatarColors(stylesheet: string): AvatarColors {
-	return Object.fromEntries(
-		AVATARS.map((avatar) => {
-			const [light, dark] = [
-				...stylesheet.matchAll(new RegExp(`--avatar-${avatar}:\\s*(#[0-9a-f]{3,8})`, 'gi'))
-			].map((match) => match[1]);
-			return [avatar, { light, dark }];
-		})
-	) as AvatarColors;
-}
 
 const r2 = (v: number) => {
 	const rounded = Math.round(v * 100) / 100;
