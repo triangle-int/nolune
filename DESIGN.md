@@ -2641,6 +2641,38 @@ signing.
   edge, a mid-tone both read on. dmgbuild writes the window's layout into the image's `.DS_Store`
   rather than scripting Finder, which needs a logged-in session.
 
+## The API for apps
+
+Apps of their own, like nolune for iOS, read JSON instead of pages. Families update their nolune
+when they like, so an app asks each one what it serves.
+
+- **`GET /api/version`** answers anyone with `{ version, api }`: nolune's version and the level of
+  this JSON (`API_LEVEL` in `packages/web/src/lib/server/api.ts`). Signed in, it adds
+  `capabilities`: what an app can show natively, `chats` and `notifications` so far. A change an app
+  would notice, to an endpoint below or to what it answers, raises the level, and an app shows
+  natively only what a nolune's level and capabilities cover, the web page otherwise. Adding a
+  field doesn't raise it: apps ignore what they don't know.
+- **Signing in** is better-auth's `POST /api/auth/sign-in/email`, as the sign-in page does; the app
+  keeps the session cookie it sets.
+- **Profiles and chats.** `GET /api/profiles` lists the person's profiles with their members;
+  `GET /api/p/<slug>/folders` a profile's folders. `GET /api/p/<slug>/chats` pages through its
+  chats, most recently active first: `limit` (50, at most 100), and `after`, the `next` the page
+  before gave, opaque to the app (`<updatedAt ms>.<id>`, so pages neither skip nor repeat a chat
+  active at the same moment as another). Each chat has its title (empty until it has one: apps say
+  "New chat" in their own words), model, folder, last activity and whether nolune is working in it.
+- **Changing chats.** `POST /api/p/<slug>/chats` starts one as the new chat's page does
+  (`startChat` in `packages/web/src/lib/server/chats.ts`, shared with its form action): the default
+  model unless `preset` names one, `effort`, `folder`, and `text` and `uploads` for its first
+  message. `PATCH /api/c/<id>` renames it, answering with the title as kept; `DELETE /api/c/<id>`
+  deletes it, as its menu does. The rest of a chat (its events, sending, stopping, its model) was
+  JSON already, under `/api/c/<id>/`.
+- **The bell.** `GET /api/notifications` lists it, with when the person last opened it; dismissing,
+  clearing and marking it seen were JSON already.
+- **Errors** are JSON too, `{ message }` in the person's language where the pages have the words,
+  with the status: 400 for what doesn't check out, 401 signed out, 403 for what isn't theirs to do,
+  404 for what isn't there or isn't theirs to see.
+- **Changes** reach apps as they reach pages, through `/api/events`.
+
 ## The iOS app
 
 `ios/` is nolune for iPhone and iPad: the family's nolune in an app of its own, with the bell's

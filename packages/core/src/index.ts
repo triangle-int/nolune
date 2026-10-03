@@ -164,6 +164,7 @@ export {
 	setHidden,
 	type Changes,
 	type Conversation,
+	type ConversationCursor,
 	type DisplayAttachment,
 	type DisplayBlock,
 	type DisplayMessage,

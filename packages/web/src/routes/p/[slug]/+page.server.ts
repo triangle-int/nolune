@@ -1,22 +1,15 @@
 import { fail, redirect } from '@sveltejs/kit';
 import {
-	AttachmentError,
 	EFFORTS,
-	chatCommandChoice,
 	commandMode,
-	createConversation,
 	currentSuggestions,
-	findUploads,
 	getDefaultPreset,
 	getFolder,
-	getPreset,
-	isCommandMode,
-	listPresets,
-	sendMessage,
-	type Effort
+	listPresets
 } from '@nolune/core';
 import { translations } from '$lib/i18n';
 import { requireProfile } from '$lib/server/access';
+import { startChat } from '$lib/server/chats';
 import { withIcons } from '$lib/server/suggestions';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -46,43 +39,21 @@ export const actions: Actions = {
 	 */
 	default: async ({ locals, params, request }) => {
 		const { user, profile } = requireProfile(locals, params.slug);
-		const { m } = translations(locals.locale);
 		const form = await request.formData();
-		const presetId = form.get('preset')?.toString() ?? '';
-		const effort = (form.get('effort')?.toString() ?? 'medium') as Effort;
-		const text = form.get('text')?.toString().trim() ?? '';
-		const uploads = form.getAll('upload').map(String);
-		const folderId = form.get('folder')?.toString() || null;
-		if (!getPreset(presetId)) return fail(400, { message: m.newChat.pickModel });
-		if (!EFFORTS.includes(effort)) return fail(400, { message: m.newChat.pickEffort });
-		if (folderId && !getFolder(profile.id, folderId)) {
-			return fail(400, { message: m.newChat.folderGone });
-		}
-		// Left out (the folder's page), the chat goes by Models & keys.
-		const commands = form.get('commands')?.toString() || commandMode();
-		if (!isCommandMode(commands)) return fail(400, { message: 'Unknown command mode' });
-		const commandChoice = chatCommandChoice(commands);
-		if (commandChoice === 'unrestricted' && !user.isAdmin) {
-			return fail(403, { message: m.commandMode.adminsOnly });
-		}
-		try {
-			// Checked before the conversation exists, so a stale file doesn't leave an empty chat.
-			findUploads(profile.id, user.id, uploads);
-		} catch (err) {
-			if (err instanceof AttachmentError) return fail(400, { message: err.message });
-			throw err;
-		}
-		const conversation = createConversation({
+		const started = await startChat(
+			user,
 			profile,
-			presetId,
-			userId: user.id,
-			effort,
-			folderId,
-			commandMode: commandChoice
-		});
-		if (text || uploads.length) {
-			await sendMessage(conversation.id, { id: user.id, name: user.name }, text, uploads);
-		}
-		redirect(303, `/p/${profile.slug}/c/${conversation.id}`);
+			{
+				presetId: form.get('preset')?.toString() ?? '',
+				effort: form.get('effort')?.toString() ?? 'medium',
+				text: form.get('text')?.toString().trim() ?? '',
+				uploads: form.getAll('upload').map(String),
+				folderId: form.get('folder')?.toString() || null,
+				commands: form.get('commands')?.toString()
+			},
+			translations(locals.locale).m
+		);
+		if (!started.conversation) return fail(started.status, { message: started.message });
+		redirect(303, `/p/${profile.slug}/c/${started.conversation.id}`);
 	}
 };
