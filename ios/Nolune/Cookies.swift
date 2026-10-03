@@ -44,6 +44,17 @@ enum Cookies {
 		}
 	}
 
+	/// A cookie the nolune's pages set, as the web views have it.
+	static func webCookie(_ name: String, for origin: URL) async -> HTTPCookie? {
+		await webCookies().first { $0.name == name && goes($0, to: origin) }
+	}
+
+	/// A cookie for the nolune's pages, in both stores.
+	static func set(_ cookie: HTTPCookie, in storage: HTTPCookieStorage = .shared) async {
+		storage.setCookie(cookie)
+		await withCheckedContinuation { done in web.setCookie(cookie) { done.resume() } }
+	}
+
 	private static func webCookies() async -> [HTTPCookie] {
 		await withCheckedContinuation { done in web.getAllCookies { done.resume(returning: $0) } }
 	}

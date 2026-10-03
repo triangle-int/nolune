@@ -5,16 +5,16 @@ import UIKit
 /**
  * The family's nolune with the native screens, which stay behind a flag until they're
  * whole (`AppModel.native`). It asks the nolune which it is (`/api/version`). One that serves the
- * API for apps gets native sign-in (SignInView), then its web app signed in, until native screens
- * take its place; one from before gets today's web app, with a note to update it. The session is
- * shared with the web app's pages both ways (Cookies.swift), so either can sign in.
+ * API for apps gets native sign-in (SignInView), then the native screens (MainView); one from
+ * before gets today's web app, with a note to update it. The session is shared with the web app's
+ * pages both ways (Cookies.swift), so either can sign in.
  */
 final class NativeController: UIViewController {
 	enum Screen: Equatable {
 		/// Asking the nolune which it is.
 		case checking
 		case signIn
-		/// The web app, signed in, until native screens take its place.
+		/// The native screens, signed in.
 		case signedIn
 		/// Today's web app: for a nolune before the API for apps, with a note to update it, or
 		/// for one that didn't answer (the relay's page for a computer that's off, or no network).
@@ -113,7 +113,13 @@ final class NativeController: UIViewController {
 				)
 			)
 		case .signedIn:
-			controller = BrowserController(origin: origin, signedOut: { [weak self] in self?.signedOut() })
+			controller = UIHostingController(
+				rootView: MainView(
+					family: Family(client: client),
+					signOut: { [weak self] in self?.signedOut() },
+					connectElsewhere: { [weak self] in self?.connectElsewhere() }
+				)
+			)
 		case .web(let note):
 			let update = String(localized: "Update nolune for the full app")
 			controller = BrowserController(origin: origin, note: note ? update : nil)
@@ -131,7 +137,7 @@ final class NativeController: UIViewController {
 		}
 	}
 
-	/// Signs in, and opens the web app signed in. Says what went wrong otherwise.
+	/// Signs in, and opens the native screens. Says what went wrong otherwise.
 	private func signIn(_ email: String, _ password: String) async -> String? {
 		do {
 			try await client.signIn(email: email, password: password)
@@ -150,7 +156,7 @@ final class NativeController: UIViewController {
 	}
 
 	/**
-	 * Signed out on a page (the web app's menu, or a session that ended): this session too, which
+	 * Signed out: from the account menu, on a page, or a session that ended. This session too, which
 	 * may be another (`POST /logout` is a no-op for one that's gone), then the sign-in.
 	 */
 	private func signedOut() {
@@ -158,6 +164,14 @@ final class NativeController: UIViewController {
 			await client.signOut()
 			await Cookies.signOut(origin)
 			show(.signIn)
+		}
+	}
+
+	/// Back to the first screen, after telling this nolune to stop sending notifications here.
+	private func connectElsewhere() {
+		Task {
+			await client.forgetPush()
+			model.disconnect()
 		}
 	}
 
