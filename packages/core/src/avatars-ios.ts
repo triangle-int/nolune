@@ -150,7 +150,7 @@ export function withoutArcs(d: string): string {
 	return out.join('');
 }
 
-const swiftColor = (hex: string) => `Color(hex: 0x${hex.slice(1).toUpperCase()})`;
+const swiftColor = (hex: string) => `Color(rgb: 0x${hex.slice(1).toUpperCase()})`;
 
 /** Avatars.swift, from the glyphs and their colors. */
 export function iosAvatarSource(colors: AvatarColors): string {

@@ -65,6 +65,19 @@ struct AvatarView: View {
 	}
 }
 
+extension Color {
+	/// A color as `0xRRGGBB` in sRGB, as Avatars.swift has them. The app's `Color(hex:)` is the
+	/// macOS app's (Theme.swift), which the widgets and the share extension don't build.
+	init(rgb: UInt32) {
+		self.init(
+			.sRGB,
+			red: Double((rgb >> 16) & 0xFF) / 255,
+			green: Double((rgb >> 8) & 0xFF) / 255,
+			blue: Double(rgb & 0xFF) / 255
+		)
+	}
+}
+
 extension Path {
 	/// SVG path data with absolute M, L, C and Z only, as Avatars.swift has it.
 	init(svg data: String) {
