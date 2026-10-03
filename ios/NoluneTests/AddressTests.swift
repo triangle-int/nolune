@@ -81,12 +81,44 @@ final class AddressTests: XCTestCase {
 
 	// MARK: Is there a nolune there?
 
-	/// A session whose answers come from `Answers`, not the network.
+	/// A session whose answers come from `Answers`, not the network: statuses, and redirects.
 	private func session(_ answers: [String: (status: Int, location: String?)]) -> URLSession {
-		Answers.table = answers
-		let configuration = URLSessionConfiguration.ephemeral
-		configuration.protocolClasses = [Answers.self]
-		return URLSession(configuration: configuration)
+		Answers.session(answers.mapValues { Answers.Answer(status: $0.status, location: $0.location) })
+	}
+
+	func testANoluneSaysWhichItIs() async {
+		let checked = await Address("example.com/invite/abc")!.check(
+			session: Answers.session([
+				"https://example.com/api/version": .redirect(to: "https://www.example.com/api/version"),
+				"https://www.example.com/api/version": .json(#"{"version":"0.6.0","api":1}"#)
+			])
+		)
+		XCTAssertEqual(try? checked.get().origin.absoluteString, "https://www.example.com")
+		XCTAssertEqual(try? checked.get().path, "/invite/abc")
+		// Without asking for its sign-in page.
+		XCTAssertFalse(Answers.sent.contains { $0.url.hasSuffix("/login") })
+	}
+
+	func testANoluneFromBeforeTheAPIHasItsSignInPage() async {
+		// Signed out, it answered `/api/` with a 401 (hooks.server.ts); signed in, a 404.
+		for status in [401, 404] {
+			let checked = await Address("smiths")!.check(
+				session: Answers.session([
+					"https://smiths.nolune.family/api/version": .json(#"{"message":"Not signed in"}"#, status: status),
+					"https://smiths.nolune.family/login": Answers.Answer()
+				])
+			)
+			XCTAssertEqual(try? checked.get().origin.absoluteString, "https://smiths.nolune.family")
+			XCTAssertEqual(Answers.sent.map(\.url).last, "https://smiths.nolune.family/login")
+		}
+		// A page that isn't the API's isn't a nolune's answer either.
+		let page = await Address("smiths")!.check(
+			session: Answers.session([
+				"https://smiths.nolune.family/api/version": .json("<!doctype html>"),
+				"https://smiths.nolune.family/login": Answers.Answer(status: 500)
+			])
+		)
+		XCTAssertEqual(page.failure, .refused(500))
 	}
 
 	func testANoluneAnswersWithItsSignInPage() async {
@@ -140,33 +172,4 @@ private extension Result {
 		if case .failure(let failure) = self { return failure }
 		return nil
 	}
-}
-
-/// Answers requests from a table of URLs: a status, and where a redirect goes.
-private final class Answers: URLProtocol {
-	static var table: [String: (status: Int, location: String?)] = [:]
-
-	override class func canInit(with request: URLRequest) -> Bool { true }
-	override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-	override func startLoading() {
-		guard let url = request.url else { return }
-		let (status, location) = Answers.table[url.absoluteString] ?? (404, nil)
-		let response = HTTPURLResponse(
-			url: url,
-			statusCode: status,
-			httpVersion: "HTTP/1.1",
-			headerFields: location.map { ["Location": $0] } ?? [:]
-		)!
-		if let location, let target = URL(string: location) {
-			// The session follows it, with another request here.
-			client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: response)
-			return
-		}
-		client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-		client?.urlProtocol(self, didLoad: Data())
-		client?.urlProtocolDidFinishLoading(self)
-	}
-
-	override func stopLoading() {}
 }

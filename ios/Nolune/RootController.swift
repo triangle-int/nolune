@@ -2,7 +2,8 @@ import Combine
 import SwiftUI
 import UIKit
 
-/// The connect screen until there's a nolune to open, then its web app; the status bar follows.
+/// The connect screen until there's a nolune to open, then its web app (or, with the native screens
+/// on, NativeController); the status bar follows.
 final class RootController: UIViewController {
 	private var current: UIViewController?
 	private var subscription: AnyCancellable?
@@ -19,19 +20,26 @@ final class RootController: UIViewController {
 	private func show(_ origin: URL?) {
 		let next: UIViewController
 		if let origin {
-			next = BrowserController(origin: origin)
+			next = AppModel.shared.native ? NativeController(origin: origin) : BrowserController(origin: origin)
 		} else {
-			let connect = UIHostingController(rootView: ConnectView().environmentObject(AppModel.shared))
-			connect.overrideUserInterfaceStyle = .dark
-			connect.view.backgroundColor = UIColor(Theme.space)
-			next = connect
+			next = UIHostingController(onboarding: ConnectView().environmentObject(AppModel.shared))
 		}
 		let previous = current
+		current = next
+		replace(previous, with: next)
+	}
+
+	override var childForStatusBarStyle: UIViewController? { current }
+	override var childForHomeIndicatorAutoHidden: UIViewController? { current }
+}
+
+extension UIViewController {
+	/// Shows `next` in place of `previous`, filling the screen, cross-dissolving when there was one.
+	func replace(_ previous: UIViewController?, with next: UIViewController) {
 		previous?.willMove(toParent: nil)
 		addChild(next)
 		next.view.frame = view.bounds
 		next.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-		current = next
 		let swap = {
 			previous?.view.removeFromSuperview()
 			self.view.addSubview(next.view)
@@ -45,7 +53,13 @@ final class RootController: UIViewController {
 		next.didMove(toParent: self)
 		setNeedsStatusBarAppearanceUpdate()
 	}
+}
 
-	override var childForStatusBarStyle: UIViewController? { current }
-	override var childForHomeIndicatorAutoHidden: UIViewController? { current }
+extension UIHostingController {
+	/// A screen that wears the onboarding (ConnectView's): dark, on deep space.
+	convenience init(onboarding screen: Content) {
+		self.init(rootView: screen)
+		overrideUserInterfaceStyle = .dark
+		view.backgroundColor = UIColor(Theme.space)
+	}
 }

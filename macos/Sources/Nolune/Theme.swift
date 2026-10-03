@@ -125,9 +125,11 @@ struct WelcomeField: View {
 	let placeholder: String
 	@Binding var text: String
 	var monospaced = false
+	/// A password's, which shows dots.
+	var secure = false
 
 	var body: some View {
-		TextField("", text: $text, prompt: Text(placeholder).foregroundColor(Theme.muted.opacity(0.7)))
+		field
 			.textFieldStyle(.plain)
 			.font(monospaced ? Theme.mono(14) : Theme.font(15))
 			.foregroundStyle(Theme.foreground)
@@ -135,6 +137,15 @@ struct WelcomeField: View {
 			.frame(height: 44)
 			.background(RoundedRectangle(cornerRadius: 12).fill(Theme.card.opacity(0.7)))
 			.overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.input))
+	}
+
+	@ViewBuilder private var field: some View {
+		let prompt = Text(placeholder).foregroundColor(Theme.muted.opacity(0.7))
+		if secure {
+			SecureField("", text: $text, prompt: prompt)
+		} else {
+			TextField("", text: $text, prompt: prompt)
+		}
 	}
 }
 

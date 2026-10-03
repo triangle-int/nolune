@@ -7,8 +7,9 @@ relay, its address, or a link from it, like an invite), and the app shows its we
 
 ## Build it
 
-On a Mac with Xcode 16 or later, open `ios/Nolune.xcodeproj` and run the **Nolune** scheme on a
-simulator. For an iPhone, pick your team under the target's Signing & Capabilities first.
+On a Mac with Xcode 26 or later, open `ios/Nolune.xcodeproj` and run the **Nolune** scheme on a
+simulator. For an iPhone, pick your team under the target's Signing & Capabilities first. The app
+runs on iOS 16 and later; built with iOS 26's SDK, it wears that version's look there, Liquid Glass.
 
 To try it against nolune from a checkout, run `pnpm dev` and connect the simulator to
 `http://localhost:5173` (on this network the app may use plain http; everywhere else it's https).
@@ -17,11 +18,16 @@ The tests (`NoluneTests`) run with ⌘U, or:
 
 ```sh
 xcodebuild test -project ios/Nolune.xcodeproj -scheme Nolune \
-  -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
+  -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO
 ```
 
 The CI workflow `ios.yml` does the same on every change here, builds for a device too, and keeps
-two screens as PNGs: the first one, and the app with a page open.
+its screens as PNGs: the first one, the app with a page open, and the native screens' sign-in and
+note for an older nolune.
+
+The native screens ([#125](https://github.com/triangle-int/nolune/issues/125)) are off until
+they're whole, and today's web app is the one that ships. To try them, add `-native YES` under
+Arguments Passed On Launch in the scheme (Product > Scheme > Edit Scheme > Run > Arguments).
 
 `Sky.swift` and `Theme.swift`, and the Figtree font, are the macOS app's (`macos/`): the first
 screen wears its onboarding, and a change there shows in both apps. Xcode reads the `Nolune` and
