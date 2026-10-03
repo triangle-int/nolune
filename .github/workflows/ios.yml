@@ -80,22 +80,17 @@ jobs:
           sleep 6
           step xcrun simctl io "$udid" screenshot "$screens/connect.png"
           # The native sign-in, from a nolune that only says which it is (the simulator shares
-          # this Mac's localhost), before a page asks to send notifications over everything.
+          # this Mac's localhost), before a page asks to send notifications over everything. It's
+          # Apple's python3: the runner's firewall quietly drops connections to Homebrew's.
           mkdir -p "$RUNNER_TEMP/nolune/api"
           echo '{"version":"0.6.0","api":1}' > "$RUNNER_TEMP/nolune/api/version"
-          python3 -m http.server 5780 --directory "$RUNNER_TEMP/nolune" > "$screens/stub.log" 2>&1 &
+          /usr/bin/python3 -m http.server 5780 --directory "$RUNNER_TEMP/nolune" > /dev/null 2>&1 &
           sleep 2
-          curl -sS -m 5 -w ' (%{http_code})\n' http://localhost:5780/api/version || true
+          curl -sS -m 5 http://localhost:5780/api/version || true
           step xcrun simctl terminate "$udid" dev.nolune.app
-          xcrun simctl spawn "$udid" log stream --level info --style compact \
-            --predicate 'process == "Nolune"' > "$screens/sign-in.log" 2>&1 &
-          logs=$!
           step xcrun simctl launch "$udid" dev.nolune.app -origin http://localhost:5780 -native YES
           sleep 10
           step xcrun simctl io "$udid" screenshot "$screens/sign-in.png"
-          sleep 15
-          step xcrun simctl io "$udid" screenshot "$screens/sign-in-later.png"
-          kill "$logs" || true
           # A page open, as if connected: the launch argument stands in for the saved address.
           step xcrun simctl terminate "$udid" dev.nolune.app
           step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev
