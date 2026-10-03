@@ -3,7 +3,16 @@ import http2, { type IncomingHttpHeaders } from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { PushResult } from './protocol.ts';
-import { cut, createApns, payload, readPush, type Apns, type ApnsOutcome } from './push.ts';
+import {
+	activityPayload,
+	cut,
+	createApns,
+	payload,
+	readActivity,
+	readPush,
+	type Apns,
+	type ApnsOutcome
+} from './push.ts';
 import { createRelay, type Relay } from './relay.ts';
 import { GatewayStore } from './store.ts';
 
@@ -133,6 +142,47 @@ async function fakeApple(answer: (token: string) => { status: number; reason?: s
 	return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests };
 }
 
+describe("a gateway's Live Activity change", () => {
+	const state = { title: 'Packing for Kyoto', step: 'Checking the forecast', running: true };
+
+	it('names activities by their tokens, and has an event and what to show', () => {
+		expect(readActivity({ activities: [{ token: TOKEN }], event: 'update', state })).toEqual({
+			activities: [{ token: TOKEN, sandbox: false }],
+			event: 'update',
+			state
+		});
+		expect(
+			readActivity({
+				activities: [{ token: TOKEN, sandbox: true }],
+				event: 'end',
+				state: { ...state, running: false },
+				dismissAt: 1700000000.5
+			})
+		).toMatchObject({ event: 'end', dismissAt: 1700000000 });
+	});
+
+	it("isn't one without activities, a known event or what to show", () => {
+		const good = { activities: [{ token: TOKEN }], event: 'update', state };
+		for (const bad of [
+			null,
+			{ ...good, activities: [] },
+			{ ...good, activities: [{ token: 'not hex' }] },
+			{ ...good, event: 'start' },
+			{ ...good, state: { ...state, running: 'yes' } },
+			{ ...good, state: { title: 'x' } },
+			{ ...good, dismissAt: 'soon' }
+		]) {
+			expect(readActivity(bad)).toBeNull();
+		}
+	});
+
+	it('goes to Apple with when it changed', () => {
+		expect(JSON.parse(activityPayload({ event: 'end', state, dismissAt: 100 }, 5_000))).toEqual({
+			aps: { timestamp: 5, event: 'end', 'content-state': state, 'dismissal-date': 100 }
+		});
+	});
+});
+
 describe("Apple's push service", () => {
 	it('gets each notification with a token signed with the key', async () => {
 		const apple = await fakeApple(() => ({ status: 200 }));
@@ -181,6 +231,32 @@ describe("Apple's push service", () => {
 				Buffer.from(signature, 'base64url')
 			)
 		).toBe(true);
+	});
+
+	it("sends a Live Activity's change to the activity's own topic", async () => {
+		const apple = await fakeApple(() => ({ status: 200 }));
+		const apns = createApns({
+			key: KEY,
+			keyId: 'KEY123',
+			teamId: 'TEAM456',
+			topic: 'dev.nolune.app',
+			servers: { production: apple.url, sandbox: apple.url }
+		});
+		closing.push(() => apns.close());
+		const state = { title: 'Trip', step: 'Thinking', running: true };
+		expect(await apns.sendActivity({ token: TOKEN }, { event: 'update', state })).toBe('sent');
+		expect(await apns.sendActivity({ token: TOKEN }, { event: 'end', state })).toBe('sent');
+		expect(apple.requests.map((r) => r.headers)).toMatchObject([
+			{
+				'apns-topic': 'dev.nolune.app.push-type.liveactivity',
+				'apns-push-type': 'liveactivity',
+				'apns-priority': '5'
+			},
+			{ 'apns-priority': '10' }
+		]);
+		expect(apple.requests[0].body).toMatchObject({
+			aps: { event: 'update', 'content-state': state }
+		});
 	});
 
 	it("tells iPhones that are gone from ones it couldn't reach", async () => {
@@ -233,6 +309,10 @@ describe('the relay', () => {
 			async send(device, notification) {
 				sent.push({ token: device.token, title: notification.title, origin: notification.origin });
 				return options.outcome?.(device.token) ?? 'sent';
+			},
+			async sendActivity(activity, change) {
+				sent.push({ token: activity.token, title: change.state.title });
+				return options.outcome?.(activity.token) ?? 'sent';
 			},
 			close() {}
 		};
@@ -287,6 +367,34 @@ describe('the relay', () => {
 		});
 		expect(unknown.status).toBe(404);
 		expect(sent).toEqual([]);
+	});
+
+	it("sends a gateway's Live Activity changes, counted with its notifications", async () => {
+		const { sent } = await start({
+			pushesPerHour: 3,
+			outcome: (token) => (token === OTHER ? 'gone' : 'sent')
+		});
+		const change = (...tokens: string[]) => ({
+			activities: tokens.map((token) => ({ token })),
+			event: 'update',
+			state: { title: 'Trip', step: 'Thinking', running: true }
+		});
+		const activity = (body: unknown) =>
+			fetch(`${base}/api/gateways/smiths/activity`, {
+				method: 'POST',
+				headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },
+				body: JSON.stringify(body)
+			});
+		const res = await activity(change(TOKEN, OTHER));
+		expect(res.status).toBe(200);
+		expect((await res.json()) as PushResult).toEqual({ sent: 1, gone: [OTHER] });
+		expect(sent).toEqual([
+			{ token: TOKEN, title: 'Trip' },
+			{ token: OTHER, title: 'Trip' }
+		]);
+		expect((await activity({ ...change(TOKEN), event: 'begin' })).status).toBe(400);
+		expect((await push(notification(TOKEN))).status).toBe(200);
+		expect((await activity(change(TOKEN))).status).toBe(429);
 	});
 
 	it('counts each iPhone toward what an address may send in an hour', async () => {

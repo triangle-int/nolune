@@ -5,6 +5,7 @@ import { createNotification } from '../../../../core/src/notifications.ts';
 import { addMember, createProfile } from '../../../../core/src/profiles.ts';
 import { makeFamily, makePreset, makeUser } from '../../../../core/src/test/fixtures.ts';
 import * as chat from '../../routes/api/c/[id]/+server';
+import * as activity from '../../routes/api/c/[id]/activity/+server';
 import * as notifications from '../../routes/api/notifications/+server';
 import * as chats from '../../routes/api/p/[slug]/chats/+server';
 import * as folders from '../../routes/api/p/[slug]/folders/+server';
@@ -297,6 +298,31 @@ describe('/api/c/<id>', () => {
 			body: null
 		});
 		expect(listConversations(profile.id)).toEqual([]);
+	});
+});
+
+describe('/api/c/<id>/activity', () => {
+	it("follows a chat for an iPhone's Live Activity, for the chat's members", async () => {
+		const { user, profile } = makeFamily();
+		makePreset();
+		const started = await answer(
+			chats.POST,
+			request(user, { method: 'POST', params: { slug: profile.slug }, body: {} })
+		);
+		const id = started.body.id as string;
+		const call = (method: string, body: unknown, person: Person = user) =>
+			answer(
+				method === 'POST' ? activity.POST : activity.DELETE,
+				request(person, { method, params: { id }, body })
+			);
+		const token = 'a1'.repeat(32);
+		expect((await call('POST', { token: 'not hex' })).status).toBe(400);
+		expect(await call('POST', { token, sandbox: true })).toEqual({
+			status: 200,
+			body: { ok: true }
+		});
+		expect((await call('POST', { token }, makeUser('Stranger'))).status).toBe(404);
+		expect((await call('DELETE', { token })).status).toBe(204);
 	});
 });
 
