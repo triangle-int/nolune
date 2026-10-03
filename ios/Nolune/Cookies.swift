@@ -18,10 +18,20 @@ enum Cookies {
 		}
 	}
 
-	/// The web views' cookies for the nolune, into the app's.
-	static func fromWeb(_ origin: URL, to storage: HTTPCookieStorage = .shared) async {
+	/**
+	 * The web views' cookies for the nolune, into the app's. True when a session's came with
+	 * them. `unlessSignedIn` leaves the app's own session be, like one that signed in meanwhile.
+	 */
+	@discardableResult
+	static func fromWeb(
+		_ origin: URL,
+		unlessSignedIn: Bool = false,
+		to storage: HTTPCookieStorage = .shared
+	) async -> Bool {
 		let cookies = await webCookies().filter { goes($0, to: origin) }
+		if unlessSignedIn, (storage.cookies(for: origin) ?? []).contains(where: isSession) { return false }
 		storage.setCookies(cookies, for: origin, mainDocumentURL: origin)
+		return cookies.contains(where: isSession)
 	}
 
 	/// Signed out: the session's cookies go from both. The rest stay, like the web app's settings.

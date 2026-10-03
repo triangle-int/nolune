@@ -2736,8 +2736,9 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   nolune for the full app"; one that didn't answer, the web app, and it asks again when the app
   comes back to the front. The session is better-auth's cookie, which `Cookies.swift` keeps in
   both of the app's cookie stores, URLSession's and the web views': copied to the web views'
-  after signing in natively, and from them at launch and after an invite, so either signs in for
-  both. An invite link makes the account on its page, in a sheet over the sign-in
+  after signing in natively, and from them after an invite, or at launch when the app has no
+  session of its own (after the sign-in shows: WebKit's store is slow to answer at first), so
+  either signs in for both. An invite link makes the account on its page, in a sheet over the sign-in
   (`InviteController.swift`), which hands over the page it went on to. Signing out in the web app
   (its `/logout` goes on to the sign-in page, which the app doesn't show) signs the app's session
   out too, after telling the nolune to stop sending that iPhone notifications, and the native

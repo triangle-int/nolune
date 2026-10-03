@@ -72,16 +72,24 @@ final class NativeController: UIViewController {
 	override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
 	override var childForStatusBarStyle: UIViewController? { current }
 
-	/// Asks the nolune which it is, as whoever the web app's pages are signed in as, if anyone.
+	/**
+	 * Asks the nolune which it is, as whoever signed in on the app. When nobody has, it shows the
+	 * sign-in, then looks at the web views' cookies, which take longer to read (WebKit's own
+	 * process): someone signed in on a page, like the web app before the native screens, is
+	 * signed in natively too.
+	 */
 	private func check() async {
-		await Cookies.fromWeb(origin)
-		let answer: Result<Server?, Error>
+		show(Self.screen(for: await answer()))
+		guard screen == .signIn, await Cookies.fromWeb(origin, unlessSignedIn: true) else { return }
+		if Self.screen(for: await answer()) == .signedIn { show(.signedIn) }
+	}
+
+	private func answer() async -> Result<Server?, Error> {
 		do {
-			answer = .success(try await client.version())
+			return .success(try await client.version())
 		} catch {
-			answer = .failure(error)
+			return .failure(error)
 		}
-		show(Self.screen(for: answer))
 	}
 
 	/// Back to the front: a nolune that didn't answer may now.
@@ -111,6 +119,8 @@ final class NativeController: UIViewController {
 			controller = BrowserController(origin: origin, note: note ? update : nil)
 		}
 		spinner.stopAnimating()
+		// An invite's sheet, say, once someone turned out to be signed in.
+		if next != .signIn, presentedViewController != nil { dismiss(animated: true) }
 		let previous = current
 		current = controller
 		replace(previous, with: controller)

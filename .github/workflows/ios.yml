@@ -79,21 +79,21 @@ jobs:
           step xcrun simctl launch "$udid" dev.nolune.app
           sleep 6
           step xcrun simctl io "$udid" screenshot "$screens/connect.png"
-          # A page open, as if connected: the launch argument stands in for the saved address.
-          step xcrun simctl terminate "$udid" dev.nolune.app
-          step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev
-          sleep 10
-          step xcrun simctl io "$udid" screenshot "$screens/page.png"
           # The native sign-in, from a nolune that only says which it is (the simulator shares
-          # this Mac's localhost)...
+          # this Mac's localhost), before a page asks to send notifications over everything.
           mkdir -p "$RUNNER_TEMP/nolune/api"
           echo '{"version":"0.6.0","api":1}' > "$RUNNER_TEMP/nolune/api/version"
           python3 -m http.server 5780 --directory "$RUNNER_TEMP/nolune" > /dev/null 2>&1 &
           step xcrun simctl terminate "$udid" dev.nolune.app
           step xcrun simctl launch "$udid" dev.nolune.app -origin http://localhost:5780 -native YES
-          sleep 6
+          sleep 10
           step xcrun simctl io "$udid" screenshot "$screens/sign-in.png"
-          # ...and today's web app with the note, from one that doesn't.
+          # A page open, as if connected: the launch argument stands in for the saved address.
+          step xcrun simctl terminate "$udid" dev.nolune.app
+          step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev
+          sleep 10
+          step xcrun simctl io "$udid" screenshot "$screens/page.png"
+          # Today's web app with the note, from a nolune that doesn't say which it is.
           step xcrun simctl terminate "$udid" dev.nolune.app
           step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev -native YES
           sleep 10
