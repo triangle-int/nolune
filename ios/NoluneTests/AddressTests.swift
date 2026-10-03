@@ -94,6 +94,30 @@ final class AddressTests: XCTestCase {
 		XCTAssertNil(AppModel(defaults: defaults).pending)
 	}
 
+	/// A widget's or a Live Activity's link opens its page, on the nolune the app has open.
+	@MainActor
+	func testAWidgetsLinkOpensItsPage() {
+		let link = Shared.open("/p/smiths/c/abc?x=1&y=2")
+		XCTAssertEqual(link.scheme, "nolune")
+		XCTAssertEqual(Shared.path(of: link), "/p/smiths/c/abc?x=1&y=2")
+		XCTAssertNil(Shared.path(of: URL(string: "https://example.com/open?path=/p/smiths")!))
+
+		let defaults = UserDefaults(suiteName: "LinkTests")!
+		defer { defaults.removePersistentDomain(forName: "LinkTests") }
+		let model = AppModel(defaults: defaults)
+		// Not connected yet: nothing to open it on.
+		model.open(link: link)
+		XCTAssertNil(model.pending)
+		model.connect(to: Address("smiths.nolune.family")!)
+		_ = model.takePending()
+		model.open(link: Shared.open("/p/smiths/skills"))
+		XCTAssertEqual(model.pending, "/p/smiths/skills")
+		// Only a path on it.
+		_ = model.takePending()
+		model.open(link: Shared.open("//elsewhere.com/p"))
+		XCTAssertNil(model.pending)
+	}
+
 	// MARK: Is there a nolune there?
 
 	/// A session whose answers come from `Answers`, not the network: statuses, and redirects.

@@ -93,11 +93,10 @@ enum Shared {
 
 	/// An address that opens the app on a page of the family's nolune: `nolune://open?path=/p/smiths`.
 	static func open(_ path: String) -> URL {
-		var components = URLComponents()
-		components.scheme = "nolune"
-		components.host = "open"
-		components.queryItems = [URLQueryItem(name: "path", value: path)]
-		return components.url ?? URL(string: "nolune://open")!
+		// The path's own query stays in it: `&`, `=` and `+` encoded too, as not every Foundation does.
+		let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+#"))
+		let value = path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
+		return URL(string: "nolune://open?path=\(value)") ?? URL(string: "nolune://open")!
 	}
 
 	/// The page an address made by `open` leads to.

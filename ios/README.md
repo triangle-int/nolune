@@ -23,9 +23,11 @@ xcodebuild test -project ios/Nolune.xcodeproj -scheme Nolune \
 
 The CI workflow `ios.yml` does the same on every change here, builds for a device too, and keeps
 its screens as PNGs: the first one; the native sign-in, sidebar, chat, new chat, bell and a
-profile's pages, and a page a widget's link opens, from a pretend nolune (`ci/nolune.py`, which you
-can run the same way: `python3 ios/ci/nolune.py 5780 signed-in`, then launch with `-origin
-http://localhost:5780`); the note for an older nolune; and today's web app with a page open.
+profile's pages, from a pretend nolune (`ci/nolune.py`, which you can run the same way: `python3
+ios/ci/nolune.py 5780 signed-in`, then launch with `-origin http://localhost:5780`); the note for
+an older nolune; and today's web app with a page open. A link like a widget's, `xcrun simctl
+openurl booted 'nolune://open?path=/p/<slug>/memory'`, asks first in the simulator (Open in
+"nolune"?); a widget's own doesn't.
 
 The app's screens are native ([#125](https://github.com/triangle-int/nolune/issues/125)). To see
 today's web app instead, add `-native NO` under Arguments Passed On Launch in the scheme
