@@ -1666,7 +1666,8 @@ composer. Most of the family doesn't read shell, so the default view hides the m
   sidebar, the composer, a sheet's buttons and the end of what scrolls pad themselves above the home
   indicator, so the page still runs under it. In the iOS app all of these are zero, since the app
   keeps the page inside the safe area itself.
-- **Replies** are built by `buildTranscript` (`packages/web/src/lib/transcript.ts`): text blocks are shown as
+- **Replies** are built by `buildTranscript` (`packages/core/src/transcript.ts`, which pages import as
+  `@nolune/core/transcript`, and the gateway builds for apps too): text blocks are shown as
   Markdown (`marked` + DOMPurify), and every run of thinking and commands between two texts is one
   collapsible group, "Worked for 12s" when done and a live "Thinking" / current step while running.
   Durations come from row timestamps, so they're approximate. The profile's assistant avatar sits at
@@ -2648,7 +2649,7 @@ when they like, so an app asks each one what it serves.
 
 - **`GET /api/version`** answers anyone with `{ version, api }`: nolune's version and the level of
   this JSON (`API_LEVEL` in `packages/web/src/lib/server/api.ts`). Signed in, it adds
-  `capabilities`: what an app can show natively, `chats` and `notifications` so far. A change an app
+  `capabilities`: what an app can show natively, `chats`, `notifications` and `transcript` so far. A change an app
   would notice, to an endpoint below or to what it answers, raises the level, and an app shows
   natively only what a nolune's level and capabilities cover, the web page otherwise. Adding a
   field doesn't raise it: apps ignore what they don't know.
@@ -2668,6 +2669,16 @@ when they like, so an app asks each one what it serves.
   JSON already, under `/api/c/<id>/`.
 - **The bell.** `GET /api/notifications` lists it, with when the person last opened it; dismissing,
   clearing and marking it seen were JSON already.
+- **A chat's transcript** comes built, so an app doesn't group steps into replies itself:
+  `GET /api/c/<id>/transcript` is a chat's event stream like `/events`, whose snapshot carries the
+  transcript (`entries`, as `buildTranscript` makes them, and `results`, the commands' output by
+  call) in place of the rows and live blocks it's built from. After it, `transcript` events carry
+  what changed: the entries' keys in `order`, the entries that are new or differ, and results the
+  app doesn't have; an entry whose key is no longer in `order` is gone. A reply's key follows what
+  it answers, so it stays the same while the reply streams and once it's saved. A streaming reply goes out at most every 100 ms, and anything
+  waiting goes before the chat's other events (its status, title, who's typing…), which come as
+  they are. The gateway keeps each stream's chat in a `ChatView` (`packages/core/src/chat-view.ts`),
+  as a page keeps its ChatState. Its capability is `transcript`.
 - **Errors** are JSON too, `{ message }` in the person's language where the pages have the words,
   with the status: 400 for what doesn't check out, 401 signed out, 403 for what isn't theirs to do,
   404 for what isn't there or isn't theirs to see.
