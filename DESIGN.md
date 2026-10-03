@@ -2654,7 +2654,10 @@ when they like, so an app asks each one what it serves.
   natively only what a nolune's level and capabilities cover, the web page otherwise. Adding a
   field doesn't raise it: apps ignore what they don't know.
 - **Signing in** is better-auth's `POST /api/auth/sign-in/email`, as the sign-in page does; the app
-  keeps the session cookie it sets.
+  keeps the session cookie it sets. It sends no cookies and no `Origin` with it: better-auth checks
+  the origin of requests that carry either against the address the nolune was set up with, which
+  an app may reach it by another of (a computer on this network). The pages sign in and out on the
+  server, which it doesn't check, and an app signs out as they do, with `POST /logout`.
 - **Profiles and chats.** `GET /api/profiles` lists the person's profiles with their members;
   `GET /api/p/<slug>/folders` a profile's folders. `GET /api/p/<slug>/chats` pages through its
   chats, most recently active first: `limit` (50, at most 100), and `after`, the `next` the page
@@ -2696,9 +2699,9 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   type and controls, `Sky.swift` and `Theme.swift`, are built into both apps. It asks which nolune
   to open: a name on the relay (`smiths` is `https://smiths.nolune.family`), an address, or any
   link from it, like an invite, whose page opens first (`Address.swift`). It checks that a nolune
-  answers there (its sign-in page, or the relay's page for a computer that's off) and keeps the
-  address it answered at, after any redirect (`example.com` to `www.example.com`), since pages on
-  any other address go to Safari. Plain http only on this network (localhost, `.local`, private IPv4), as App
+  answers there (`/api/version`, or for one from before it, its sign-in page; the relay's page for
+  a computer that's off counts) and keeps the address it answered at, after any redirect
+  (`example.com` to `www.example.com`), since pages on any other address go to Safari. Plain http only on this network (localhost, `.local`, private IPv4), as App
   Transport Security allows with `NSAllowsLocalNetworking`.
 - **The web app** (`BrowserController.swift`) is as Safari shows it, with `nolune/<version>` at the
   end of the user agent. It stays inside the safe area and above the keyboard, so the composer is
@@ -2725,6 +2728,20 @@ folders Xcode reads as they are, so a new file needs no change to the project), 
   another nolune" (`packages/web/src/lib/ios.ts`, a `nolune` message to the app). The app first
   tells the nolune to stop sending that iPhone notifications (`DELETE /api/push`), then shows the
   first screen, which offers going back.
+- **Native screens** come one at a time, and stay behind a flag until there are enough of them:
+  the app launched with `-native YES` (`AppModel.native`). Then `NativeController.swift` asks the
+  nolune which it is (`/api/version`). One with the API for apps signs in natively
+  (`SignInView.swift`, through `Client.swift`), with the sign-in page's words and errors, then
+  shows the web app signed in; one from before, today's web app, with a line above it, "Update
+  nolune for the full app"; one that didn't answer, the web app, and it asks again when the app
+  comes back to the front. The session is better-auth's cookie, which `Cookies.swift` keeps in
+  both of the app's cookie stores, URLSession's and the web views': copied to the web views'
+  after signing in natively, and from them at launch and after an invite, so either signs in for
+  both. An invite link makes the account on its page, in a sheet over the sign-in
+  (`InviteController.swift`), which hands over the page it went on to. Signing out in the web app
+  (its `/logout` goes on to the sign-in page, which the app doesn't show) signs the app's session
+  out too, after telling the nolune to stop sending that iPhone notifications, and the native
+  sign-in comes back.
 - **When it can't be reached** (no network, an address that's gone), a screen says so, with Try
   again and Connect to another nolune, and it tries again when the app comes back to the front. A
   family computer that's off is the relay's page, which reloads itself.

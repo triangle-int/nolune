@@ -113,12 +113,25 @@ extension Address {
 	}
 
 	/**
-	 * Whether a nolune answers at the address: its sign-in page loads. The relay's page for a
-	 * computer that's off or asleep counts, since it comes back by itself. It gives the address
-	 * the nolune answered at, which a redirect may have moved (`example.com` to
-	 * `www.example.com`): the app keeps that one, or it would send each page off to Safari.
+	 * Whether a nolune answers at the address: it says which it is (`/api/version`), or, from
+	 * before it did, its sign-in page loads. The relay's page for a computer that's off or asleep
+	 * counts, since it comes back by itself. It gives the address the nolune answered at, which a
+	 * redirect may have moved (`example.com` to `www.example.com`): the app keeps that one, or it
+	 * would send each page off to Safari.
 	 */
 	func check(session: URLSession = .shared) async -> Result<Address, Problem> {
+		do {
+			let (data, response) = try await Client(origin: origin, session: session).get("api/version")
+			if response.statusCode == 200, (try? JSONDecoder().decode(Server.self, from: data)) != nil {
+				return .success(answered(at: response))
+			}
+		} catch {
+			return .failure(problem(error))
+		}
+		return await checkSignInPage(session: session)
+	}
+
+	private func checkSignInPage(session: URLSession) async -> Result<Address, Problem> {
 		var request = URLRequest(url: origin.appendingPathComponent("login"), timeoutInterval: 15)
 		request.cachePolicy = .reloadIgnoringLocalCacheData
 		do {
@@ -126,18 +139,26 @@ extension Address {
 			let status = (response as? HTTPURLResponse)?.statusCode ?? 0
 			switch status {
 			case 200..<400, 503:
-				let answered = response.url.flatMap(Address.origin(of:)) ?? origin
-				return .success(Address(origin: answered, path: path))
+				return .success(answered(at: response))
 			case 404:
 				return .failure(.nothingThere)
 			default:
 				return .failure(.refused(status))
 			}
-		} catch let error as URLError where error.code == .cannotFindHost || error.code == .dnsLookupFailed {
-			return .failure(.nothingThere)
 		} catch {
-			return .failure(.unreachable(error.localizedDescription))
+			return .failure(problem(error))
 		}
+	}
+
+	private func answered(at response: URLResponse) -> Address {
+		Address(origin: response.url.flatMap(Address.origin(of:)) ?? origin, path: path)
+	}
+
+	private func problem(_ error: Error) -> Problem {
+		if let error = error as? URLError, error.code == .cannotFindHost || error.code == .dnsLookupFailed {
+			return .nothingThere
+		}
+		return .unreachable(error.localizedDescription)
 	}
 
 	/// A URL's scheme, host and port: an address. Plain http only on this network.

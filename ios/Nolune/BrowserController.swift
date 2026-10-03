@@ -8,10 +8,15 @@ import WebKit
  * The family's nolune: its web app in a web view, as Safari shows it, and what an app adds. Files
  * it hands over open in Quick Look, links elsewhere open in Safari, the page's color goes around
  * it (with a status bar that reads on it), and it bridges to the app: notifications (Push.swift)
- * and the `nolune` messages the page sends (packages/web/src/lib/ios.ts).
+ * and the `nolune` messages the page sends (packages/web/src/lib/ios.ts). With the native screens
+ * on (NativeController.swift), it may have a note above it, and leaves signing in to them.
  */
 final class BrowserController: UIViewController {
 	private let origin: URL
+	/// A line above the page, which its × closes (NoteBar).
+	private let note: String?
+	/// Signed in natively: called instead of showing the sign-in page, once someone signs out.
+	private var signedOut: (() -> Void)?
 	private var model: AppModel { AppModel.shared }
 	private var webView: WKWebView!
 	private let spinner = UIActivityIndicatorView(style: .medium)
@@ -26,8 +31,10 @@ final class BrowserController: UIViewController {
 	/// Quick Look's, which it doesn't keep itself.
 	private var preview: Preview?
 
-	init(origin: URL) {
+	init(origin: URL, note: String? = nil, signedOut: (() -> Void)? = nil) {
 		self.origin = origin
+		self.note = note
+		self.signedOut = signedOut
 		super.init(nibName: nil, bundle: nil)
 	}
 
@@ -61,14 +68,27 @@ final class BrowserController: UIViewController {
 		#if DEBUG
 		if #available(iOS 16.4, *) { webView.isInspectable = true }
 		#endif
-		webView.translatesAutoresizingMaskIntoConstraints = false
-		view.addSubview(webView)
+		// The note above the page, if any: closed, the page takes its place.
+		let stack = UIStackView(arrangedSubviews: [webView])
+		stack.axis = .vertical
+		if let note {
+			let bar = NoteBar(note)
+			bar.close = { [weak bar, weak stack] in
+				UIView.animate(withDuration: 0.25) {
+					bar?.isHidden = true
+					stack?.layoutIfNeeded()
+				}
+			}
+			stack.insertArrangedSubview(bar, at: 0)
+		}
+		stack.translatesAutoresizingMaskIntoConstraints = false
+		view.addSubview(stack)
 		// Inside the safe area, and above the keyboard, so the composer stays in sight.
 		NSLayoutConstraint.activate([
-			webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-			webView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-			webView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-			webView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
+			stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+			stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+			stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+			stack.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
 		])
 		self.webView = webView
 
@@ -139,12 +159,20 @@ final class BrowserController: UIViewController {
 		guard let url = webView.url, isFamily(url), !webView.isLoading else { return }
 		if isSignIn(url) {
 			registered = nil
+			if url.path == "/login" { leftForSignIn() }
 			return
 		}
 		guard !errorPage else { return }
 		// Not in the middle of a profile's welcome, which asks enough already.
 		if !url.path.hasSuffix("/welcome") { Push.start() }
 		registerDevice()
+	}
+
+	/// Signed out, with the native screens: they sign in again, not the page.
+	private func leftForSignIn() {
+		guard let signedOut else { return }
+		self.signedOut = nil
+		signedOut()
 	}
 
 	/// Sends the token Apple gave the app to the nolune the page is signed in to, once.
@@ -219,7 +247,7 @@ final class BrowserController: UIViewController {
 	private func showUnreachable(_ detail: String) {
 		hideUnreachable()
 		let screen = UIHostingController(
-			rootView: UnreachableView(
+			onboarding: UnreachableView(
 				address: Address.display(origin),
 				detail: detail,
 				retry: { [weak self] in
@@ -231,8 +259,6 @@ final class BrowserController: UIViewController {
 				connectElsewhere: { [weak self] in self?.model.disconnect() }
 			)
 		)
-		screen.overrideUserInterfaceStyle = .dark
-		screen.view.backgroundColor = UIColor(Theme.space)
 		addChild(screen)
 		screen.view.frame = view.bounds
 		screen.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -285,6 +311,11 @@ extension BrowserController: WKNavigationDelegate {
 			// Elsewhere on the web goes to Safari, but in a frame on the page.
 			if frame?.isMainFrame == true, !isFamily(url) {
 				UIApplication.shared.open(url)
+				return decisionHandler(.cancel)
+			}
+			// Signed out (`/logout` goes on to it), with the native screens to sign in again.
+			if frame?.isMainFrame == true, url.path == "/login", signedOut != nil {
+				leftForSignIn()
 				return decisionHandler(.cancel)
 			}
 			decisionHandler(.allow)
@@ -473,6 +504,45 @@ private final class ScriptHandler: NSObject, WKScriptMessageHandler {
 		let value = body["value"] as? String
 		let controller = controller
 		Task { @MainActor in controller?.received(type, value) }
+	}
+}
+
+// MARK: - A note above the page
+
+/// One line, like "Update nolune for the full app", with a × that closes it.
+private final class NoteBar: UIView {
+	var close: (() -> Void)?
+
+	init(_ text: String) {
+		super.init(frame: .zero)
+		backgroundColor = .secondarySystemBackground
+		let label = UILabel()
+		label.text = text
+		label.font = .preferredFont(forTextStyle: .footnote)
+		label.adjustsFontForContentSizeCategory = true
+		label.textColor = .secondaryLabel
+		label.numberOfLines = 0
+		let button = UIButton(type: .close)
+		button.addAction(UIAction { [weak self] _ in self?.close?() }, for: .primaryActionTriggered)
+		button.setContentHuggingPriority(.required, for: .horizontal)
+		let row = UIStackView(arrangedSubviews: [label, button])
+		row.alignment = .center
+		row.spacing = 12
+		row.isLayoutMarginsRelativeArrangement = true
+		row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 10)
+		row.translatesAutoresizingMaskIntoConstraints = false
+		addSubview(row)
+		NSLayoutConstraint.activate([
+			row.topAnchor.constraint(equalTo: topAnchor),
+			row.leadingAnchor.constraint(equalTo: leadingAnchor),
+			row.trailingAnchor.constraint(equalTo: trailingAnchor),
+			row.bottomAnchor.constraint(equalTo: bottomAnchor)
+		])
+	}
+
+	@available(*, unavailable)
+	required init?(coder: NSCoder) {
+		fatalError("not from a storyboard")
 	}
 }
 

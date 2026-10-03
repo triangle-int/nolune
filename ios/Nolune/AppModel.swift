@@ -7,6 +7,7 @@ final class AppModel: ObservableObject {
 
 	private static let originKey = "origin"
 	private static let previousKey = "previous"
+	private static let nativeKey = "native"
 
 	/// The family's nolune, as the person connected to it; nil until they have (ConnectView).
 	@Published private(set) var origin: URL?
@@ -18,6 +19,11 @@ final class AppModel: ObservableObject {
 	@Published var deviceToken: String?
 	/// Counts the times the app came back to the front, for the page to check it's still there.
 	@Published private(set) var activations = 0
+	/**
+	 * Whether the native screens are on (NativeController.swift). Off until they're whole: today's
+	 * web app is the one that ships. Xcode's scheme turns them on with `-native YES`.
+	 */
+	let native: Bool
 
 	private let defaults: UserDefaults
 
@@ -26,6 +32,7 @@ final class AppModel: ObservableObject {
 		self.defaults = defaults
 		origin = defaults.string(forKey: Self.originKey).flatMap(URL.init(string:))
 		previous = defaults.string(forKey: Self.previousKey).flatMap(URL.init(string:))
+		native = defaults.bool(forKey: Self.nativeKey)
 	}
 
 	func connect(to address: Address) {

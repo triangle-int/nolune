@@ -1,8 +1,9 @@
 name: iOS app
 
 # Builds nolune for iOS (ios/) and runs its tests on a simulator, builds it for a device as the App
-# Store gets it (unsigned: signing is Xcode's, ios/README.md), and keeps two screens as PNGs: the
-# first one, and the app with a page open. It builds the macOS app's Sky.swift and Theme.swift too.
+# Store gets it (unsigned: signing is Xcode's, ios/README.md), and keeps its screens as PNGs: the
+# first one, the app with a page open, and with the native screens on (`-native YES`), their
+# sign-in and the note an older nolune gets. It builds the macOS app's Sky.swift and Theme.swift too.
 
 on:
   push:
@@ -83,6 +84,20 @@ jobs:
           step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev
           sleep 10
           step xcrun simctl io "$udid" screenshot "$screens/page.png"
+          # The native sign-in, from a nolune that only says which it is (the simulator shares
+          # this Mac's localhost)...
+          mkdir -p "$RUNNER_TEMP/nolune/api"
+          echo '{"version":"0.6.0","api":1}' > "$RUNNER_TEMP/nolune/api/version"
+          python3 -m http.server 5780 --directory "$RUNNER_TEMP/nolune" > /dev/null 2>&1 &
+          step xcrun simctl terminate "$udid" dev.nolune.app
+          step xcrun simctl launch "$udid" dev.nolune.app -origin http://localhost:5780 -native YES
+          sleep 6
+          step xcrun simctl io "$udid" screenshot "$screens/sign-in.png"
+          # ...and today's web app with the note, from one that doesn't.
+          step xcrun simctl terminate "$udid" dev.nolune.app
+          step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev -native YES
+          sleep 10
+          step xcrun simctl io "$udid" screenshot "$screens/update.png"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
