@@ -22,16 +22,26 @@ xcodebuild test -project ios/Nolune.xcodeproj -scheme Nolune \
 ```
 
 The CI workflow `ios.yml` does the same on every change here, builds for a device too, and keeps
-its screens as PNGs: the first one, the app with a page open, and the native screens' sign-in and
-note for an older nolune.
+its screens as PNGs: the first one; the native sign-in, sidebar, chat, new chat, bell and a
+profile's pages, from a pretend nolune (`ci/nolune.py`, which you can run the same way: `python3
+ios/ci/nolune.py 5780 signed-in`, then launch with `-origin http://localhost:5780`); the note for
+an older nolune; and today's web app with a page open. A link like a widget's, `xcrun simctl
+openurl booted 'nolune://open?path=/p/<slug>/memory'`, asks first in the simulator (Open in
+"nolune"?); a widget's own doesn't.
 
-The native screens ([#125](https://github.com/triangle-int/nolune/issues/125)) are off until
-they're whole, and today's web app is the one that ships. To try them, add `-native YES` under
-Arguments Passed On Launch in the scheme (Product > Scheme > Edit Scheme > Run > Arguments).
+The app's screens are native ([#125](https://github.com/triangle-int/nolune/issues/125)). To see
+today's web app instead, add `-native NO` under Arguments Passed On Launch in the scheme
+(Product > Scheme > Edit Scheme > Run > Arguments); `-open /p/<slug>/c/<id>` opens a page first.
 
 `Sky.swift` and `Theme.swift`, and the Figtree font, are the macOS app's (`macos/`): the first
-screen wears its onboarding, and a change there shows in both apps. Xcode reads the `Nolune` and
-`NoluneTests` folders as they are, so a new file needs no change to the project.
+screen wears its onboarding, and a change there shows in both apps. Xcode reads the `Nolune`,
+`NoluneWidgets` (the widgets and the Live Activity), `NoluneShare` (the share sheet), `Shared`
+(built into all three) and `NoluneTests` folders as they are, so a new file needs no change to the
+project. The project itself is plain text; its extensions' settings are in `Config/`.
+
+To see a widget, add it from the simulator's Home Screen once the app has signed in; to see the
+share sheet, share a photo from Photos to nolune. Siri's "Ask nolune" works in the simulator too,
+or run it from the Shortcuts app.
 
 ## Notifications
 
@@ -59,10 +69,14 @@ xcrun simctl push booted /tmp/notification.json
 
 Once, in the [Apple Developer](https://developer.apple.com/account) account that publishes it:
 
-1. **The app's ID.** Under Certificates, Identifiers & Profiles > Identifiers, register the bundle
-   ID `dev.nolune.app` with Push Notifications (Xcode's automatic signing does this too). The macOS
-   app has the same ID, outside the Mac App Store, so the two can become one app later. With
-   another ID, change `PRODUCT_BUNDLE_IDENTIFIER` in the project and `APNS_TOPIC` on the relay.
+1. **The app's IDs.** Under Certificates, Identifiers & Profiles > Identifiers, register the
+   bundle ID `dev.nolune.app` with Push Notifications and App Groups, and its extensions',
+   `dev.nolune.app.widgets` and `dev.nolune.app.share`, with App Groups; then the app group
+   `group.dev.nolune.app`, and add it to all three (Xcode's automatic signing does all this too).
+   The macOS app has the same ID, outside the Mac App Store, so the two can become one app later.
+   With another ID, change `PRODUCT_BUNDLE_IDENTIFIER` in the project and `APNS_TOPIC` on the
+   relay; with another group, `Shared.group` in `Shared/Shared.swift` and the three
+   `.entitlements` in `Config/`.
 2. **The key for notifications.** Under Keys, make one with Apple Push Notifications service
    (APNs) for Sandbox & Production, and give it to the relay (`APNS_KEY`, `APNS_KEY_ID`,
    `APNS_TEAM_ID`; see Running it in [packages/relay](../packages/relay/README.md)). The relay

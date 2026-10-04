@@ -2,8 +2,10 @@ name: iOS app
 
 # Builds nolune for iOS (ios/) and runs its tests on a simulator, builds it for a device as the App
 # Store gets it (unsigned: signing is Xcode's, ios/README.md), and keeps its screens as PNGs: the
-# first one, the app with a page open, and with the native screens on (`-native YES`), their
-# sign-in and the note an older nolune gets. It builds the macOS app's Sky.swift and Theme.swift too.
+# first one; the native screens (sign-in, sidebar, chat, new chat, bell and a profile's pages, and
+# some in the dark theme) from a pretend nolune (ios/ci/nolune.py); the note an older nolune gets;
+# and today's web app (`-native NO`) with a page open. It builds the app's widgets and share extension with it, and
+# the macOS app's Sky.swift and Theme.swift.
 # The runner's Xcode is 26, with iOS 26's SDK: the app wears its look, Liquid Glass.
 
 on:
@@ -80,28 +82,44 @@ jobs:
           step xcrun simctl launch "$udid" dev.nolune.app
           sleep 6
           step xcrun simctl io "$udid" screenshot "$screens/connect.png"
-          # The native sign-in, from a nolune that only says which it is (the simulator shares
-          # this Mac's localhost), before a page asks to send notifications over everything. It's
-          # Apple's python3: the runner's firewall quietly drops connections to Homebrew's.
-          mkdir -p "$RUNNER_TEMP/nolune/api"
-          echo '{"version":"0.6.0","api":1}' > "$RUNNER_TEMP/nolune/api/version"
-          /usr/bin/python3 -m http.server 5780 --directory "$RUNNER_TEMP/nolune" > /dev/null 2>&1 &
+          # A pretend nolune, signed out and signed in (the simulator shares this Mac's localhost).
+          # It's Apple's python3: the runner's firewall quietly drops connections to Homebrew's.
+          /usr/bin/python3 ios/ci/nolune.py 5780 > /dev/null 2>&1 &
+          /usr/bin/python3 ios/ci/nolune.py 5781 signed-in > "$screens/nolune.log" 2>&1 &
           # It takes a while to start the first time.
-          for _ in $(seq 30); do curl -fsS -m 2 http://localhost:5780/api/version 2> /dev/null && break; sleep 1; done
-          step xcrun simctl terminate "$udid" dev.nolune.app
-          step xcrun simctl launch "$udid" dev.nolune.app -origin http://localhost:5780 -native YES
-          sleep 10
-          step xcrun simctl io "$udid" screenshot "$screens/sign-in.png"
-          # A page open, as if connected: the launch argument stands in for the saved address.
-          step xcrun simctl terminate "$udid" dev.nolune.app
-          step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev
-          sleep 10
-          step xcrun simctl io "$udid" screenshot "$screens/page.png"
+          for port in 5780 5781; do
+            for _ in $(seq 30); do curl -fsS -m 2 "http://localhost:$port/api/version" 2> /dev/null && break; sleep 1; done
+          done
+          # Each launch as if connected: the launch arguments stand in for the saved address, and
+          # `-push NO` keeps the question about notifications from covering the screens.
+          screen() {
+            name=$1
+            shift
+            step xcrun simctl terminate "$udid" dev.nolune.app || true
+            step xcrun simctl launch "$udid" dev.nolune.app -push NO "$@"
+            sleep 10
+            step xcrun simctl io "$udid" screenshot "$screens/$name.png"
+          }
+          screen sign-in -origin http://localhost:5780
+          screen sidebar -origin http://localhost:5781
+          screen chat -origin http://localhost:5781 -open /p/smiths/c/trip
+          screen new-chat -origin http://localhost:5781 -open /p/smiths
+          screen bell -origin http://localhost:5781 -open '/p/smiths?notification=n2'
+          screen memory -origin http://localhost:5781 -open /p/smiths/memory
+          screen automations -origin http://localhost:5781 -open /p/smiths/automations
+          screen people -origin http://localhost:5781 -open /p/smiths/settings
+          screen images -origin http://localhost:5781 -open /p/smiths/images
+          screen folder -origin http://localhost:5781 -open /p/smiths/f/japan
+          # The same colors in the dark theme.
+          step xcrun simctl ui "$udid" appearance dark
+          screen sidebar-dark -origin http://localhost:5781
+          screen chat-dark -origin http://localhost:5781 -open /p/smiths/c/trip
+          screen memory-dark -origin http://localhost:5781 -open /p/smiths/memory
+          step xcrun simctl ui "$udid" appearance light
           # Today's web app with the note, from a nolune that doesn't say which it is.
-          step xcrun simctl terminate "$udid" dev.nolune.app
-          step xcrun simctl launch "$udid" dev.nolune.app -origin https://www.nolune.dev -native YES
-          sleep 10
-          step xcrun simctl io "$udid" screenshot "$screens/update.png"
+          screen update -origin https://www.nolune.dev
+          # And without the native screens, a page open.
+          screen page -origin https://www.nolune.dev -native NO
       - uses: actions/upload-artifact@v4
         if: always()
         with:

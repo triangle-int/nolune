@@ -1,0 +1,806 @@
+{
+	"timeZone": "UTC",
+	"calendar": {
+		"title": "October 2026",
+		"weekdays": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+		"cells": [
+			{
+				"key": "2026-09-28",
+				"day": 28,
+				"inMonth": false,
+				"isToday": false,
+				"isPast": true,
+				"title": "Monday 28 Sept",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-09-29",
+				"day": 29,
+				"inMonth": false,
+				"isToday": false,
+				"isPast": true,
+				"title": "Tuesday 29 Sept",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-09-30",
+				"day": 30,
+				"inMonth": false,
+				"isToday": false,
+				"isPast": true,
+				"title": "Wednesday 30 Sept",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-01",
+				"day": 1,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": true,
+				"title": "Thursday 1 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-02",
+				"day": 2,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": true,
+				"title": "Friday 2 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-03",
+				"day": 3,
+				"inMonth": true,
+				"isToday": true,
+				"isPast": false,
+				"title": "Saturday 3 Oct",
+				"relative": "Today",
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-04",
+				"day": 4,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Sunday 4 Oct",
+				"relative": "Tomorrow",
+				"icons": [
+					{
+						"key": "6229e204-5aaf-42f8-b284-20f184419eb3",
+						"icon": null,
+						"kind": "once"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "6229e204-5aaf-42f8-b284-20f184419eb3",
+						"name": "Dentist",
+						"icon": null,
+						"kind": "once",
+						"status": null,
+						"conversationId": null,
+						"time": "10:44"
+					}
+				]
+			},
+			{
+				"key": "2026-10-05",
+				"day": 5,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Monday 5 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-06",
+				"day": 6,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Tuesday 6 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-07",
+				"day": 7,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Wednesday 7 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-08",
+				"day": 8,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Thursday 8 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-09",
+				"day": 9,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Friday 9 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-10",
+				"day": 10,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Saturday 10 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-11",
+				"day": 11,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Sunday 11 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-12",
+				"day": 12,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Monday 12 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-13",
+				"day": 13,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Tuesday 13 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-14",
+				"day": 14,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Wednesday 14 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-15",
+				"day": 15,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Thursday 15 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-16",
+				"day": 16,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Friday 16 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-17",
+				"day": 17,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Saturday 17 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-18",
+				"day": 18,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Sunday 18 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-19",
+				"day": 19,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Monday 19 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-20",
+				"day": 20,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Tuesday 20 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-21",
+				"day": 21,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Wednesday 21 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-22",
+				"day": 22,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Thursday 22 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-23",
+				"day": 23,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Friday 23 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-24",
+				"day": 24,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Saturday 24 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-25",
+				"day": 25,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Sunday 25 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-10-26",
+				"day": 26,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Monday 26 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-27",
+				"day": 27,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Tuesday 27 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-28",
+				"day": 28,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Wednesday 28 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-29",
+				"day": 29,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Thursday 29 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-30",
+				"day": 30,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Friday 30 Oct",
+				"relative": null,
+				"icons": [
+					{
+						"key": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"icon": "cloud-rain",
+						"kind": "cron"
+					}
+				],
+				"more": 0,
+				"entries": [
+					{
+						"triggerId": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+						"name": "Weather",
+						"icon": "cloud-rain",
+						"kind": "cron",
+						"status": null,
+						"conversationId": null,
+						"time": "07:30"
+					}
+				]
+			},
+			{
+				"key": "2026-10-31",
+				"day": 31,
+				"inMonth": true,
+				"isToday": false,
+				"isPast": false,
+				"title": "Saturday 31 Oct",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			},
+			{
+				"key": "2026-11-01",
+				"day": 1,
+				"inMonth": false,
+				"isToday": false,
+				"isPast": false,
+				"title": "Sunday 1 Nov",
+				"relative": null,
+				"icons": [],
+				"more": 0,
+				"entries": []
+			}
+		],
+		"frequent": [],
+		"prev": "2026-09",
+		"next": "2026-11",
+		"current": null,
+		"selected": "2026-10-03"
+	},
+	"triggers": [
+		{
+			"id": "58b56233-3ec0-4e92-91d3-8a62215ab404",
+			"name": "Weather",
+			"summary": "Umbrella check",
+			"icon": "cloud-rain",
+			"kind": "cron",
+			"schedule": "Every weekday at 07:30",
+			"cron": "30 7 * * 1-5",
+			"state": "on",
+			"next": "Monday at 07:30",
+			"action": "agent",
+			"text": "Check the weather.",
+			"model": "the default model",
+			"effort": "medium",
+			"webhookUrl": null,
+			"runs": []
+		},
+		{
+			"id": "6229e204-5aaf-42f8-b284-20f184419eb3",
+			"name": "Dentist",
+			"summary": null,
+			"icon": null,
+			"kind": "once",
+			"schedule": "Once, tomorrow at 10:44",
+			"cron": null,
+			"state": "on",
+			"next": null,
+			"action": "script",
+			"text": "echo dentist",
+			"model": "the default model",
+			"effort": "medium",
+			"webhookUrl": null,
+			"runs": []
+		}
+	]
+}

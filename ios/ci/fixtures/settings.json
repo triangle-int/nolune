@@ -1,0 +1,32 @@
+{
+	"name": "Smiths",
+	"avatar": "moon",
+	"members": [
+		{
+			"id": "02b3c1a3-f70f-44ab-a011-042d7b52c71e",
+			"name": "Anna",
+			"note": "people/anna.md",
+			"exists": false,
+			"candidates": []
+		},
+		{
+			"id": "bfb304fa-981f-4236-b4ca-2af1324c908e",
+			"name": "Max",
+			"note": "people/max.md",
+			"exists": false,
+			"candidates": []
+		}
+	],
+	"people": [
+		{
+			"path": "people/leo.md",
+			"title": "Leo",
+			"who": null,
+			"aliases": [],
+			"facts": ["Likes trains."]
+		}
+	],
+	"others": ["Leo"],
+	"soul": "",
+	"maxSoul": 4000
+}
