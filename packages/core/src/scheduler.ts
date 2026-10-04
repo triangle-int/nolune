@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { hasBackgroundCommands } from './background.ts';
+import { hasBackgroundCommands, processBackgroundStops } from './background.ts';
 import {
 	appendRow,
 	createConversation,
@@ -20,7 +20,7 @@ import { profileDir } from './paths.ts';
 import { getDefaultPreset, getPreset } from './presets.ts';
 import { getProfile, listProfiles, noticeProfileChanges } from './profiles.ts';
 import { commandEnv, runCommand, type RunCommandResult } from './run-command.ts';
-import { kick, onLoopEnd } from './runner.ts';
+import { kick, onCommandEnd, onLoopEnd } from './runner.ts';
 import { processSubagents, startSubagentHost } from './subagent-host.ts';
 import {
 	describeWhen,
@@ -57,7 +57,8 @@ const holder = globalThis as unknown as { __noluneScheduler?: boolean };
 /**
  * Gateway only. Every few seconds: fires triggers that are due and starts queued runs (including
  * the ones `nolune wake` and `nolune trigger run` queue from other processes), starts the subagents
- * that `nolune agent` asks for, and notices profiles that `nolune profile` changed from another process.
+ * that `nolune agent` asks for, stops what `nolune background stop` asks to (also right after the
+ * agent's command), and notices profiles that `nolune profile` changed from another process.
  * Chats that went quiet get looked over for memory (memory-learning.ts) and, if Models & keys says
  * so, summarized (idle-compaction.ts), and memory facts get their embeddings (memory-search.ts).
  */
@@ -65,6 +66,7 @@ export function startScheduler(): void {
 	if (holder.__noluneScheduler) return;
 	holder.__noluneScheduler = true;
 	onLoopEnd(finishAgentRun);
+	onCommandEnd(processBackgroundStops);
 	startSubagentHost();
 	startLearning();
 	startIdleCompaction();
@@ -81,6 +83,7 @@ function tick(): void {
 		fireDueTriggers(new Date());
 		processQueue();
 		processSubagents();
+		processBackgroundStops();
 		noticeProfileChanges();
 	} catch (err) {
 		console.error('[nolune] scheduler tick failed:', err);

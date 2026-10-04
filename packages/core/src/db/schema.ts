@@ -569,7 +569,8 @@ export const triggerRun = sqliteTable(
 
 /**
  * A command the agent started with `run_in_background` that hasn't ended yet. The process lives in
- * the gateway; the row is there so that after a restart the conversation is told it was cut off.
+ * the gateway; the row is there so that `nolune background` can list it from any process, and so
+ * that after a restart the conversation is told it was cut off.
  */
 export const backgroundCommand = sqliteTable(
 	'background_command',
@@ -581,6 +582,10 @@ export const backgroundCommand = sqliteTable(
 			.references(() => conversation.id, { onDelete: 'cascade' }),
 		summary: text('summary'),
 		command: text('command').notNull(),
+		/** The shell's pid, its process group: the id `nolune background` gives it. */
+		pid: integer('pid'),
+		/** Who asked `nolune background stop` to stop it; the gateway stops it (background.ts). */
+		stoppedBy: text('stopped_by'),
 		startedAt: integer('started_at', { mode: 'timestamp_ms' }).default(now).notNull()
 	},
 	(table) => [index('background_command_conversationId_idx').on(table.conversationId)]

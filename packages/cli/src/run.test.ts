@@ -11,6 +11,7 @@ import {
 	createConversation,
 	createProfile,
 	findInvite,
+	getDb,
 	initConfig,
 	paths,
 	readCard,
@@ -20,10 +21,12 @@ import {
 	runSubagent,
 	setAdmin,
 	setUserPicture,
+	subagentLogPath,
 	updateConfig
 } from '@nolune/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commitQueuedRows, insertQueued } from '../../core/src/conversations.ts';
+import { backgroundCommand } from '../../core/src/db/schema.ts';
 import { setSubagentStatus } from '../../core/src/subagents.ts';
 import { makeFamily, makePreset, makeUser } from '../../core/src/test/fixtures.ts';
 import { runCli } from './run.ts';
@@ -397,6 +400,66 @@ describe('nolune agent watch', () => {
 		const watching = run(['agent', 'watch', subagent.name], { env, signal: abort.signal });
 		setTimeout(() => abort.abort(), 50);
 		expect(await watching).toMatchObject({ code: 1, out: '' });
+	});
+});
+
+describe('nolune background', () => {
+	it("lists what runs in the conversation's background, and stops it by id", async () => {
+		const { user, profile } = makeFamily();
+		const chat = createConversation({ profile, presetId: makePreset().id, userId: user.id });
+		const env = { NOLUNE_CONVERSATION_ID: chat.id };
+		expect(await run(['background'], { env })).toEqual({
+			code: 0,
+			out: "Nothing runs in this conversation's background.\n",
+			err: ''
+		});
+
+		// As the gateway writes it when the command starts.
+		getDb()
+			.insert(backgroundCommand)
+			.values({
+				toolUseId: 't1',
+				conversationId: chat.id,
+				summary: 'Downloading the photos',
+				command: 'fetch-photos',
+				pid: 4242
+			})
+			.run();
+		const { subagent } = runSubagent({ parentId: chat.id, prompt: 'Find flights.' });
+		expect((await run(['background', 'list'], { env })).out).toBe(
+			`4242  command, running for under a minute: Downloading the photos
+  $ fetch-photos
+agent-1  subagent, starting: Find flights.
+  log: ${subagentLogPath(subagent)}
+
+Stop one with \`nolune background stop <id>\`, or all of it with \`nolune background stop --all\`.
+`
+		);
+
+		expect(await run(['background', 'stop', '4242', 'agent-1'], { env })).toEqual({
+			code: 0,
+			out: 'Stopping 4242 (Downloading the photos), agent-1. Nothing they would have handed over arrives.\n',
+			err: ''
+		});
+		expect((await run(['background'], { env })).out).toContain(
+			'4242  command, being stopped: Downloading the photos\n'
+		);
+		expect(await run(['background', 'stop', 'agent-1'], { env })).toEqual({
+			code: 1,
+			out: '',
+			err: 'nolune: agent-1 is being stopped already.\n'
+		});
+		expect(await run(['background', 'stop'], { env })).toMatchObject({
+			code: 1,
+			err: 'nolune: usage: nolune background stop <id>... | --all\n'
+		});
+	});
+
+	it("only works in the agent's commands", async () => {
+		expect(await run(['background'])).toMatchObject({
+			code: 1,
+			err: "nolune: `nolune background` only works in the agent's commands: it's about the conversation that runs it.\n"
+		});
 	});
 });
 

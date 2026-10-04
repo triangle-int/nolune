@@ -81,6 +81,7 @@ import {
 	type CustomApi
 } from '@nolune/core';
 import { AGENT_HELP, agentCommand } from './agent.ts';
+import { BACKGROUND_HELP, backgroundCommand } from './background.ts';
 import { CARD_HELP, cardCommand } from './card.ts';
 import { generateCommand, generateHelp } from './generate.ts';
 import { ask, askHidden } from './input.ts';
@@ -244,7 +245,9 @@ Inside agent commands (NOLUNE_PROFILE is set, so --profile can be left out)
   nolune view <image>...                        show images to the agent: they're attached to the
                                              command's result (HEIC and big photos are converted)
 
-${AGENT_HELP}`;
+${AGENT_HELP}
+
+${BACKGROUND_HELP}`;
 
 function positional(args: string[], index: number, name: string): string {
 	const value = args[index];
@@ -1143,6 +1146,10 @@ async function command(io: Io, argv: string[]): Promise<number | void> {
 		case 'agent':
 			requireInit();
 			return agentCommand(io, action, rest);
+
+		case 'background':
+			requireInit();
+			return backgroundCommand(io, action, rest);
 
 		case 'generate':
 			return generateCommand(io, action, rest);

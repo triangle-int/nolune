@@ -368,6 +368,12 @@ export {
 } from './subagents.ts';
 export { stopConversation } from './subagent-host.ts';
 export {
+	BackgroundError,
+	describeBackground,
+	listBackgroundCommands,
+	requestBackgroundStop
+} from './background.ts';
+export {
 	MemoryUndoError,
 	recentMemoryChanges,
 	undoMemoryChange,

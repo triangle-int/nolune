@@ -592,7 +592,8 @@ describe('background commands', () => {
 		expect(vi.mocked(runCommand).mock.calls[0][0]).toMatchObject({ background: true });
 		const [[started]] = results(chat.id);
 		expect(started).toMatchObject({ callId: 'bg1', isError: false });
-		expect(started.content).toContain('Started in the background (process group 4242)');
+		expect(started.content).toContain('Started in the background as 4242 (its process group).');
+		expect(started.content).toContain('To stop it early: `nolune background stop 4242`.');
 
 		// The output starts the agent again.
 		const second = loopEnd(chat.id);
@@ -606,6 +607,60 @@ describe('background commands', () => {
 			'[Background command finished: Downloading the photos]\\n$ fetch-photos\\nsaved 120 photos'
 		);
 		expect(committedRows(chat.id).at(-1)?.kind).toBe('assistant');
+	});
+
+	it("tells the agent what runs in its background with a person's message, while anything does", async () => {
+		const { user, profile } = makeFamily();
+		// Named, so sending a message doesn't ask the model for a title.
+		const chat = createConversation({
+			profile,
+			presetId: makePreset().id,
+			userId: user.id,
+			title: 'Photos'
+		});
+		insertQueued({ conversationId: chat.id, senderId: user.id, senderName: 'Anna', text: 'Hi' });
+		for (const reply of [
+			modelReply([download], 'tool_use'),
+			modelReply([{ type: 'text', text: "I'll tell you when it's done." }], 'end_turn'),
+			modelReply([{ type: 'text', text: 'Still at it.' }], 'end_turn'),
+			modelReply([{ type: 'text', text: 'It has stopped.' }], 'end_turn')
+		]) {
+			vi.mocked(streamTurn).mockResolvedValueOnce(reply);
+		}
+		let finish!: (result: RunCommandResult) => void;
+		vi.mocked(runCommand).mockImplementationOnce((_input, options) => {
+			options.onStart?.(4242);
+			return new Promise((resolve) => (finish = resolve));
+		});
+		await run(chat.id);
+
+		let answered = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'How is it going?');
+		await answered;
+		const asked = toAnthropicMessages(vi.mocked(streamTurn).mock.calls[2][0].messages).at(-1);
+		expect(asked).toEqual({
+			role: 'user',
+			content: [
+				{ type: 'text', text: 'Anna: How is it going?' },
+				{
+					type: 'text',
+					text: "<background>\nStill running in this conversation's background when this message was sent (`nolune background` lists it as it is now; `nolune background stop <id>` stops one):\n4242  command, running for under a minute: Downloading the photos\n  $ fetch-photos\n</background>"
+				}
+			]
+		});
+		// The chat shows only what Anna wrote.
+		expect(getSnapshot(chat.id).messages.at(-2)).toMatchObject({ text: 'How is it going?' });
+
+		stopBackgroundCommands(chat.id, 'Anna');
+		finish({ content: '[Stopped by Anna.]', isError: true, exitCode: null });
+		await vi.waitFor(() => expect(getSnapshot(chat.id).background).toEqual([]));
+		answered = loopEnd(chat.id);
+		await sendMessage(chat.id, user, 'Stop it, please.');
+		await answered;
+		expect(toAnthropicMessages(vi.mocked(streamTurn).mock.calls[3][0].messages).at(-1)).toEqual({
+			role: 'user',
+			content: [{ type: 'text', text: 'Anna: Stop it, please.' }]
+		});
 	});
 
 	it('lists a background `nolune agent watch` as the subagent it waits for, not twice', async () => {
