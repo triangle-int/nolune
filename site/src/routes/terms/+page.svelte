@@ -2,8 +2,8 @@
 	import { resolve } from '$app/paths';
 	import Prose from '$lib/Prose.svelte';
 
-	// The terms of the nolune plan, at nolune.dev/terms: Checkout, the customer portal and the
-	// account page link them. Keep them to what packages/api does, and the prices to Stripe's.
+	// The terms of the nolune plan, at nolune.dev/terms: the account page and nolune's customer
+	// portal link them. Keep them to what packages/api does, and the prices to Stripe's.
 	const GITHUB = 'https://github.com/triangle-int/nolune';
 	const EMAIL = 'timur@triangleint.com';
 	const ACCOUNT = 'https://api.nolune.dev/';

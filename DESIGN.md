@@ -2784,8 +2784,10 @@ rather than chrome of their own, and controls of their own that float over conte
   `nolune.dev/privacy` (`site/src/routes/privacy`), covers nolune, the apps, the relay, the
   nolune plan's API and the site; the first screen links it, as the App Store asks. Keep it to what
   the code does. The plan's terms, at `nolune.dev/terms`, say what a subscription gives, how it
-  renews, ends and is refunded, and how it may be used; Checkout, the customer portal and the
-  account page link them.
+  renews, ends and is refunded, and how it may be used. The account page notes them by Subscribe
+  and Buy, and nolune's portal configuration links them; Checkout can't, since under Managed
+  Payments it takes neither its own text (`custom_text`) nor a terms checkbox without the Stripe
+  account's terms URL, which every product's Checkout would show, Gensprite's too.
 
 ## Not done yet
 

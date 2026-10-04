@@ -35,8 +35,9 @@ to the account page on nolune's API, which signs people in and opens Checkout.
 what nolune, its apps, the relay, the nolune plan's API and this site do with people's information,
 so a change to any of them that sends or keeps something new belongs there too, with a new date.
 
-`/terms` are the nolune plan's terms, which Stripe's Checkout and customer portal and the account
-page on nolune's API link. They say what the plan gives, how it renews, ends and is refunded, and
+`/terms` are the nolune plan's terms, which the account page on nolune's API (by Subscribe and
+Buy) and nolune's customer portal link. Checkout doesn't: under Managed Payments it shows only the
+Stripe account's own terms link, which Gensprite's Checkout would show too. They say what the plan gives, how it renews, ends and is refunded, and
 how it may be used, so a change to any of that in `packages/api` (or to the prices in Stripe)
 belongs there too, with a new date. Both pages are `Prose` (`src/lib/Prose.svelte`).
 
