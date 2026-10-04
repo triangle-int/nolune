@@ -86,6 +86,7 @@ const NOLUNE_READS: Record<string, readonly string[] | 'any'> = {
 	view: 'any',
 	memory: ['', 'list', 'search', 'show'],
 	agent: ['list', 'watch'],
+	background: ['', 'list'],
 	trigger: ['list', 'show'],
 	soul: ['', 'show'],
 	skill: ['list'],

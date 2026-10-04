@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { EFFORTS, type Effort } from './models.ts';
 import {
 	committedRows,
@@ -17,7 +17,7 @@ import {
 	type Conversation
 } from './conversations.ts';
 import { getDb } from './db/index.ts';
-import { subagent } from './db/schema.ts';
+import { backgroundCommand, subagent } from './db/schema.ts';
 import { profileDir } from './paths.ts';
 import { getPreset } from './presets.ts';
 import { getProfile } from './profiles.ts';
@@ -324,7 +324,18 @@ export function steerSubagent(input: { parentId: string; name: string; text: str
 	}, LOCKED);
 }
 
-/** `nolune agent stop`: the gateway stops it within seconds. */
+/** The subagents a command waits for with `nolune agent watch`, if it does. */
+export function watchedSubagents(command: string): string[] {
+	return [...command.matchAll(/\bnolune\s+agent\s+watch\s+([a-z0-9][a-z0-9-]*)/gi)].map((m) =>
+		m[1].toLowerCase()
+	);
+}
+
+/**
+ * `nolune agent stop` (and `nolune background stop`): the gateway stops it within seconds. The
+ * parent's background commands that only `nolune agent watch` it stop with it: the agent knows it
+ * stopped it, so their news of that would only start another turn.
+ */
 export function requestSubagentStop(input: { parentId: string; name: string }): Subagent {
 	return getDb().transaction(() => {
 		const found = requireSubagent(input.parentId, input.name);
@@ -333,6 +344,27 @@ export function requestSubagentStop(input: { parentId: string; name: string }): 
 		}
 		const why = 'Stopped by the agent that started it.';
 		setSubagentStatus(found.id, 'stopping', why);
+		const watches = getDb()
+			.select()
+			.from(backgroundCommand)
+			.where(
+				and(
+					eq(backgroundCommand.conversationId, input.parentId),
+					isNull(backgroundCommand.stoppedBy)
+				)
+			)
+			.all()
+			.filter((c) => {
+				const watched = watchedSubagents(c.command);
+				return watched.length > 0 && watched.every((name) => name === found.name);
+			});
+		for (const c of watches) {
+			getDb()
+				.update(backgroundCommand)
+				.set({ stoppedBy: 'the agent' })
+				.where(eq(backgroundCommand.toolUseId, c.toolUseId))
+				.run();
+		}
 		return { ...found, status: 'stopping' as const, error: why };
 	}, LOCKED);
 }

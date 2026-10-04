@@ -655,12 +655,16 @@ export function insertQueued(input: {
 	};
 	/** What memory has on the message (recallFor), for the model only: the chat shows `text`. */
 	recall?: string | null;
+	/** What ran in the conversation's background as it was sent, for the model only, like recall. */
+	background?: string | null;
 }): MessageRow {
 	const { attachments } = input;
 	// Without attachments the model sees only the sender's name and what they wrote.
 	const content: Block[] = [
 		...(attachments?.content ?? [{ type: 'text', text: `${input.senderName}: ${input.text}` }]),
-		...(input.recall ? [{ type: 'text' as const, text: input.recall }] : [])
+		...[input.recall, input.background].flatMap((text) =>
+			text ? [{ type: 'text' as const, text }] : []
+		)
 	];
 	return getDb().transaction((tx) => {
 		if (attachments?.uploadIds.length) {

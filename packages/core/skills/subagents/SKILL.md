@@ -74,7 +74,9 @@ A background command is killed after an hour unless you pass `timeout_seconds` (
   asks how it's going or you wonder whether it's on track.
 - `nolune agent steer <id> --prompt "..."` sends it a message it reads at its next step: a
   correction, or something new you learned. `--prompt -` reads stdin, like `run`.
-- `nolune agent stop <id>` stops it. `nolune agent list` shows this conversation's subagents.
+- `nolune agent stop <id>` stops it, and the `watch` that waits for it, so no message about it
+  comes. `nolune agent list` shows this conversation's subagents; `nolune background` shows them
+  with your background commands, everything still running.
 
 ## Afterwards
 

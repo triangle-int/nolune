@@ -17,6 +17,7 @@ import {
 } from './models.ts';
 import {
 	backgroundCommands,
+	describeBackground,
 	startBackgroundCommand,
 	takeInterruptedBackgroundCommands,
 	type BackgroundCommand
@@ -119,7 +120,7 @@ import {
 	runCommand,
 	type RunCommandResult
 } from './run-command.ts';
-import { SubagentError, activeSubagents, listSubagents } from './subagents.ts';
+import { SubagentError, activeSubagents, listSubagents, watchedSubagents } from './subagents.ts';
 import { TITLE_LIMIT, suggestTitle, typedTitle } from './titles.ts';
 import { cacheHitRate } from './usage.ts';
 
@@ -401,13 +402,6 @@ export function setTyping(conversationId: string, person: Typist, typing: boolea
 	emit(conversationId, { type: 'typing', typing: typists(st) });
 }
 
-/** The subagents a command waits for with `nolune agent watch`, if it does. */
-function watchedSubagents(command: string): string[] {
-	return [...command.matchAll(/\bnolune\s+agent\s+watch\s+([a-z0-9][a-z0-9-]*)/gi)].map((m) =>
-		m[1].toLowerCase()
-	);
-}
-
 function backgroundItems(conversationId: string): BackgroundItem[] {
 	// A `nolune agent watch` running in the background is the same work as the subagent it waits
 	// for, which is listed on its own. Any of the chat's subagents, not only working ones: a watch
@@ -552,7 +546,8 @@ async function queueMessage(
 		text: trimmed,
 		provider: conv.provider,
 		attachments,
-		recall: await recall(conv, trimmed, sender)
+		recall: await recall(conv, trimmed, sender),
+		background: backgroundNote(conversationId)
 	});
 	// The first message stands in as the title until the model has named the chat. A message
 	// with only files is named after them.
@@ -564,6 +559,16 @@ async function queueMessage(
 	setTyping(conversationId, sender, false);
 	kick(conversationId);
 	if (placeholder !== undefined) nameConversation(conv, opening, placeholder);
+}
+
+/**
+ * What runs in the conversation's background, to go along with a person's message while anything
+ * does: the agent may not have it in mind (or in what it still reads), and they may ask about it.
+ */
+function backgroundNote(conversationId: string): string | null {
+	const lines = describeBackground(conversationId);
+	if (!lines.length) return null;
+	return `<background>\nStill running in this conversation's background when this message was sent (\`nolune background\` lists it as it is now; \`nolune background stop <id>\` stops one):\n${lines.join('\n')}\n</background>`;
 }
 
 /**
@@ -780,7 +785,7 @@ async function runToolCall(
 		const { pid } = outcome.started;
 		return toolResult(
 			call.id,
-			`Started in the background (process group ${pid}). When it ends, its output arrives in a message of its own that starts with "[Background command finished"; keep working or end your turn meanwhile. To stop it early: kill -TERM -${pid}`,
+			`Started in the background as ${pid} (its process group). When it ends, its output arrives in a message of its own that starts with "[Background command finished"; keep working or end your turn meanwhile. To stop it early: \`nolune background stop ${pid}\`. \`nolune background\` lists what runs in this conversation's background.`,
 			false
 		);
 	}

@@ -255,3 +255,12 @@ list`, `--effort` one of low, medium, high, xhigh, max
 - `nolune agent steer <id> --prompt "<message>"`: message a subagent while it works
 - `nolune agent stop <id>`
 - `nolune agent list`
+
+## Background work
+
+In agent commands: what the conversation's agent has going while it does other things.
+
+- `nolune background`: list it: commands started with run_in_background, by their process group,
+  and working subagents, by their id, with how long each has run
+- `nolune background stop <id>... | --all`: stop them within seconds; nothing they would have handed
+  over arrives
